@@ -15,3 +15,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 - `DESIGN.md` web UI design system skeleton
 - Issue/commit/PR conventions (`docs/conventions.md`), task and epic issue forms, label
   definitions, commit message template, `create-issue` skill
+- Label sync workflow from `.github/labels.yml`
+- Git hooks via pre-commit (ruff, hygiene checks, gitleaks, Conventional Commits message check,
+  pyright + pytest on push) and GitHub Actions CI (lint, tests on Python 3.12/3.13, PR-title check)

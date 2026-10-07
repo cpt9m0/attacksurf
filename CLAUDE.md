@@ -27,7 +27,7 @@ Use these instead of improvising the workflow:
 ## Hooks (`.claude/settings.json`)
 
 - Python files are auto-formatted with ruff after each edit.
-- `SessionStart` runs `uv sync` and loads `STATE.md` into context, so every session starts
-  from the latest handoff.
+- `SessionStart` runs `uv sync`, installs the git hooks (`pre-commit install`), and loads
+  `STATE.md` into context, so every session starts from the latest handoff.
 - `Stop`: if code changed but `STATE.md` didn't, you're reminded once to run `/finish-task`.
   If the task isn't finished yet (e.g. you're asking the user a question), just continue.
