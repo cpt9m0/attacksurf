@@ -12,7 +12,7 @@ uv run pyright
 uv run pytest                       # fails if coverage < 80%
 ```
 After pushing, confirm the CI run for the PR is green (`lint`, `test (3.12)`, `test (3.13)`,
-`pr-title`); a red CI means not done.
+`secrets`, `pr-title`); a red CI means not done.
 If a migration changed: `uv run alembic upgrade head && uv run alembic downgrade -1 && uv run alembic upgrade head`.
 
 ## 2. Self-review the diff (`git diff main...`)

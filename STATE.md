@@ -10,8 +10,8 @@
 ## Last task
 - Git hooks via pre-commit (`.pre-commit-config.yaml`): hygiene checks, gitleaks, ruff (from
   `uv.lock`), commit-message check, pyright + pytest on push
-- CI (`.github/workflows/ci.yml`): `lint`, `test (3.12)`, `test (3.13)`, `pr-title`; actions
-  pinned by SHA
+- CI (`.github/workflows/ci.yml`): `lint`, `test (3.12)`, `test (3.13)`, `secrets` (gitleaks over
+  full history); `pr-title` in `pr-title.yml` (re-runs on title edits); actions pinned by SHA
 - Shared rule script: `.github/scripts/check-pr-title.sh` (PR titles) is reused by
   `check-commit-msg.sh` (commit subjects), so both follow the same rule
 - SessionStart hook now installs the git hooks; docs/AGENTS/CLAUDE/skills updated
@@ -22,7 +22,7 @@ on a fresh branch from `main`.
 
 ## Open threads
 - Optional (user): ruleset on `main` requiring PRs + checks `lint`, `test (3.12)`,
-  `test (3.13)`, `pr-title`
+  `test (3.13)`, `secrets`, `pr-title`
 - #32: GitHub Sponsors / Ko-fi accounts not set up yet (Ko-fi username assumed `cpt9m0`)
 - Repo settings for the user: description, topics, Discussions, Sponsorships,
   private vulnerability reporting, social preview

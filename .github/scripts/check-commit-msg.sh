@@ -4,7 +4,8 @@
 # Usage: check-commit-msg.sh <commit-msg-file>
 set -euo pipefail
 
-subject=$(grep -v '^#' "$1" | sed '/^[[:space:]]*$/d' | head -n 1)
+# Single reader that stops at the first match: no pipe, so no SIGPIPE on long bodies.
+subject=$(awk '!/^#/ && NF { print; exit }' "$1")
 
 case "$subject" in
   "Merge "* | "Revert \""* | "fixup! "* | "squash! "* | "amend! "*) exit 0 ;;
