@@ -9,6 +9,9 @@ Done. Project scaffolding, agent tooling, open-source files, handoff/design-syst
 issue/commit/PR conventions are complete and on `main`.
 
 ## Last task
+- Added `Sync labels` workflow (`.github/workflows/labels.yml`): labels from `.github/labels.yml`
+  are live on GitHub; all issues #1-#30 now have type labels (+ `needs-design` on UI issues,
+  `good first issue` on #17/#19, `priority:high` on #1)
 - Added issue/commit/PR conventions: `docs/conventions.md`, task + epic issue forms,
   `.github/labels.yml`, `.gitmessage`, updated PR template, `create-issue` skill, AGENTS.md summary
 - Before that: end-of-task sync rule (`AGENTS.md`), `finish-task` skill, and hooks (SessionStart
@@ -19,14 +22,14 @@ issue/commit/PR conventions are complete and on `main`.
 ## Next step
 Implement #1 (Dev tooling and CI): ruff/pyright/pytest are already configured, so what's left is
 `.pre-commit-config.yaml` (incl. gitleaks + a Conventional Commits `commit-msg` hook) and the
-GitHub Actions workflow (`uv sync --locked`, ruff, pyright, pytest with the 80% coverage gate,
-PR-title lint, label sync from `.github/labels.yml`). See the comments on #1. Then #2.
+GitHub Actions CI workflow (`uv sync --locked`, ruff, pyright, pytest with the 80% coverage
+gate, PR-title lint). Label sync is already done. See the comments on #1. Then #2.
 
 ## Open threads
 - #32: GitHub Sponsors / Ko-fi accounts not set up yet (Ko-fi username assumed `cpt9m0`)
 - Repo settings for the user to do: description, topics, Discussions, Sponsorships,
-  private vulnerability reporting, social preview, `good first issue` labels
-- Labels in `.github/labels.yml` aren't synced to GitHub yet; existing issues lack type labels
+  private vulnerability reporting, social preview, default branch → `main`,
+  **squash-only merging** (Settings → General → Pull Requests)
 - `DESIGN.md` values are `TBD`: to be completed with Claude Design before/during #6
 
 ## Notes for the next agent
