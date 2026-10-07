@@ -103,6 +103,12 @@ running them.
 - New dependency? Check it's maintained and widely used; prefer stdlib. Pin via `uv.lock`.
 - See `docs/security.md`.
 
+## License
+
+AGPL-3.0-or-later. Keep the "Source code" link in the UI footer (AGPL §13). Only add
+dependencies with AGPL-compatible licenses (MIT, BSD, Apache-2.0, LGPL, GPL-3.0, AGPL-3.0);
+never copy code from incompatible or unlicensed sources.
+
 ## Git workflow
 
 - One GitHub issue per branch/PR. Branch: `<issue#>-short-slug`. Reference `Closes #N` in the PR.

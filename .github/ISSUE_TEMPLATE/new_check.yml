@@ -1,0 +1,50 @@
+name: 🔍 New security check
+description: Propose a new detection / scanner check
+labels: ["new-check", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        attacksurf only adds **defensive** checks: detect, never exploit. Checks that send more
+        than passive public lookups to a target will require verified ownership.
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target type
+      options:
+        - Domain / DNS
+        - IP / server
+        - Website
+        - Codebase
+        - Binary
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: What misconfiguration or weakness should be detected?
+    validations:
+      required: true
+  - type: textarea
+    id: detection
+    attributes:
+      label: How can it be detected?
+      description: Data source, request, or signature. Is it passive or active?
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Suggested severity
+      options: [info, low, medium, high, critical]
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: RFCs, CVEs, vendor docs, write-ups
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I'd like to implement this check

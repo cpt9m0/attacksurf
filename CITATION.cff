@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use attacksurf in research, please cite it as below."
+title: "attacksurf: open-source AI-powered attack surface management"
+type: software
+authors:
+  - alias: cpt9m0
+repository-code: "https://github.com/cpt9m0/attacksurf"
+license: AGPL-3.0-or-later
+keywords:
+  - attack surface management
+  - cybersecurity
+  - DNS security
+  - subdomain enumeration
+  - LLM

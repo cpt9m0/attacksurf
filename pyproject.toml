@@ -1,12 +1,49 @@
 [project]
 name = "attacksurf"
 version = "0.1.0"
-description = "AI-powered attack surface management web app"
+description = "Open-source, AI-powered attack surface management (ASM): subdomain discovery, DNS security checks, subdomain takeover detection, and LLM triage."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "cpt9m0" }]
+keywords = [
+    "attack-surface-management",
+    "asm",
+    "easm",
+    "cybersecurity",
+    "security-scanner",
+    "subdomain-enumeration",
+    "subdomain-takeover",
+    "dns-security",
+    "dmarc",
+    "llm",
+    "ai-security",
+    "flask",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Web Environment",
+    "Framework :: Flask",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Internet :: Name Service (DNS)",
+]
 dependencies = [
     "flask>=3.1.3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/cpt9m0/attacksurf"
+Documentation = "https://github.com/cpt9m0/attacksurf/tree/main/docs"
+Issues = "https://github.com/cpt9m0/attacksurf/issues"
+Changelog = "https://github.com/cpt9m0/attacksurf/blob/main/CHANGELOG.md"
+Funding = "https://github.com/sponsors/cpt9m0"
 
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]

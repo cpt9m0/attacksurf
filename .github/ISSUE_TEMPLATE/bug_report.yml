@@ -1,0 +1,51 @@
+name: 🐛 Bug report
+description: Something isn't working as expected
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! **Security vulnerabilities must be reported privately**, see SECURITY.md.
+        Please remove secrets, API keys and private hostnames from logs before posting.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, and what went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Add domain ...
+        2. Run scan ...
+        3. See error ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: v0.1.0 or commit SHA
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running attacksurf?
+      options:
+        - Docker Compose
+        - Local development (uv)
+        - Other
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Redact secrets first. Rendered as code.
+      render: shell
