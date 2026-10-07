@@ -13,6 +13,7 @@ Use these instead of improvising the workflow:
 - `db-migration`: model change → Alembic migration → verify
 - `llm-prompt`: add/change an AI prompt with versioning, schema, injection defense, eval
 - `pre-pr-check`: the full verification + self-review checklist before opening a PR
+- `create-issue`: file/split issues and epics following `docs/conventions.md`
 - `finish-task`: end-of-task sync of tests, docs, agent files, and `STATE.md` (`/finish-task`)
 
 ## MCP servers (`.mcp.json`)

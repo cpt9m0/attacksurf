@@ -33,6 +33,11 @@ Answer each; fix anything that fails:
 - [ ] No secrets in code, logs, error messages, fixtures, or test output.
 - [ ] Forms/HTMX POSTs carry CSRF tokens.
 
+**Conventions** (`docs/conventions.md`)
+- [ ] Commits are Conventional Commits (`<type>(<scope>): <subject>`, ≤ 72 chars, why in body).
+- [ ] PR title is the squash-commit subject; every PR template section filled; `Closes #N`.
+- [ ] Diff is one concern and ≤ ~400 lines excl. tests/fixtures/lockfile (or split it).
+
 **Hygiene**
 - [ ] No debug prints, commented-out code, or TODOs without an issue number.
 - [ ] New dependencies are justified, maintained, and added via `uv add`.

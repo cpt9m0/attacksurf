@@ -26,6 +26,9 @@ uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 
 Never use `pip install`, and never edit `uv.lock` by hand.
 
+Commit message template: `git config commit.template .gitmessage`. Issue/commit/PR rules:
+[conventions.md](conventions.md).
+
 ## Project layout
 
 ```
@@ -54,7 +57,7 @@ This project is built mostly by AI coding agents. The setup:
 - **`DESIGN.md`**: the web UI design system (tokens, components, HTMX patterns). Values are
   completed with Claude Design or a similar tool; agents follow it for all UI work.
 - **Skills** (`.claude/skills/`): `implement-issue`, `add-scanner`, `db-migration`, `llm-prompt`,
-  `pre-pr-check`, `finish-task`.
+  `pre-pr-check`, `create-issue`, `finish-task`.
 - **Keep-in-sync rule**: after every task the agent runs `finish-task` (also `/finish-task`):
   tests, docs, `DESIGN.md`, `CHANGELOG.md`, `AGENTS.md`/`CLAUDE.md`/skills, and `STATE.md`.
 - **Hooks** (`.claude/settings.json`): ruff on every edited Python file; at session start

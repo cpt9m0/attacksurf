@@ -18,7 +18,7 @@ description: End-to-end workflow for implementing a GitHub issue in attacksurf. 
 - Keep the scope to the issue. Note follow-ups instead of building them.
 
 ## 3. Branch
-`git checkout -b <issue#>-<short-slug>` from an up-to-date `main` (unless the session assigns a branch).
+`git checkout -b <issue#>-<short-slug>` (e.g. `17-dmarc-check`) from an up-to-date `main` (unless the session assigns a branch).
 
 ## 4. Build test-first
 - For each acceptance criterion: write a failing test, then implement until it passes.
@@ -34,6 +34,8 @@ Run the `finish-task` skill: tests, docs, `DESIGN.md`, `CHANGELOG.md`, agent ins
 overwrite `STATE.md` with the handoff.
 
 ## 7. Ship
-- Conventional commits (`feat: ...`, `test: ...`).
-- Push and open a PR titled like the issue, body: summary, checklist of acceptance criteria,
-  how it was tested, `Closes #N`.
+Follow `docs/conventions.md` §2-3:
+- Commits: `<type>(<scope>): <subject>` (imperative, ≤ 72 chars), body says why, footer `Refs #N`.
+- PR: title = Conventional Commit subject (it becomes the squash commit), fill every section of
+  `.github/pull_request_template.md`, `Closes #N`. Open as draft until all checks pass.
+- Found unrelated work? Don't widen the PR; file it with the `create-issue` skill.

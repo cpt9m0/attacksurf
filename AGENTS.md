@@ -129,12 +129,21 @@ task (feature, fix, refactor, docs, config) run the `finish-task` procedure
 
 If nothing needed updating, say so explicitly in your final report.
 
-## Git workflow
+## Issues, commits, PRs
 
-- One GitHub issue per branch/PR. Branch: `<issue#>-short-slug`. Reference `Closes #N` in the PR.
-- Conventional commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`.
-- Small, reviewable PRs. Update docs/ADRs in the same PR when behavior or architecture changes.
-- Never commit to `main` directly. Never force-push shared branches.
+Full rules and examples: `docs/conventions.md`. Essentials:
+
+- **Issues**: imperative title; body = Goal / Tasks / Acceptance criteria / (Out of scope) /
+  `Depends on #N` / `Part of #epic`; one type label + ≥1 `area:*` label from
+  `.github/labels.yml`; one PR's worth of work. Use the `create-issue` skill.
+- **Commits**: Conventional Commits, `<type>(<scope>): <subject>`, imperative, ≤ 72 chars.
+  Types: `feat fix perf refactor test docs build ci chore security revert`. Scopes: `dns scanners
+  ai web api ui db workers auth infra security deps agents`. Body explains *why*; footer
+  `Refs #N` / `Closes #N`; breaking → `!` + `BREAKING CHANGE:`. One logical change per commit.
+- **PRs**: one issue per PR; title = Conventional Commit subject (PRs are squash-merged);
+  branch `<issue#>-<slug>`; ≤ ~400 changed lines excl. tests/fixtures/lockfile; fill every
+  section of the PR template; draft until checks pass.
+- Never commit to `main` directly once branch protection is on. Never force-push shared branches.
 
 ## When unsure
 

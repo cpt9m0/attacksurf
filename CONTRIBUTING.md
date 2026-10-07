@@ -44,9 +44,12 @@ More detail: [docs/development.md](docs/development.md).
    uv run pytest          # coverage must stay ≥ 80%
    ```
 5. **Commit** using [Conventional Commits](https://www.conventionalcommits.org/):
-   `feat: add DMARC policy check`, `fix: ...`, `docs: ...`, `test: ...`
-6. **Open a PR** using the template, link the issue (`Closes #42`), and keep it focused: one issue
-   per PR.
+   `feat(dns): add DMARC policy check`. Enable the template with
+   `git config commit.template .gitmessage`.
+6. **Open a PR** using the template: title in Conventional Commits format (PRs are
+   squash-merged), link the issue (`Closes #42`), one issue per PR, ideally ≤ ~400 changed lines.
+
+Issue, commit, and PR rules in full: [docs/conventions.md](docs/conventions.md).
 
 A maintainer will review it. Expect questions; they're about the code, not about you.
 

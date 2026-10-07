@@ -4,6 +4,7 @@
 |---|---|
 | [architecture.md](architecture.md) | system design, layers, data model, scan pipeline, AI layer |
 | [development.md](development.md) | setup, commands, testing, working with AI agents |
+| [conventions.md](conventions.md) | rules for issues, commits, and pull requests |
 | [security.md](security.md) | responsible-use rules, threat model, data sent to LLMs |
 | [sponsors.md](sponsors.md) | how sponsorship funds the project |
 | [adr/](adr/) | architecture decision records (why things are the way they are) |

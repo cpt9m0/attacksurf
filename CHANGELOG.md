@@ -13,3 +13,5 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   policy, issue/PR templates, funding
 - `STATE.md` handoff file, `finish-task` skill + keep-in-sync rule, SessionStart/Stop hooks
 - `DESIGN.md` web UI design system skeleton
+- Issue/commit/PR conventions (`docs/conventions.md`), task and epic issue forms, label
+  definitions, commit message template, `create-issue` skill
