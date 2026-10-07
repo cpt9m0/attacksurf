@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# SessionStart hook: make sure deps are installed (cloud sessions start from a fresh clone).
+# SessionStart hook: install deps (cloud sessions start from a fresh clone) and load the
+# STATE.md handoff into the agent's context (stdout of this hook is added to context).
 set -euo pipefail
 cd "${CLAUDE_PROJECT_DIR:-.}"
-uv sync --quiet
+uv sync --quiet >/dev/null 2>&1 || echo "warning: uv sync failed; run it manually."
+if [[ -f STATE.md ]]; then
+  echo "=== STATE.md (handoff from the previous session) ==="
+  cat STATE.md
+fi

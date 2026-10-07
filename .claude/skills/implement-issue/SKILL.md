@@ -6,7 +6,8 @@ description: End-to-end workflow for implementing a GitHub issue in attacksurf. 
 # Implement a GitHub issue
 
 ## 1. Understand
-- Read the issue in full: tasks, acceptance criteria, and its "Depends on #N" line.
+- Read `STATE.md` first, then the issue in full **including comments**: tasks, acceptance
+  criteria, and its "Depends on #N" line.
 - Check every dependency is closed/merged. If not, stop and tell the user which ones block it.
 - Read `AGENTS.md`, the relevant `docs/` pages and ADRs, and the existing code the issue touches.
 - Look up current library APIs with Context7 instead of relying on memory.
@@ -28,8 +29,11 @@ description: End-to-end workflow for implementing a GitHub issue in attacksurf. 
 Run the `pre-pr-check` skill. Every check must pass, with coverage ≥ 80%.
 For UI changes, run the app and check the page with the Playwright MCP.
 
-## 6. Ship
+## 6. Sync
+Run the `finish-task` skill: tests, docs, `DESIGN.md`, `CHANGELOG.md`, agent instructions, and
+overwrite `STATE.md` with the handoff.
+
+## 7. Ship
 - Conventional commits (`feat: ...`, `test: ...`).
 - Push and open a PR titled like the issue, body: summary, checklist of acceptance criteria,
   how it was tested, `Closes #N`.
-- Update `docs/` (and add an ADR if an architectural decision was made) in the same PR.

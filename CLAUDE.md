@@ -13,6 +13,7 @@ Use these instead of improvising the workflow:
 - `db-migration`: model change → Alembic migration → verify
 - `llm-prompt`: add/change an AI prompt with versioning, schema, injection defense, eval
 - `pre-pr-check`: the full verification + self-review checklist before opening a PR
+- `finish-task`: end-of-task sync of tests, docs, agent files, and `STATE.md` (`/finish-task`)
 
 ## MCP servers (`.mcp.json`)
 
@@ -25,4 +26,7 @@ Use these instead of improvising the workflow:
 ## Hooks (`.claude/settings.json`)
 
 - Python files are auto-formatted with ruff after each edit.
-- `SessionStart` runs `uv sync` so tools are ready in cloud sessions.
+- `SessionStart` runs `uv sync` and loads `STATE.md` into context, so every session starts
+  from the latest handoff.
+- `Stop`: if code changed but `STATE.md` didn't, you're reminded once to run `/finish-task`.
+  If the task isn't finished yet (e.g. you're asking the user a question), just continue.

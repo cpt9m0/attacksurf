@@ -11,3 +11,5 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 - AI-agent setup: AGENTS.md, CLAUDE.md, Claude Code skills, hooks, MCP servers
 - Open-source community files: AGPL-3.0 license, contributing guide, code of conduct, security
   policy, issue/PR templates, funding
+- `STATE.md` handoff file, `finish-task` skill + keep-in-sync rule, SessionStart/Stop hooks
+- `DESIGN.md` web UI design system skeleton
