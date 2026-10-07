@@ -1,0 +1,12 @@
+# Documentation
+
+| Doc | What's in it |
+|---|---|
+| [architecture.md](architecture.md) | system design, layers, data model, scan pipeline, AI layer |
+| [development.md](development.md) | setup, commands, testing, working with AI agents |
+| [security.md](security.md) | responsible-use rules, threat model, data sent to LLMs |
+| [adr/](adr/) | architecture decision records (why things are the way they are) |
+
+Roadmap: GitHub epic [#31](https://github.com/cpt9m0/attacksurf/issues/31).
+
+New architectural decision? Copy `adr/0000-template.md` to the next number.
