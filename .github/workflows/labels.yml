@@ -1,0 +1,38 @@
+# Creates/updates repository labels from .github/labels.yml (source of truth).
+# Uses only the runner's preinstalled gh, yq and jq: no third-party actions.
+# Labels not in the file are left untouched (no deletions).
+name: Sync labels
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/labels.yml
+      - .github/workflows/labels.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      REF: ${{ github.sha }}
+    steps:
+      - name: Sync labels
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/contents/.github/labels.yml?ref=$REF" \
+            -H "Accept: application/vnd.github.raw" > labels.yml
+          yq -o=json '.' labels.yml | jq -c '.[]' | while read -r label; do
+            name=$(jq -r '.name' <<<"$label")
+            color=$(jq -r '.color' <<<"$label")
+            desc=$(jq -r '.description // ""' <<<"$label")
+            gh label create "$name" --color "$color" --description "$desc" --force -R "$REPO"
+            echo "synced: $name"
+          done

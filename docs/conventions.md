@@ -50,6 +50,9 @@ Part of #<epic>          <!-- if it belongs to an epic -->
 - One concern per issue. Found something unrelated while working? Open a new issue.
 
 ### Labels (see `.github/labels.yml`)
+
+`.github/labels.yml` is the source of truth; the `Sync labels` workflow applies it to GitHub on
+every change to `main`. Add or change labels there, never only in the GitHub UI.
 Every issue gets **one type** label, **at least one area**, and status labels as needed.
 
 | Group | Labels |
