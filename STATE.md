@@ -28,11 +28,12 @@ gate, PR-title lint). Label sync is already done. See the comments on #1. Then #
 ## Open threads
 - #32: GitHub Sponsors / Ko-fi accounts not set up yet (Ko-fi username assumed `cpt9m0`)
 - Repo settings for the user to do: description, topics, Discussions, Sponsorships,
-  private vulnerability reporting, social preview, default branch → `main`,
-  **squash-only merging** (Settings → General → Pull Requests)
+  private vulnerability reporting, social preview
 - `DESIGN.md` values are `TBD`: to be completed with Claude Design before/during #6
 
 ## Notes for the next agent
+- Repo: default branch `main`, squash-merge only (PR title = commit subject), head branches
+  auto-deleted
 - Package is `src/attacksurf` (uv_build backend); run the app with `uv run flask --app attacksurf run --debug`
 - Issue bodies in #2 list paths as `attacksurf/...`; they live under `src/attacksurf/...` now
 - `jq` is needed by the Claude Code hooks (they no-op without it)
