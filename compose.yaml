@@ -36,6 +36,8 @@ services:
       POSTGRES_DB: attacksurf
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Runs only when the volume is created: adds the `attacksurf_test` database for `make test`.
+      - ./compose/postgres-init:/docker-entrypoint-initdb.d:ro
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
