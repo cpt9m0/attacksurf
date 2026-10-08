@@ -47,7 +47,13 @@ uv run flask --app attacksurf run --debug
 uv run pytest                            # tests + coverage (fails under 80%)
 uv run ruff check --fix . && uv run ruff format .
 uv run pyright
+uv run pre-commit install                # once: git hooks (pre-commit, commit-msg, pre-push)
+uv run pre-commit run --all-files        # all hooks: ruff, hygiene, gitleaks
 ```
+
+Git hooks run ruff + gitleaks on commit, check the commit message, and run pyright + pytest on
+push. CI (`.github/workflows/ci.yml`) runs the same checks plus the PR-title check.
+**Never bypass hooks (`--no-verify`) or weaken CI to get green**: fix the cause.
 
 **Definition of done for any change:** ruff check, ruff format, pyright and pytest all pass
 locally, coverage ≥ 80% overall, new code has its own tests, **and the "Keep the project in

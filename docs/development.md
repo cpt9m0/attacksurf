@@ -11,6 +11,7 @@
 
 ```bash
 uv sync
+uv run pre-commit install                   # git hooks: commit, commit-msg, pre-push
 uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 ```
 
@@ -22,6 +23,7 @@ uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 | Lint / autofix | `uv run ruff check --fix .` |
 | Format | `uv run ruff format .` |
 | Type-check | `uv run pyright` |
+| All git hooks on all files | `uv run pre-commit run --all-files` |
 | Add a dependency | `uv add <pkg>` (dev: `uv add --dev <pkg>`) |
 
 Never use `pip install`, and never edit `uv.lock` by hand.
@@ -39,6 +41,18 @@ docs/             architecture, ADRs, guides
 AGENTS.md         rules for AI coding agents (CLAUDE.md imports it)
 .mcp.json         MCP servers for AI agents
 ```
+
+## Git hooks and CI
+
+| When | What runs |
+|---|---|
+| `git commit` | trailing whitespace/EOF/line endings, YAML/TOML/JSON syntax, merge markers, large files, private keys, **gitleaks** (secrets), **ruff** check + format |
+| commit message | Conventional Commits check (`.github/scripts/check-commit-msg.sh`, same rules as PR titles) |
+| `git push` | **pyright**, **pytest** (80% coverage gate) |
+| CI on push to `main` / every PR | `lint` (pre-commit hooks + pyright), `test (3.12)`, `test (3.13)`, `secrets` (gitleaks over full git history), `pr-title` (also re-runs on title edits) |
+
+Remote hooks and GitHub Actions are pinned to commit SHAs; Dependabot proposes updates. ruff,
+pyright and pytest versions come from `uv.lock`.
 
 ## Testing
 

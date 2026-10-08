@@ -19,7 +19,7 @@ body:
     attributes:
       label: Tasks
       value: |
-        - [ ] 
+        - [ ]
     validations:
       required: true
   - type: textarea
@@ -28,7 +28,7 @@ body:
       label: Acceptance criteria
       description: Observable, testable results. Each becomes at least one test.
       value: |
-        - 
+        -
     validations:
       required: true
   - type: textarea

@@ -2,32 +2,29 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-10-07 · **Branch:** `main` · **Issue:** none (project setup)
+**Updated:** 2026-10-07 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #1 (Dev tooling and CI)
 
 ## Status
-Done. Project scaffolding, agent tooling, open-source files, handoff/design-system setup, and
-issue/commit/PR conventions are complete and on `main`.
+#1 implemented; PR open, waiting for green CI and a squash merge by the user.
 
 ## Last task
-- Added `Sync labels` workflow (`.github/workflows/labels.yml`): labels from `.github/labels.yml`
-  are live on GitHub; all issues #1-#30 now have type labels (+ `needs-design` on UI issues,
-  `good first issue` on #17/#19, `priority:high` on #1)
-- Added issue/commit/PR conventions: `docs/conventions.md`, task + epic issue forms,
-  `.github/labels.yml`, `.gitmessage`, updated PR template, `create-issue` skill, AGENTS.md summary
-- Before that: end-of-task sync rule (`AGENTS.md`), `finish-task` skill, and hooks (SessionStart
-  loads this file; Stop reminds if code changed without a `STATE.md` update)
-- Added `DESIGN.md` (UI design system skeleton, values `TBD`) and linked it from UI issues
-- Earlier: src layout + quality gates, AGENTS/CLAUDE.md, skills, MCP, docs/ADRs, AGPL + community files
+- Git hooks via pre-commit (`.pre-commit-config.yaml`): hygiene checks, gitleaks, ruff (from
+  `uv.lock`), commit-message check, pyright + pytest on push
+- CI (`.github/workflows/ci.yml`): `lint`, `test (3.12)`, `test (3.13)`, `secrets` (gitleaks over
+  full history); `pr-title` in `pr-title.yml` (re-runs on title edits); actions pinned by SHA
+- Shared rule script: `.github/scripts/check-pr-title.sh` (PR titles) is reused by
+  `check-commit-msg.sh` (commit subjects), so both follow the same rule
+- SessionStart hook now installs the git hooks; docs/AGENTS/CLAUDE/skills updated
 
 ## Next step
-Implement #1 (Dev tooling and CI): ruff/pyright/pytest are already configured, so what's left is
-`.pre-commit-config.yaml` (incl. gitleaks + a Conventional Commits `commit-msg` hook) and the
-GitHub Actions CI workflow (`uv sync --locked`, ruff, pyright, pytest with the 80% coverage
-gate, PR-title lint). Label sync is already done. See the comments on #1. Then #2.
+After #1 is merged: implement #2 (layered package layout, pydantic-settings config, structlog)
+on a fresh branch from `main`.
 
 ## Open threads
+- Optional (user): ruleset on `main` requiring PRs + checks `lint`, `test (3.12)`,
+  `test (3.13)`, `secrets`, `pr-title`
 - #32: GitHub Sponsors / Ko-fi accounts not set up yet (Ko-fi username assumed `cpt9m0`)
-- Repo settings for the user to do: description, topics, Discussions, Sponsorships,
+- Repo settings for the user: description, topics, Discussions, Sponsorships,
   private vulnerability reporting, social preview
 - `DESIGN.md` values are `TBD`: to be completed with Claude Design before/during #6
 
@@ -36,4 +33,5 @@ gate, PR-title lint). Label sync is already done. See the comments on #1. Then #
   auto-deleted
 - Package is `src/attacksurf` (uv_build backend); run the app with `uv run flask --app attacksurf run --debug`
 - Issue bodies in #2 list paths as `attacksurf/...`; they live under `src/attacksurf/...` now
+- First `pre-commit` run downloads hook envs (gitleaks builds with Go): takes a minute
 - `jq` is needed by the Claude Code hooks (they no-op without it)

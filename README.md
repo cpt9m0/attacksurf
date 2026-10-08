@@ -7,6 +7,7 @@
 Discover your internet-facing assets, find DNS and security misconfigurations before attackers do,
 and let AI explain what matters, self-hosted and free.
 
+[![CI](https://github.com/cpt9m0/attacksurf/actions/workflows/ci.yml/badge.svg)](https://github.com/cpt9m0/attacksurf/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
@@ -66,6 +67,8 @@ cd attacksurf
 uv sync
 uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 ```
+
+Contributors: also run `uv run pre-commit install` (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 Docker Compose setup arrives with [#3](https://github.com/cpt9m0/attacksurf/issues/3).
 
