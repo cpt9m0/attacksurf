@@ -24,4 +24,10 @@ jobs:
       - name: Check PR title is a Conventional Commit (docs/conventions.md)
         env:
           TITLE: ${{ github.event.pull_request.title }}
-        run: .github/scripts/check-pr-title.sh "$TITLE"
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [[ "$AUTHOR" == "dependabot[bot]" ]]; then
+            .github/scripts/check-pr-title.sh --bot "$TITLE"
+          else
+            .github/scripts/check-pr-title.sh "$TITLE"
+          fi
