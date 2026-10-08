@@ -64,3 +64,24 @@ jobs:
       # Same version as the pre-commit hook; the Go checksum database verifies the module.
       - name: gitleaks (full git history)
         run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --redact --no-banner --verbose
+
+  compose:
+    name: compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Build prod image
+        run: docker build --target prod -t attacksurf:prod .
+      - name: Prod image runs as non-root
+        run: test "$(docker run --rm --entrypoint id attacksurf:prod -u)" = "10001"
+      - name: Start dev stack and wait until healthy
+        run: docker compose up -d --build --wait --wait-timeout 180
+      - name: Smoke test /healthz
+        run: curl -fsS http://127.0.0.1:5000/healthz
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
