@@ -2,27 +2,26 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-10-08 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #4 (DB foundation)
+**Updated:** 2026-10-08 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #5 (Org/User/Membership)
 
 ## Status
-#4 implemented; PR open, waiting for CI + review, then squash-merge. #1–#3 merged.
+#5 implemented; PR open, waiting for CI + review, then squash-merge. #1–#4 merged.
 
 ## Last task
-- `infra/db/`: `Base` (naming convention), mixins `UUIDPrimaryKey` (UUIDv7 from `domain/ids.py`),
-  `Timestamps`, `TenantScoped` (`org_id` FK → `orgs.id`), `models.Org` (id, name, timestamps),
-  `session.py` (engine/sessionmaker from Settings), `tenancy.py` (`scoped`, `get_scoped`)
-- `web/db.py`: per-request session (`get_session()`, closed at teardown), wired in `create_app`
-- Alembic: root `alembic.ini`, migrations in `attacksurf.infra.db:migrations`, `0001_create_orgs`;
-  `make migrate`, `make revision id=0002 m="..."`
-- Tests: `tests/integration/` (`db_engine`, `db_session` rollback fixtures; tenant isolation,
-  `alembic check`, down/up round trip, CLI); skip locally without `TEST_DATABASE_URL`, fail in CI
-- CI: Postgres service in `test` jobs; compose job runs migrations. ADR 0008.
-- import-linter: `web` (except `web/db.py`), `scanners`, `ai` can't import SQLAlchemy/Alembic
-- Verified locally: 62 tests, 100% coverage on host + in compose (`make test`), `make migrate`
+- Migration `0002`: `orgs.slug` (backfilled, unique) + `plan`; `users` (global, email unique
+  lowercase), `memberships` (TenantScoped, role VARCHAR+CHECK, unique org/user), `audit_log`
+  (TenantScoped, `details` JSONB, append-only)
+- `domain/accounts.py`: `Role`, `has_role`, email/password (12–1024)/org-name rules, `slugify`,
+  `PasswordHasher` protocol, `InvalidSignup`, `EmailAlreadyRegistered`
+- `infra/crypto.py`: `Argon2PasswordHasher` (moved here from #7's scope; commented on #7)
+- `services/accounts.py`: `register_user` (one commit; race on email → `EmailAlreadyRegistered`);
+  `services/audit.py`: `audit()` (caller's transaction)
+- Tests: `tests/fakes.py` (`FakePasswordHasher`), unit + integration; 119 tests, 100% coverage
 
 ## Next step
-After #4 merges: #5 (Org/User/Membership/AuditLog). Extend `Org` (slug, plan) via migration
-`0002`; use the `db-migration` skill.
+After #5 merges: #6 (UI foundation) needs `DESIGN.md` values (Claude Design) — check with the
+user; otherwise #7 (auth: Flask-Login, login/logout, CSRF, rate limit) builds on `register_user`
+and `Argon2PasswordHasher.verify`.
 
 ## Open threads
 - Optional (user): ruleset on `main` requiring PRs + checks `lint`, `test (3.12)`,

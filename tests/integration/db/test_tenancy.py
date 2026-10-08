@@ -17,7 +17,7 @@ def session(db_session: Session) -> Session:
 
 @pytest.fixture
 def orgs(session: Session) -> tuple[Org, Org]:
-    acme, globex = Org(name="acme"), Org(name="globex")
+    acme, globex = Org(name="acme", slug="acme"), Org(name="globex", slug="globex")
     session.add_all([acme, globex])
     session.flush()
     session.add_all(

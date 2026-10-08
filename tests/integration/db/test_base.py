@@ -7,7 +7,7 @@ from attacksurf.infra.db.models import Org
 
 
 def test_new_row_gets_uuid7_primary_key(db_session: Session) -> None:
-    org = Org(name="acme")
+    org = Org(name="acme", slug="acme")
     db_session.add(org)
     db_session.flush()
 
@@ -15,7 +15,7 @@ def test_new_row_gets_uuid7_primary_key(db_session: Session) -> None:
 
 
 def test_timestamps_are_set_by_database_and_timezone_aware(db_session: Session) -> None:
-    org = Org(name="acme")
+    org = Org(name="acme", slug="acme")
     db_session.add(org)
     db_session.flush()
     db_session.refresh(org)

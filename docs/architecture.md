@@ -69,19 +69,23 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 - Sessions: one per request in `web` (`web.db.get_session()`, closed at teardown); Celery
   tasks use `with factory.begin() as session:`. Services commit.
 - import-linter: `web` (except `web/db.py`), `scanners`, `ai` never import SQLAlchemy/Alembic.
+- Services are verb functions (`register_user(session, ...)`): they validate with pure `domain`
+  rules, take adapters through `domain` protocols (e.g. `PasswordHasher`, implemented by
+  `infra.crypto.Argon2PasswordHasher`), commit once, and raise domain exceptions
+  (`InvalidSignup`, `EmailAlreadyRegistered`) that `web` maps to responses.
 
 ## Core model
 
 | Entity | Purpose |
 |---|---|
-| `Org`, `User`, `Membership` | tenancy; every tenant row carries `org_id` |
+| `Org`, `User`, `Membership` | tenancy; every tenant row carries `org_id`. `User` is global (one login, many orgs); `Membership.role` is `owner`/`admin`/`member` (`domain.accounts.has_role`) |
 | `Asset` | polymorphic target: `domain`, `subdomain`, `ip`, `url`, `repo`, `binary` |
 | `AssetRelation` | graph edges: `subdomain_of`, `cname_to`, `resolves_to`, `serves` |
 | `Verification` | proof of ownership (DNS TXT); gates active checks |
 | `Scan`, `Job` | one scan run, and its per-stage/per-scanner jobs |
 | `Finding`, `Evidence` | normalized result, unique by `(org_id, fingerprint)`; lifecycle `open → fixed / accepted_risk / false_positive`, with regression detection |
 | `OrgSettings`, `LLMUsage` | LLM provider config (encrypted keys) and token/cost tracking |
-| `ScanSchedule`, `AuditLog` | continuous monitoring and an audit trail |
+| `ScanSchedule`, `AuditLog` | continuous monitoring and an append-only audit trail (`services.audit.audit()`, written in the same transaction as the change) |
 
 ## Scan pipeline
 

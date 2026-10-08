@@ -23,7 +23,7 @@ their security data. Both make it a target. These rules apply to all code.
 | Secret leakage / forged sessions | env vars and connection URLs typed as `SecretStr` (masked in repr); `ENV=prod` refuses to start unless `SECRET_KEY` is ≥ 32 chars and not a placeholder such as `change-me`; org API keys encrypted at rest (Fernet/MultiFernet); structlog redacts secret-looking keys; keys never rendered back in full |
 | Log injection | client `X-Request-ID` accepted only if it matches `[A-Za-z0-9-]{1,64}`, otherwise replaced; structured (JSON) logs |
 | Malicious uploads *(later)* | never executed; analysis in gVisor sandboxes without network |
-| Account attacks | argon2 hashing, login rate limiting, secure session cookies, audit log |
+| Account attacks | argon2id hashing (`infra/crypto.py`, argon2-cffi defaults); passwords 12–1024 chars (upper bound limits hashing DoS), never logged or echoed in errors; emails normalized to lowercase and unique; login rate limiting, secure session cookies (#7); audit log (`details` never holds secrets) |
 | Supply chain | locked deps (`uv.lock`), `pip-audit` in CI, pinned MCP server versions, minimal dependencies |
 
 ## Data sent to LLM providers

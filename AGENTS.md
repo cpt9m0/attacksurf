@@ -28,7 +28,7 @@ src/attacksurf/   application code (src layout, import name `attacksurf`)
   app.py          create_app() factory (re-exported from attacksurf/__init__.py)
   config.py       Settings (pydantic-settings) + get_settings(); the only place env is read
   web/            Flask blueprints: ui (HTMX pages) + api/v1 (JSON); templates/, static/
-  services/       use cases: one class/function per action (AddRootDomain, StartScan, ...)
+  services/       use cases: one verb function per action (register_user, start_scan, ...)
   domain/         entities, enums, value objects, events. NO Flask/SQLAlchemy/SDK imports
   scanners/       scanner plugins grouped by target type (dns/, ip/, web/, code/, binary/)
   ai/             providers/, prompts/ (versioned templates), triage, summaries
@@ -104,6 +104,9 @@ sync" rule below is satisfied**. Do not claim done without running them.
 - Logging via structlog with context (org_id, scan_id, job_id). Never log secrets, tokens,
   API keys, or full scan evidence.
 - Errors: raise domain-specific exceptions in services; map them to HTTP responses in `web/`.
+- Services: verb functions taking a `Session` (plus adapters via `domain` protocols); they
+  commit once per use case and record security-relevant actions with `services.audit.audit()`
+  in the same transaction. See `services/accounts.py`.
 - Comments explain *why*, not *what*. No commented-out code.
 - DB schema changes only through Alembic migrations (see `.claude/skills/db-migration`).
 
