@@ -11,3 +11,4 @@ htmlcov/
 .ruff_cache/
 dist/
 .claude/settings.local.json
+.import_linter_cache/

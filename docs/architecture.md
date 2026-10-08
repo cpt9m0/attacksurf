@@ -112,6 +112,12 @@ for small client-side state. A JSON API (`/api/v1`) shares the same services.
 Single VPS: Caddy → gunicorn (web), Celery workers, beat, PostgreSQL, Redis, all in Docker Compose.
 Nightly `pg_dump` off-box. See issue #29.
 
+The `Dockerfile` has two targets: `dev` (dev deps, Flask debug server, source bind-mounted by
+`compose.yaml` for hot reload) and `prod` (no dev deps, gunicorn, non-root uid 10001). Base and
+service images are pinned by digest and updated by Dependabot. The dev `compose.yaml` runs `web`,
+`postgres`, `redis`; `worker-passive`, `worker-ai`, `beat` are placeholders (profile `workers`)
+until Celery lands in #10.
+
 ## Decisions
 
 See `docs/adr/` for the reasoning behind each choice above.

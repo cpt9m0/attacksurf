@@ -1,0 +1,70 @@
+# Local development stack: `make up` (or `docker compose up -d --wait`).
+# Dev-only credentials; every host port is bound to 127.0.0.1. Production compose: #29.
+name: attacksurf
+
+x-app: &app
+  build:
+    context: .
+    target: dev
+  image: attacksurf:dev
+  env_file:
+    - path: .env
+      required: false
+  environment: &app-env
+    ENV: dev
+    DATABASE_URL: postgresql+psycopg://attacksurf:attacksurf@postgres:5432/attacksurf
+    REDIS_URL: redis://redis:6379/0
+  volumes:
+    - ./src:/app/src  # hot reload
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  web:
+    <<: *app
+    ports:
+      - "127.0.0.1:5000:5000"
+
+  postgres:
+    image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+    environment:
+      POSTGRES_USER: attacksurf
+      POSTGRES_PASSWORD: attacksurf
+      POSTGRES_DB: attacksurf
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U attacksurf -d attacksurf"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Celery placeholders until #10 (not started by default: `docker compose --profile workers up`).
+  worker-passive: &placeholder
+    <<: *app
+    profiles: ["workers"]
+    healthcheck:
+      disable: true
+    command: ["sh", "-c", "echo 'worker placeholder: Celery arrives in #10'; exec sleep infinity"]
+  worker-ai:
+    <<: *placeholder
+  beat:
+    <<: *placeholder
+
+volumes:
+  pgdata:

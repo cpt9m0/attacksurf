@@ -57,21 +57,29 @@ own key) **triages, prioritizes, and explains** them in plain language with fix 
 IP / VPS exposure (open ports, service CVEs) · Website scanning (admin panels, WordPress, XSS) ·
 Codebase scanning (secrets, SAST, vulnerable dependencies) · Binary analysis
 
-## Quick start
+## Getting started
 
 > The app is pre-MVP; this runs the development skeleton.
+
+**With Docker (recommended):** web app + PostgreSQL + Redis in one command.
 
 ```bash
 git clone https://github.com/cpt9m0/attacksurf.git
 cd attacksurf
+cp .env.example .env
+make up        # = docker compose up -d --build --wait  →  http://127.0.0.1:5000/healthz
+make logs      # follow logs; `make` lists all targets; `make down` to stop
+```
+
+**Without Docker:** just the web app.
+
+```bash
 uv sync
 cp .env.example .env
-uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000  (health: /healthz)
+uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 ```
 
 Contributors: also run `uv run pre-commit install` (see [CONTRIBUTING.md](CONTRIBUTING.md)).
-
-Docker Compose setup arrives with [#3](https://github.com/cpt9m0/attacksurf/issues/3).
 
 ## How it works
 
