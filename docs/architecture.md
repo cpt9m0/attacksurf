@@ -39,6 +39,22 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
   thin entry points.
 - Pragmatism over purity: SQLAlchemy models live in `infra/db`; the Repository pattern is only
   added where it simplifies testing.
+- **Enforced**: import-linter contracts in `pyproject.toml` fail the build if `domain` imports
+  another layer (or Flask/SQLAlchemy/structlog), or if any inner layer imports `web`/`workers`.
+
+## App, config, logging
+
+- `create_app(settings=None)` (`app.py`) builds the Flask app from a `Settings` object and
+  registers blueprints: `ui` (`/`), `health` (`/healthz`, liveness only), `api_v1` (`/api/v1`).
+- `Settings` (`config.py`, pydantic-settings) reads env vars and `.env`. `ENV=prod` requires a
+  `SECRET_KEY` of ≥ 32 characters that isn't a known placeholder; dev/test fall back to an
+  ephemeral key with a warning. Secrets and connection URLs are `SecretStr`.
+- Logging (`infra/logging.py`): structlog **and** stdlib logging (Flask, Werkzeug, libraries)
+  share one pipeline: JSON in prod, console in dev/test; every line carries the request's
+  `request_id` (from a valid `X-Request-ID` header or generated, echoed back in the response);
+  keys that look like secrets are redacted.
+- `import attacksurf.domain` (or any inner layer) never loads Flask: the package re-exports
+  `create_app` lazily.
 
 ## Core model
 

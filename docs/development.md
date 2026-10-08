@@ -11,9 +11,16 @@
 
 ```bash
 uv sync
+cp .env.example .env                        # local settings (see below)
 uv run pre-commit install                   # git hooks: commit, commit-msg, pre-push
 uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 ```
+
+## Configuration
+
+All settings live in `src/attacksurf/config.py` and are read from environment variables or `.env`
+(see `.env.example`). Leave `SECRET_KEY` empty in dev (an ephemeral key is generated);
+`ENV=prod` refuses to start without a random `SECRET_KEY` of ≥ 32 characters. Never commit `.env`.
 
 ## Everyday commands
 
@@ -24,6 +31,7 @@ uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 | Format | `uv run ruff format .` |
 | Type-check | `uv run pyright` |
 | All git hooks on all files | `uv run pre-commit run --all-files` |
+| Layer rules (import-linter) | `uv run lint-imports` |
 | Add a dependency | `uv add <pkg>` (dev: `uv add --dev <pkg>`) |
 
 Never use `pip install`, and never edit `uv.lock` by hand.
@@ -46,7 +54,7 @@ AGENTS.md         rules for AI coding agents (CLAUDE.md imports it)
 
 | When | What runs |
 |---|---|
-| `git commit` | trailing whitespace/EOF/line endings, YAML/TOML/JSON syntax, merge markers, large files, private keys, **gitleaks** (secrets), **ruff** check + format |
+| `git commit` | trailing whitespace/EOF/line endings, YAML/TOML/JSON syntax, merge markers, large files, private keys, **gitleaks** (secrets), **ruff** check + format, **import-linter** (layer rules) |
 | commit message | Conventional Commits check (`.github/scripts/check-commit-msg.sh`, same rules as PR titles) |
 | `git push` | **pyright**, **pytest** (80% coverage gate) |
 | CI on push to `main` / every PR | `lint` (pre-commit hooks + pyright), `test (3.12)`, `test (3.13)`, `secrets` (gitleaks over full git history), `pr-title` (also re-runs on title edits) |

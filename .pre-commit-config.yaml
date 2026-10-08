@@ -42,6 +42,12 @@ repos:
         entry: uv run --frozen ruff format
         language: system
         types_or: [python, pyi]
+      - id: lint-imports
+        name: import-linter (layer rules)
+        entry: uv run --frozen lint-imports
+        language: system
+        pass_filenames: false
+        types_or: [python, pyi, toml]
       - id: pyright
         name: pyright
         entry: uv run --frozen pyright
