@@ -48,6 +48,7 @@ pre-commit hook and in CI).
 ```bash
 uv sync                                  # install (never pip install)
 cp .env.example .env                     # local config (all settings: src/attacksurf/config.py)
+make up / make down / make test          # Docker Compose dev stack (web, postgres, redis); `make` lists all
 uv add <pkg> / uv add --dev <pkg>        # add deps (never edit lockfile by hand)
 uv run flask --app attacksurf run --debug
 uv run pytest                            # tests + coverage (fails under 80%)
@@ -59,7 +60,8 @@ uv run lint-imports                      # layer rules only
 ```
 
 Git hooks run ruff + gitleaks on commit, check the commit message, and run pyright + pytest on
-push. CI (`.github/workflows/ci.yml`) runs the same checks plus the PR-title check.
+push. CI (`.github/workflows/ci.yml`) runs the same checks plus a compose smoke test and the
+PR-title check. New service or env var? Update `compose.yaml` and `.env.example` too.
 **Never bypass hooks (`--no-verify`) or weaken CI to get green**: fix the cause.
 
 **Definition of done for any change:** ruff check, ruff format, pyright and pytest all pass

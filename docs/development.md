@@ -16,6 +16,21 @@ uv run pre-commit install                   # git hooks: commit, commit-msg, pre
 uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 ```
 
+## Docker Compose stack
+
+`make up` builds the `dev` image and starts the stack, waiting until every service is healthy.
+
+| Service | Host port (localhost only) | Notes |
+|---|---|---|
+| `web` | 5000 | Flask debug server, hot reload (`./src` is bind-mounted) |
+| `postgres` | 5432 | PostgreSQL 16, user/password/db `attacksurf` (dev only), volume `pgdata` |
+| `redis` | 6379 | Redis 7 |
+| `worker-passive`, `worker-ai`, `beat` | n/a | placeholders until #10; start with `docker compose --profile workers up` |
+
+Inside compose, `DATABASE_URL` / `REDIS_URL` point at the service names; your `.env` supplies the
+rest. Targets: `make up | down | logs | ps | build | shell | test | check | migrate`
+(`make` lists them). `make down` keeps the database; `docker compose down -v` wipes it.
+
 ## Configuration
 
 All settings live in `src/attacksurf/config.py` and are read from environment variables or `.env`
@@ -57,7 +72,7 @@ AGENTS.md         rules for AI coding agents (CLAUDE.md imports it)
 | `git commit` | trailing whitespace/EOF/line endings, YAML/TOML/JSON syntax, merge markers, large files, private keys, **gitleaks** (secrets), **ruff** check + format, **import-linter** (layer rules) |
 | commit message | Conventional Commits check (`.github/scripts/check-commit-msg.sh`, same rules as PR titles) |
 | `git push` | **pyright**, **pytest** (80% coverage gate) |
-| CI on push to `main` / every PR | `lint` (pre-commit hooks + pyright), `test (3.12)`, `test (3.13)`, `secrets` (gitleaks over full git history), `pr-title` (also re-runs on title edits) |
+| CI on push to `main` / every PR | `lint` (pre-commit hooks + pyright), `test (3.12)`, `test (3.13)`, `secrets` (gitleaks over full git history), `compose` (builds the prod image, checks it runs as non-root, starts the dev stack, curls `/healthz`), `pr-title` (also re-runs on title edits) |
 
 Remote hooks and GitHub Actions are pinned to commit SHAs; Dependabot proposes updates. ruff,
 pyright and pytest versions come from `uv.lock`.
