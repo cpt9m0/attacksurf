@@ -1,11 +1,5 @@
-from flask import Flask, render_template
+"""attacksurf: AI-powered attack surface management."""
 
+from attacksurf.app import create_app
 
-def create_app() -> Flask:
-    app = Flask(__name__)
-
-    @app.get("/")
-    def index():
-        return render_template("index.html")
-
-    return app
+__all__ = ["create_app"]
