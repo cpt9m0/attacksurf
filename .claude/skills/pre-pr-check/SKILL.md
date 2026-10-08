@@ -7,11 +7,12 @@ description: Full verification and adversarial self-review before committing or 
 
 ## 1. Automated checks (all must pass, run them, don't assume)
 ```bash
-uv run ruff format .
-uv run ruff check .
+uv run pre-commit run --all-files   # ruff format/check, hygiene, gitleaks
 uv run pyright
-uv run pytest            # fails if coverage < 80%
+uv run pytest                       # fails if coverage < 80%
 ```
+After pushing, confirm the CI run for the PR is green (`lint`, `test (3.12)`, `test (3.13)`,
+`secrets`, `pr-title`); a red CI means not done.
 If a migration changed: `uv run alembic upgrade head && uv run alembic downgrade -1 && uv run alembic upgrade head`.
 
 ## 2. Self-review the diff (`git diff main...`)
@@ -32,6 +33,11 @@ Answer each; fix anything that fails:
 - [ ] Scan-derived content is escaped in templates (no `|safe`) and delimited in prompts.
 - [ ] No secrets in code, logs, error messages, fixtures, or test output.
 - [ ] Forms/HTMX POSTs carry CSRF tokens.
+
+**Conventions** (`docs/conventions.md`)
+- [ ] Commits are Conventional Commits (`<type>(<scope>): <subject>`, ≤ 72 chars, why in body).
+- [ ] PR title is the squash-commit subject; every PR template section filled; `Closes #N`.
+- [ ] Diff is one concern and ≤ ~400 lines excl. tests/fixtures/lockfile (or split it).
 
 **Hygiene**
 - [ ] No debug prints, commented-out code, or TODOs without an issue number.

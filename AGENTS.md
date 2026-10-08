@@ -9,7 +9,9 @@ Humans: read `docs/` first; this file is the condensed rulebook.
 (domains first; later IPs, websites, codebases, binaries), scanners find issues, an LLM triages
 them. Defensive tool: it must never become an attack tool.
 
+- **Start every session by reading `STATE.md`**: it says where work stopped and what's next.
 - Roadmap: GitHub epic issue #31. Each issue lists its dependencies; respect the order.
+- UI work follows `DESIGN.md` (design system: tokens, components, patterns).
 - Architecture: `docs/architecture.md`. Decisions: `docs/adr/`. Read the relevant ADR before
   changing anything it covers. Changing a decision means writing a new ADR.
 
@@ -45,11 +47,17 @@ uv run flask --app attacksurf run --debug
 uv run pytest                            # tests + coverage (fails under 80%)
 uv run ruff check --fix . && uv run ruff format .
 uv run pyright
+uv run pre-commit install                # once: git hooks (pre-commit, commit-msg, pre-push)
+uv run pre-commit run --all-files        # all hooks: ruff, hygiene, gitleaks
 ```
 
+Git hooks run ruff + gitleaks on commit, check the commit message, and run pyright + pytest on
+push. CI (`.github/workflows/ci.yml`) runs the same checks plus the PR-title check.
+**Never bypass hooks (`--no-verify`) or weaken CI to get green**: fix the cause.
+
 **Definition of done for any change:** ruff check, ruff format, pyright and pytest all pass
-locally, coverage ≥ 80% overall, and new code has its own tests. Do not claim done without
-running them.
+locally, coverage ≥ 80% overall, new code has its own tests, **and the "Keep the project in
+sync" rule below is satisfied**. Do not claim done without running them.
 
 ## Architecture rules (enforced in review)
 
@@ -109,12 +117,39 @@ AGPL-3.0-or-later. Keep the "Source code" link in the UI footer (AGPL §13). Onl
 dependencies with AGPL-compatible licenses (MIT, BSD, Apache-2.0, LGPL, GPL-3.0, AGPL-3.0);
 never copy code from incompatible or unlicensed sources.
 
-## Git workflow
+## Keep the project in sync (after every task)
 
-- One GitHub issue per branch/PR. Branch: `<issue#>-short-slug`. Reference `Closes #N` in the PR.
-- Conventional commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`.
-- Small, reviewable PRs. Update docs/ADRs in the same PR when behavior or architecture changes.
-- Never commit to `main` directly. Never force-push shared branches.
+The codebase changes fast; stale instructions mislead the next agent. At the end of **every**
+task (feature, fix, refactor, docs, config) run the `finish-task` procedure
+(`.claude/skills/finish-task/SKILL.md`, `/finish-task` in Claude Code). In short:
+
+1. **Tests**: new/changed behavior is tested; obsolete tests removed.
+2. **Docs**: update whatever the change made stale: `docs/` (architecture, development,
+   security), ADRs for decisions, `DESIGN.md` for UI patterns/tokens, `README.md` for
+   user-visible features, `CHANGELOG.md` (`[Unreleased]`).
+3. **Agent instructions**: if you introduced a new convention, command, layer, or recurring
+   workflow, or found a rule here to be wrong or outdated, update `AGENTS.md`, `CLAUDE.md`, or
+   the relevant skill. Keep them short: edit and replace, don't just append.
+4. **`STATE.md`**: overwrite it with the current handoff (what was done, current status,
+   exact next step). It holds the present state only, never history.
+
+If nothing needed updating, say so explicitly in your final report.
+
+## Issues, commits, PRs
+
+Full rules and examples: `docs/conventions.md`. Essentials:
+
+- **Issues**: imperative title; body = Goal / Tasks / Acceptance criteria / (Out of scope) /
+  `Depends on #N` / `Part of #epic`; one type label + ≥1 `area:*` label from
+  `.github/labels.yml`; one PR's worth of work. Use the `create-issue` skill.
+- **Commits**: Conventional Commits, `<type>(<scope>): <subject>`, imperative, ≤ 72 chars.
+  Types: `feat fix perf refactor test docs build ci chore security revert`. Scopes: `dns scanners
+  ai web api ui db workers auth infra security deps agents`. Body explains *why*; footer
+  `Refs #N` / `Closes #N`; breaking → `!` + `BREAKING CHANGE:`. One logical change per commit.
+- **PRs**: one issue per PR; title = Conventional Commit subject (PRs are squash-merged);
+  branch `<issue#>-<slug>`; ≤ ~400 changed lines excl. tests/fixtures/lockfile; fill every
+  section of the PR template; draft until checks pass.
+- Never commit to `main` directly once branch protection is on. Never force-push shared branches.
 
 ## When unsure
 

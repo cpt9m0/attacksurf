@@ -6,7 +6,8 @@ description: End-to-end workflow for implementing a GitHub issue in attacksurf. 
 # Implement a GitHub issue
 
 ## 1. Understand
-- Read the issue in full: tasks, acceptance criteria, and its "Depends on #N" line.
+- Read `STATE.md` first, then the issue in full **including comments**: tasks, acceptance
+  criteria, and its "Depends on #N" line.
 - Check every dependency is closed/merged. If not, stop and tell the user which ones block it.
 - Read `AGENTS.md`, the relevant `docs/` pages and ADRs, and the existing code the issue touches.
 - Look up current library APIs with Context7 instead of relying on memory.
@@ -17,7 +18,7 @@ description: End-to-end workflow for implementing a GitHub issue in attacksurf. 
 - Keep the scope to the issue. Note follow-ups instead of building them.
 
 ## 3. Branch
-`git checkout -b <issue#>-<short-slug>` from an up-to-date `main` (unless the session assigns a branch).
+`git checkout -b <issue#>-<short-slug>` (e.g. `17-dmarc-check`) from an up-to-date `main` (unless the session assigns a branch).
 
 ## 4. Build test-first
 - For each acceptance criterion: write a failing test, then implement until it passes.
@@ -28,8 +29,13 @@ description: End-to-end workflow for implementing a GitHub issue in attacksurf. 
 Run the `pre-pr-check` skill. Every check must pass, with coverage ≥ 80%.
 For UI changes, run the app and check the page with the Playwright MCP.
 
-## 6. Ship
-- Conventional commits (`feat: ...`, `test: ...`).
-- Push and open a PR titled like the issue, body: summary, checklist of acceptance criteria,
-  how it was tested, `Closes #N`.
-- Update `docs/` (and add an ADR if an architectural decision was made) in the same PR.
+## 6. Sync
+Run the `finish-task` skill: tests, docs, `DESIGN.md`, `CHANGELOG.md`, agent instructions, and
+overwrite `STATE.md` with the handoff.
+
+## 7. Ship
+Follow `docs/conventions.md` §2-3:
+- Commits: `<type>(<scope>): <subject>` (imperative, ≤ 72 chars), body says why, footer `Refs #N`.
+- PR: title = Conventional Commit subject (it becomes the squash commit), fill every section of
+  `.github/pull_request_template.md`, `Closes #N`. Open as draft until all checks pass.
+- Found unrelated work? Don't widen the PR; file it with the `create-issue` skill.

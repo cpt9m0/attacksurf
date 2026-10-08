@@ -25,6 +25,7 @@ for you) and Git. Docker is needed from the Compose setup onward.
 git clone https://github.com/<you>/attacksurf.git
 cd attacksurf
 uv sync
+uv run pre-commit install    # git hooks: lint/format, secrets, commit message, tests on push
 uv run flask --app attacksurf run --debug
 ```
 
@@ -37,16 +38,19 @@ More detail: [docs/development.md](docs/development.md).
 2. **Fork and branch**: `git checkout -b 42-short-description`
 3. **Code + tests**: follow [AGENTS.md](AGENTS.md) (architecture rules and conventions apply to
    humans too). New behavior needs tests; bug fixes need a regression test.
-4. **Check locally**, all must pass:
+4. **Check locally**: the git hooks do this on commit/push; to run everything by hand:
    ```bash
-   uv run ruff format . && uv run ruff check .
+   uv run pre-commit run --all-files   # ruff, hygiene, secrets
    uv run pyright
-   uv run pytest          # coverage must stay ≥ 80%
+   uv run pytest                       # coverage must stay ≥ 80%
    ```
 5. **Commit** using [Conventional Commits](https://www.conventionalcommits.org/):
-   `feat: add DMARC policy check`, `fix: ...`, `docs: ...`, `test: ...`
-6. **Open a PR** using the template, link the issue (`Closes #42`), and keep it focused: one issue
-   per PR.
+   `feat(dns): add DMARC policy check`. Enable the template with
+   `git config commit.template .gitmessage`.
+6. **Open a PR** using the template: title in Conventional Commits format (PRs are
+   squash-merged), link the issue (`Closes #42`), one issue per PR, ideally ≤ ~400 changed lines.
+
+Issue, commit, and PR rules in full: [docs/conventions.md](docs/conventions.md).
 
 A maintainer will review it. Expect questions; they're about the code, not about you.
 

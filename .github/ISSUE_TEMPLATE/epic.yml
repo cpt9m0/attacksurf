@@ -1,0 +1,26 @@
+name: 🗺️ Epic
+description: A milestone made of several tasks (maintainers)
+title: "[Epic] "
+labels: ["epic"]
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What is true when this epic is done?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Out of scope
+  - type: textarea
+    id: tasks
+    attributes:
+      label: Tasks (in order)
+      description: Checklist of task issues, grouped in phases.
+      value: |
+        ### Phase 1
+        - [ ] #
+    validations:
+      required: true

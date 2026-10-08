@@ -1,0 +1,11 @@
+# <type>(<scope>): <subject>   (imperative, lowercase, no period, <= 72 chars)
+#
+# Types:  feat fix perf refactor test docs build ci chore security revert
+# Scopes: dns scanners ai web api ui db workers auth infra security deps agents
+# Breaking: add "!" after type/scope and a "BREAKING CHANGE:" footer.
+#
+# Body: what and WHY (wrap at 72). Skip for trivial changes.
+#
+# Footer: Refs #N | Closes #N | BREAKING CHANGE: ...
+#
+# Full rules: docs/conventions.md
