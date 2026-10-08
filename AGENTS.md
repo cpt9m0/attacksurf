@@ -49,6 +49,7 @@ pre-commit hook and in CI).
 uv sync                                  # install (never pip install)
 cp .env.example .env                     # local config (all settings: src/attacksurf/config.py)
 make up / make down / make test          # Docker Compose dev stack (web, postgres, redis); `make` lists all
+make migrate                             # alembic upgrade head (in compose); new migration: make revision id=0002 m="..."
 uv add <pkg> / uv add --dev <pkg>        # add deps (never edit lockfile by hand)
 uv run flask --app attacksurf run --debug
 uv run pytest                            # tests + coverage (fails under 80%)
@@ -76,8 +77,9 @@ sync" rule below is satisfied**. Do not claim done without running them.
    return. Business logic lives in `services/`.
 3. **Never run scans or LLM calls inside a web request.** Enqueue a Celery task, return a job ID,
    poll with HTMX.
-4. **Every tenant-owned row has `org_id`**, and every query is scoped by it. No cross-org reads,
-   ever. Each new endpoint gets a tenant-isolation test.
+4. **Every tenant-owned row has `org_id`** (model inherits `TenantScoped`), and every query is
+   scoped by it via `infra/db/tenancy` (`scoped()`, `get_scoped()`). No cross-org reads, ever.
+   Each new endpoint gets a tenant-isolation test.
 5. **Scanners are plugins** (`@register_scanner`) that return normalized pydantic output. They
    never write to the DB directly; the pipeline persists.
 6. **All outbound network traffic from scanners goes through `infra/scope_guard` + the safe HTTP
@@ -111,6 +113,8 @@ sync" rule below is satisfied**. Do not claim done without running them.
 - Build settings with `tests.helpers.make_settings(...)`: it ignores `.env` **and** OS env, so
   tests are hermetic. Tests of env loading use `settings_from_env()` with the `clean_env`
   fixture. Use the `app` / `client` fixtures from `tests/conftest.py`.
+- DB tests go in `tests/integration/` and use `db_session` (rolled back per test); they need
+  `TEST_DATABASE_URL` (a `*_test` database; `make test` sets it). Real Postgres, never SQLite.
 - **No live network in tests.** Mock DNS/HTTP/LLM with fixtures (recorded responses in
   `tests/fixtures/`). LLM tests use a fake provider.
 - Coverage gate: 80% minimum (configured in `pyproject.toml`). Don't game it: test behavior,

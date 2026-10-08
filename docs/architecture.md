@@ -56,6 +56,20 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 - `import attacksurf.domain` (or any inner layer) never loads Flask: the package re-exports
   `create_app` lazily.
 
+## Database
+
+- SQLAlchemy 2.0 + Alembic, no Flask extensions (ADR 0008). Code in `infra/db/`: `base.py`
+  (declarative `Base`, constraint naming convention, mixins), `models.py`, `session.py`
+  (engine + session factory from `Settings`), `tenancy.py`, `migrations/`.
+- Mixins: `UUIDPrimaryKey` (UUIDv7, `domain/ids.py`), `Timestamps` (`created_at`, `updated_at`,
+  DB-side `now()`), `TenantScoped` (UUID key + `org_id` → `orgs.id`, NOT NULL, indexed,
+  `ON DELETE CASCADE`).
+- Tenant rows are read only via `scoped(Model, org_id)` (a `Select` with the org filter) or
+  `get_scoped(session, Model, id, org_id)` (returns `None` for another org's row).
+- Sessions: one per request in `web` (`web.db.get_session()`, closed at teardown); Celery
+  tasks use `with factory.begin() as session:`. Services commit.
+- import-linter: `web` (except `web/db.py`), `scanners`, `ai` never import SQLAlchemy/Alembic.
+
 ## Core model
 
 | Entity | Purpose |
