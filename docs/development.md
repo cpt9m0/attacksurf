@@ -28,8 +28,31 @@ uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 | `worker-passive`, `worker-ai`, `beat` | n/a | placeholders until #10; start with `docker compose --profile workers up` |
 
 Inside compose, `DATABASE_URL` / `REDIS_URL` point at the service names; your `.env` supplies the
-rest. Targets: `make up | down | logs | ps | build | shell | test | check | migrate`
+rest. Targets: `make up | down | logs | ps | build | shell | test | check | migrate | revision`
 (`make` lists them). `make down` keeps the database; `docker compose down -v` wipes it.
+
+## Database and migrations
+
+| Task | Command |
+|---|---|
+| Apply migrations | `make migrate` (in compose) or `uv run alembic upgrade head` (uses `DATABASE_URL`) |
+| New migration from model changes | `make revision id=0002 m="add assets"` (then review it, see the `db-migration` skill) |
+| Current revision / history | `uv run alembic current` / `uv run alembic history` |
+
+The app never migrates on startup. Migrations live in `src/attacksurf/infra/db/migrations/`.
+
+**DB tests** (`tests/integration/`) need PostgreSQL via `TEST_DATABASE_URL`; the database name
+must end in `_test` because its schema is wiped at the start of the run. Without it they are
+skipped locally (and fail in CI). `make test` sets it to compose's `attacksurf_test` database,
+which is created when the `pgdata` volume is first initialized (older volume: `docker compose
+down -v` once, or `docker compose exec postgres createdb -U attacksurf attacksurf_test`). Outside
+compose, with `make up` running:
+
+```bash
+TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@localhost:5432/attacksurf_test uv run pytest
+```
+
+Each DB test runs in a transaction that is rolled back (fixture `db_session`).
 
 ## Configuration
 
@@ -72,7 +95,7 @@ AGENTS.md         rules for AI coding agents (CLAUDE.md imports it)
 | `git commit` | trailing whitespace/EOF/line endings, YAML/TOML/JSON syntax, merge markers, large files, private keys, **gitleaks** (secrets), **ruff** check + format, **import-linter** (layer rules) |
 | commit message | Conventional Commits check (`.github/scripts/check-commit-msg.sh`, same rules as PR titles) |
 | `git push` | **pyright**, **pytest** (80% coverage gate) |
-| CI on push to `main` / every PR | `lint` (pre-commit hooks + pyright), `test (3.12)`, `test (3.13)`, `secrets` (gitleaks over full git history), `compose` (builds the prod image, checks it runs as non-root, starts the dev stack, curls `/healthz`), `pr-title` (also re-runs on title edits) |
+| CI on push to `main` / every PR | `lint` (pre-commit hooks + pyright), `test (3.12)`, `test (3.13)` (with a Postgres service), `secrets` (gitleaks over full git history), `compose` (builds the prod image, checks it runs as non-root, starts the dev stack, curls `/healthz`, runs migrations), `pr-title` (also re-runs on title edits) |
 
 Remote hooks and GitHub Actions are pinned to commit SHAs; Dependabot proposes updates. ruff,
 pyright and pytest versions come from `uv.lock`.
@@ -81,7 +104,8 @@ pyright and pytest versions come from `uv.lock`.
 
 - Coverage must stay **≥ 80%** (`--cov-fail-under=80` in `pyproject.toml`; CI enforces it).
 - No live network in tests: use fixtures under `tests/fixtures/` and fake providers.
-- Layout: `tests/unit/`, `tests/integration/` (DB, Celery), `tests/e2e/` (Playwright).
+- Layout: `tests/unit/`, `tests/integration/` (DB, Celery; fixtures `db_engine`, `db_session`),
+  `tests/e2e/` (Playwright).
 
 ## Working with AI agents
 

@@ -2,26 +2,27 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-10-08 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #3 (Docker Compose dev stack)
+**Updated:** 2026-10-08 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #4 (DB foundation)
 
 ## Status
-#3 implemented; PR open, waiting for CI (incl. new `compose` job) + review, then squash-merge.
-#2 is merged (PR #36).
+#4 implemented; PR open, waiting for CI + review, then squash-merge. #1–#3 merged.
 
 ## Last task
-- `Dockerfile`: `dev` target (dev deps, Flask debug, hot reload via bind mount) and `prod`
-  target (no dev deps, gunicorn, uid 10001); base image pinned by digest; uv 0.11.32 from PyPI
-- `compose.yaml`: `web` (127.0.0.1:5000), `postgres:16` (volume `pgdata`), `redis:7`, all
-  healthchecked; `worker-passive`/`worker-ai`/`beat` placeholders behind profile `workers`
-- `Makefile` (`up/down/logs/ps/build/shell/test/check/migrate`), `.dockerignore`
-- CI `compose` job (prod image non-root check, `compose up --wait`, curl `/healthz`);
-  Dependabot watches `docker` + `docker-compose`
-- Verified locally with a real Docker daemon: stack healthy, `/healthz` 200, hot reload, 39 tests
-  pass in-container, prod image runs as uid 10001 and fails fast without a strong `SECRET_KEY`
+- `infra/db/`: `Base` (naming convention), mixins `UUIDPrimaryKey` (UUIDv7 from `domain/ids.py`),
+  `Timestamps`, `TenantScoped` (`org_id` FK → `orgs.id`), `models.Org` (id, name, timestamps),
+  `session.py` (engine/sessionmaker from Settings), `tenancy.py` (`scoped`, `get_scoped`)
+- `web/db.py`: per-request session (`get_session()`, closed at teardown), wired in `create_app`
+- Alembic: root `alembic.ini`, migrations in `attacksurf.infra.db:migrations`, `0001_create_orgs`;
+  `make migrate`, `make revision id=0002 m="..."`
+- Tests: `tests/integration/` (`db_engine`, `db_session` rollback fixtures; tenant isolation,
+  `alembic check`, down/up round trip, CLI); skip locally without `TEST_DATABASE_URL`, fail in CI
+- CI: Postgres service in `test` jobs; compose job runs migrations. ADR 0008.
+- import-linter: `web` (except `web/db.py`), `scanners`, `ai` can't import SQLAlchemy/Alembic
+- Verified locally: 62 tests, 100% coverage on host + in compose (`make test`), `make migrate`
 
 ## Next step
-After #3 merges: implement #4 (DB foundation: SQLAlchemy 2.0, Alembic, base mixins with `org_id`).
-Postgres runs in compose; `make migrate` is a placeholder until then. Use the `db-migration` skill.
+After #4 merges: #5 (Org/User/Membership/AuditLog). Extend `Org` (slug, plan) via migration
+`0002`; use the `db-migration` skill.
 
 ## Open threads
 - Optional (user): ruleset on `main` requiring PRs + checks `lint`, `test (3.12)`,

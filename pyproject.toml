@@ -35,9 +35,12 @@ classifiers = [
     "Topic :: Internet :: Name Service (DNS)",
 ]
 dependencies = [
+    "alembic>=1.20.0",
     "flask>=3.1.3",
     "gunicorn>=26.2.0",
+    "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.15.0",
+    "sqlalchemy>=2.1.4",
     "structlog>=26.1.0",
 ]
 
@@ -126,3 +129,16 @@ source_modules = [
     "attacksurf.ai",
 ]
 forbidden_modules = ["attacksurf.web", "attacksurf.workers"]
+
+[[tool.importlinter.contracts]]
+name = "database access stays in infra/services (web only via web.db)"
+type = "forbidden"
+source_modules = [
+    "attacksurf.web",
+    "attacksurf.scanners",
+    "attacksurf.ai",
+]
+forbidden_modules = ["sqlalchemy", "alembic"]
+ignore_imports = ["attacksurf.web.db -> sqlalchemy"]
+# Indirect use through infra is the point; only direct imports are restricted.
+allow_indirect_imports = true

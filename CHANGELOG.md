@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Database foundation: SQLAlchemy 2.0 base with constraint naming convention, UUIDv7 primary
+  keys, `Timestamps` and `TenantScoped` (`org_id`) mixins, tenant-scoped query helpers,
+  per-request sessions, Alembic migrations (`make migrate`, `make revision`), minimal `orgs`
+  table; DB tests against PostgreSQL in CI and `make test`
 - Docker: multi-stage `Dockerfile` (`dev` with hot reload, `prod` with gunicorn as non-root),
   `compose.yaml` dev stack (web, PostgreSQL 16, Redis 7, worker/beat placeholders), `Makefile`,
   CI `compose` smoke test

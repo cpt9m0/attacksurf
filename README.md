@@ -68,6 +68,7 @@ git clone https://github.com/cpt9m0/attacksurf.git
 cd attacksurf
 cp .env.example .env
 make up        # = docker compose up -d --build --wait  →  http://127.0.0.1:5000/healthz
+make migrate   # create/upgrade the database schema
 make logs      # follow logs; `make` lists all targets; `make down` to stop
 ```
 
