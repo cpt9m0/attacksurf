@@ -65,7 +65,8 @@ Codebase scanning (secrets, SAST, vulnerable dependencies) · Binary analysis
 git clone https://github.com/cpt9m0/attacksurf.git
 cd attacksurf
 uv sync
-uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
+cp .env.example .env
+uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000  (health: /healthz)
 ```
 
 Contributors: also run `uv run pre-commit install` (see [CONTRIBUTING.md](CONTRIBUTING.md)).

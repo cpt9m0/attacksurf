@@ -25,30 +25,37 @@ LLM providers (official SDKs, no LiteLLM) · Docker Compose on a single VPS.
 
 ```
 src/attacksurf/   application code (src layout, import name `attacksurf`)
+  app.py          create_app() factory (re-exported from attacksurf/__init__.py)
+  config.py       Settings (pydantic-settings) + get_settings(); the only place env is read
   web/            Flask blueprints: ui (HTMX pages) + api/v1 (JSON); templates/, static/
   services/       use cases: one class/function per action (AddRootDomain, StartScan, ...)
   domain/         entities, enums, value objects, events. NO Flask/SQLAlchemy/SDK imports
   scanners/       scanner plugins grouped by target type (dns/, ip/, web/, code/, binary/)
   ai/             providers/, prompts/ (versioned templates), triage, summaries
-  infra/          db, queue (Celery), storage, scope_guard, http client, crypto
+  infra/          logging (structlog + request IDs), db, queue (Celery), storage, scope_guard,
+                  http client, crypto
   workers/        Celery task entrypoints (thin, call services)
 tests/            pytest; mirrors src/attacksurf/ structure (unit/, integration/, e2e/)
 docs/             architecture, ADRs, development, security, conventions
 ```
 
-Some of these packages don't exist yet; create them when an issue needs them, following this map.
+All layer packages exist; add modules inside them as issues need them. Layer rules are
+machine-checked by import-linter (contracts in `pyproject.toml`, run `uv run lint-imports`, also a
+pre-commit hook and in CI).
 
 ## Commands
 
 ```bash
 uv sync                                  # install (never pip install)
+cp .env.example .env                     # local config (all settings: src/attacksurf/config.py)
 uv add <pkg> / uv add --dev <pkg>        # add deps (never edit lockfile by hand)
 uv run flask --app attacksurf run --debug
 uv run pytest                            # tests + coverage (fails under 80%)
 uv run ruff check --fix . && uv run ruff format .
 uv run pyright
 uv run pre-commit install                # once: git hooks (pre-commit, commit-msg, pre-push)
-uv run pre-commit run --all-files        # all hooks: ruff, hygiene, gitleaks
+uv run pre-commit run --all-files        # all hooks: ruff, import-linter, hygiene, gitleaks
+uv run lint-imports                      # layer rules only
 ```
 
 Git hooks run ruff + gitleaks on commit, check the commit message, and run pyright + pytest on
@@ -85,7 +92,8 @@ sync" rule below is satisfied**. Do not claim done without running them.
 - Small, pure functions; explicit over clever. No speculative abstractions: build what the
   current issue needs.
 - Names: services are verbs (`start_scan`), rule IDs are dotted (`dns.email.dmarc_missing`).
-- Config only via `Settings` (pydantic-settings), never `os.environ` scattered around.
+- Config only via `Settings` (`attacksurf.config`), never `os.environ`. New setting = field +
+  `.env.example` entry + test. Secrets are `SecretStr`.
 - Logging via structlog with context (org_id, scan_id, job_id). Never log secrets, tokens,
   API keys, or full scan evidence.
 - Errors: raise domain-specific exceptions in services; map them to HTTP responses in `web/`.
@@ -95,6 +103,8 @@ sync" rule below is satisfied**. Do not claim done without running them.
 ## Testing
 
 - pytest, Arrange/Act/Assert, one behavior per test, descriptive names (`test_<unit>_<behavior>`).
+- Build settings with `tests.helpers.make_settings(...)` (ignores any local `.env`); use the
+  `app` / `client` fixtures from `tests/conftest.py`.
 - **No live network in tests.** Mock DNS/HTTP/LLM with fixtures (recorded responses in
   `tests/fixtures/`). LLM tests use a fake provider.
 - Coverage gate: 80% minimum (configured in `pyproject.toml`). Don't game it: test behavior,

@@ -20,7 +20,8 @@ their security data. Both make it a target. These rules apply to all code.
 | XSS from scan data (TXT records, HTML, banners) | Jinja autoescape, never `|safe` on scan data, strict CSP without inline scripts |
 | CSRF | Flask-WTF tokens on all forms and HTMX requests |
 | Prompt injection via scan data | scan data is delimited and size-capped in prompts, output is schema-validated, AI cannot take actions |
-| Secret leakage | env vars; org API keys encrypted at rest (Fernet/MultiFernet); log redaction; keys never rendered back in full |
+| Secret leakage | env vars typed as `SecretStr` (masked in repr); `ENV=prod` refuses to start without `SECRET_KEY`; org API keys encrypted at rest (Fernet/MultiFernet); structlog redacts secret-looking keys; keys never rendered back in full |
+| Log injection | client `X-Request-ID` accepted only if it matches `[A-Za-z0-9-]{1,64}`, otherwise replaced; structured (JSON) logs |
 | Malicious uploads *(later)* | never executed; analysis in gVisor sandboxes without network |
 | Account attacks | argon2 hashing, login rate limiting, secure session cookies, audit log |
 | Supply chain | locked deps (`uv.lock`), `pip-audit` in CI, pinned MCP server versions, minimal dependencies |

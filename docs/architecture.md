@@ -39,6 +39,18 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
   thin entry points.
 - Pragmatism over purity: SQLAlchemy models live in `infra/db`; the Repository pattern is only
   added where it simplifies testing.
+- **Enforced**: import-linter contracts in `pyproject.toml` fail the build if `domain` imports
+  another layer (or Flask/SQLAlchemy/structlog), or if any inner layer imports `web`/`workers`.
+
+## App, config, logging
+
+- `create_app(settings=None)` (`app.py`) builds the Flask app from a `Settings` object and
+  registers blueprints: `ui` (`/`), `health` (`/healthz`, liveness only), `api_v1` (`/api/v1`).
+- `Settings` (`config.py`, pydantic-settings) reads env vars and `.env`. `ENV=prod` requires
+  `SECRET_KEY`; dev/test fall back to an ephemeral key with a warning. Secrets are `SecretStr`.
+- Logging (`infra/logging.py`): structlog, JSON in prod, console in dev/test; every log line
+  carries the request's `request_id` (from a valid `X-Request-ID` header or generated, echoed
+  back in the response); keys that look like secrets are redacted.
 
 ## Core model
 
