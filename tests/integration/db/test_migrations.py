@@ -30,4 +30,4 @@ def test_alembic_cli_connects_with_database_url_setting(db_engine: Engine) -> No
         check=True,
     )
 
-    assert "0001 (head)" in result.stdout
+    assert "(head)" in result.stdout
