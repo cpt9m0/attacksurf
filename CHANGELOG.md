@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Accounts: `users`, `memberships` (roles owner/admin/member), `audit_log` tables and org
+  `slug`/`plan` (migration `0002`); `register_user` service (user + personal org + owner
+  membership + audit entry in one transaction); argon2id password hashing; `audit()` helper
 - Database foundation: SQLAlchemy 2.0 base with constraint naming convention, UUIDv7 primary
   keys, `Timestamps` and `TenantScoped` (`org_id`) mixins, tenant-scoped query helpers,
   per-request sessions, Alembic migrations (`make migrate`, `make revision`), minimal `orgs`
