@@ -160,4 +160,8 @@ The `pre-pr-check` and `finish-task` skills pass (checks green, coverage ≥ 80%
 - At least one approving review (a human for security-relevant or architectural changes).
 - All CI checks green, all conversations resolved.
 - Squash and merge; delete the branch.
+- **Dependabot PRs**: `.github/dependabot.yml` sets the type prefix (`build(deps)` for Python,
+  `ci(deps)` for Actions); `pr-title` only checks that prefix for them, since Dependabot writes
+  "Bump …"/"Update …" subjects. When merging, retitle to a lowercase subject ≤ 72 chars
+  (e.g. `build(deps): bump the python-deps group`).
 - Reviewers: comment on code, not people; prefix optional suggestions with `nit:`.

@@ -16,5 +16,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 - Issue/commit/PR conventions (`docs/conventions.md`), task and epic issue forms, label
   definitions, commit message template, `create-issue` skill
 - Label sync workflow from `.github/labels.yml`
+- Dependabot commit prefixes (`build(deps)`, `ci(deps)`); `pr-title` checks only the prefix on
+  Dependabot PRs
 - Git hooks via pre-commit (ruff, hygiene checks, gitleaks, Conventional Commits message check,
   pyright + pytest on push) and GitHub Actions CI (lint, tests on Python 3.12/3.13, PR-title check)

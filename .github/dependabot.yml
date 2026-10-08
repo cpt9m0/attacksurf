@@ -1,9 +1,14 @@
 version: 2
 updates:
+  # Prefixes make Dependabot PR titles start with a Conventional Commit type
+  # (docs/conventions.md); `pr-title` checks only that prefix for Dependabot PRs.
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: build
+      include: scope
     groups:
       python-deps:
         patterns: ["*"]
@@ -11,3 +16,6 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: ci
+      include: scope
