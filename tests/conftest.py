@@ -9,6 +9,14 @@ from tests.helpers import make_settings
 
 
 @pytest.fixture
+def clean_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    """Unset every variable Settings reads, for tests that exercise env loading."""
+    for name in Settings.model_fields:
+        monkeypatch.delenv(name.upper(), raising=False)
+    return monkeypatch
+
+
+@pytest.fixture
 def settings() -> Settings:
     return make_settings(env="test", secret_key=SecretStr("test-secret-key"))
 

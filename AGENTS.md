@@ -93,7 +93,10 @@ sync" rule below is satisfied**. Do not claim done without running them.
   current issue needs.
 - Names: services are verbs (`start_scan`), rule IDs are dotted (`dns.email.dmarc_missing`).
 - Config only via `Settings` (`attacksurf.config`), never `os.environ`. New setting = field +
-  `.env.example` entry + test. Secrets are `SecretStr`.
+  `.env.example` entry + test. Secrets (incl. URLs that can embed passwords) are `SecretStr`;
+  call `.get_secret_value()` only where the value is used (e.g. opening a connection).
+- `attacksurf/__init__.py` re-exports `create_app` lazily; keep it that way so importing an inner
+  layer never loads Flask (a test enforces it).
 - Logging via structlog with context (org_id, scan_id, job_id). Never log secrets, tokens,
   API keys, or full scan evidence.
 - Errors: raise domain-specific exceptions in services; map them to HTTP responses in `web/`.
@@ -103,8 +106,9 @@ sync" rule below is satisfied**. Do not claim done without running them.
 ## Testing
 
 - pytest, Arrange/Act/Assert, one behavior per test, descriptive names (`test_<unit>_<behavior>`).
-- Build settings with `tests.helpers.make_settings(...)` (ignores any local `.env`); use the
-  `app` / `client` fixtures from `tests/conftest.py`.
+- Build settings with `tests.helpers.make_settings(...)`: it ignores `.env` **and** OS env, so
+  tests are hermetic. Tests of env loading use `settings_from_env()` with the `clean_env`
+  fixture. Use the `app` / `client` fixtures from `tests/conftest.py`.
 - **No live network in tests.** Mock DNS/HTTP/LLM with fixtures (recorded responses in
   `tests/fixtures/`). LLM tests use a fake provider.
 - Coverage gate: 80% minimum (configured in `pyproject.toml`). Don't game it: test behavior,

@@ -32,23 +32,41 @@ def redact_secrets(
 
 
 def configure_logging(settings: Settings) -> None:
+    """Route structlog *and* stdlib logging (Flask, Werkzeug, libraries) through one pipeline,
+    so every line is JSON in prod and carries the request ID."""
     level = logging.getLevelNamesMapping().get(settings.log_level.upper(), logging.INFO)
-    logging.basicConfig(format="%(message)s", stream=sys.stdout, level=level, force=True)
-
-    renderer: structlog.typing.Processor = (
-        structlog.processors.JSONRenderer() if settings.is_prod else structlog.dev.ConsoleRenderer()
+    shared: list[structlog.typing.Processor] = [
+        structlog.contextvars.merge_contextvars,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso", utc=True),
+        redact_secrets,
+    ]
+    render: list[structlog.typing.Processor] = (
+        [structlog.processors.format_exc_info, structlog.processors.JSONRenderer()]
+        if settings.is_prod
+        else [structlog.dev.ConsoleRenderer()]
     )
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(
+        structlog.stdlib.ProcessorFormatter(
+            foreign_pre_chain=shared,
+            processors=[structlog.stdlib.ProcessorFormatter.remove_processors_meta, *render],
+        )
+    )
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(level)
+
     structlog.configure(
         processors=[
-            structlog.contextvars.merge_contextvars,
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso", utc=True),
-            redact_secrets,
-            structlog.processors.format_exc_info,
-            renderer,
+            structlog.stdlib.filter_by_level,
+            *shared,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
-        wrapper_class=structlog.make_filtering_bound_logger(level),
-        logger_factory=structlog.PrintLoggerFactory(file=sys.stdout),
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=False,
     )
 

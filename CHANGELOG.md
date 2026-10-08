@@ -8,8 +8,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ### Added
 - Layered package layout (`web`, `services`, `domain`, `scanners`, `ai`, `infra`, `workers`) with
   import-linter contracts; app factory with `ui`, `health` (`/healthz`) and `api_v1` blueprints
-- Typed settings (pydantic-settings, `.env.example`) and structured logging (structlog) with
-  request IDs and secret redaction
+- Typed settings (pydantic-settings, `.env.example`; prod requires a strong `SECRET_KEY`) and
+  structured logging (structlog, incl. stdlib/library logs) with request IDs and secret redaction
 - Project skeleton: Flask app factory, src layout, uv, ruff, pyright, pytest with 80% coverage gate
 - Architecture docs, ADRs, security model
 - AI-agent setup: AGENTS.md, CLAUDE.md, Claude Code skills, hooks, MCP servers

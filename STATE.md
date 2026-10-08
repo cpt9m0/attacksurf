@@ -11,8 +11,12 @@
 - Layer packages created (`web`, `services`, `domain`, `scanners`, `ai`, `infra`, `workers`);
   templates/static moved to `web/`
 - `create_app(settings=None)` in `app.py`; blueprints `ui` (`/`), `health` (`/healthz`), `api_v1`
-- `Settings` in `config.py` (pydantic-settings, `.env.example`); prod requires `SECRET_KEY`
-- structlog in `infra/logging.py`: JSON in prod, request IDs (validated `X-Request-ID`), redaction
+- `Settings` in `config.py` (pydantic-settings, `.env.example`); prod requires a strong
+  `SECRET_KEY`; DB/Redis URLs are `SecretStr`
+- structlog in `infra/logging.py`: stdlib + structlog in one pipeline, JSON in prod, request IDs
+  (validated `X-Request-ID`), redaction
+- Codex review fixes: weak prod keys rejected, URL secrets masked, lazy `create_app` re-export,
+  library logs structured, `make_settings()` ignores OS env
 - import-linter contracts in `pyproject.toml` + pre-commit hook (runs in CI `lint`)
 - Also merged earlier: #33 (`uv_build` <0.13), #35 (Dependabot title prefixes)
 
@@ -32,7 +36,8 @@ Compose services should use the `DATABASE_URL` / `REDIS_URL` defaults in `config
 ## Notes for the next agent
 - Repo: default branch `main`, squash-merge only (PR title = commit subject), head branches
   auto-deleted
-- Tests: build settings with `tests.helpers.make_settings(...)` (ignores local `.env`)
+- Tests: `tests.helpers.make_settings(...)` ignores `.env` and OS env; env-loading tests use
+  `settings_from_env()` + `clean_env` fixture
 - `flask --app attacksurf` still works (`create_app` re-exported from `__init__.py`)
 - First `pre-commit` run downloads hook envs (gitleaks builds with Go): takes a minute
 - `jq` is needed by the Claude Code hooks (they no-op without it)

@@ -19,7 +19,8 @@ uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 ## Configuration
 
 All settings live in `src/attacksurf/config.py` and are read from environment variables or `.env`
-(see `.env.example`). `ENV=prod` refuses to start without `SECRET_KEY`. Never commit `.env`.
+(see `.env.example`). Leave `SECRET_KEY` empty in dev (an ephemeral key is generated);
+`ENV=prod` refuses to start without a random `SECRET_KEY` of ≥ 32 characters. Never commit `.env`.
 
 ## Everyday commands
 

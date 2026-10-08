@@ -13,7 +13,7 @@ from attacksurf.infra.logging import (
     redact_secrets,
     resolve_request_id,
 )
-from tests.helpers import make_settings
+from tests.helpers import PROD_SECRET_KEY, make_settings
 
 
 def test_request_id_is_generated_and_echoed(client: FlaskClient) -> None:
@@ -67,7 +67,7 @@ def test_redact_secrets_masks_sensitive_keys() -> None:
 
 
 def test_request_is_logged_as_json_in_prod(capsys: pytest.CaptureFixture[str]) -> None:
-    configure_logging(make_settings(env="prod", secret_key=SecretStr("k")))
+    configure_logging(make_settings(env="prod", secret_key=SecretStr(PROD_SECRET_KEY)))
     structlog.contextvars.bind_contextvars(request_id="rid-1")
 
     try:
@@ -84,7 +84,9 @@ def test_request_is_logged_as_json_in_prod(capsys: pytest.CaptureFixture[str]) -
 
 
 def test_log_level_filters_lower_levels(capsys: pytest.CaptureFixture[str]) -> None:
-    configure_logging(make_settings(env="prod", secret_key=SecretStr("k"), log_level="warning"))
+    configure_logging(
+        make_settings(env="prod", secret_key=SecretStr(PROD_SECRET_KEY), log_level="warning")
+    )
 
     structlog.get_logger("t").info("hidden")
     structlog.get_logger("t").warning("shown")
@@ -95,12 +97,44 @@ def test_log_level_filters_lower_levels(capsys: pytest.CaptureFixture[str]) -> N
     assert logging.getLogger().level == logging.WARNING
 
 
-def test_request_log_line_contains_request_fields(
-    client: FlaskClient, capsys: pytest.CaptureFixture[str]
+def test_each_request_is_logged_with_its_fields(
+    client: FlaskClient, caplog: pytest.LogCaptureFixture
 ) -> None:
-    client.get("/healthz", headers={REQUEST_ID_HEADER: "req-42"})
+    with caplog.at_level(logging.INFO):
+        client.get("/healthz", headers={REQUEST_ID_HEADER: "req-42"})
 
-    out = capsys.readouterr().out
-    assert "request" in out
-    assert "req-42" in out
-    assert "/healthz" in out
+    events = [r.msg for r in caplog.records if isinstance(r.msg, dict)]
+    request_event = next(e for e in events if e.get("event") == "request")
+    assert request_event["request_id"] == "req-42"
+    assert request_event["path"] == "/healthz"
+    assert request_event["status"] == 200
+    assert request_event["method"] == "GET"
+
+
+def test_stdlib_logs_are_json_with_request_id_in_prod(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging(make_settings(env="prod", secret_key=SecretStr(PROD_SECRET_KEY)))
+    structlog.contextvars.bind_contextvars(request_id="rid-std")
+
+    try:
+        logging.getLogger("werkzeug").warning("library message password=%s", "x")
+    finally:
+        structlog.contextvars.clear_contextvars()
+
+    line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert line["event"] == "library message password=x"
+    assert line["request_id"] == "rid-std"
+    assert line["logger"] == "werkzeug"
+    assert line["level"] == "warning"
+
+
+def test_exceptions_are_serialized_in_prod_json(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging(make_settings(env="prod", secret_key=SecretStr(PROD_SECRET_KEY)))
+
+    try:
+        raise ValueError("boom")
+    except ValueError:
+        structlog.get_logger("t").exception("failed")
+
+    line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert line["event"] == "failed"
+    assert "ValueError: boom" in line["exception"]
