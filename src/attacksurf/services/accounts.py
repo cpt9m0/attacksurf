@@ -22,6 +22,8 @@ from attacksurf.services.audit import audit
 log = structlog.get_logger(__name__)
 
 _EMAIL_UNIQUE_CONSTRAINT = "uq_users_email"
+_SLUG_UNIQUE_CONSTRAINT = "uq_orgs_slug"
+_SLUG_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -47,33 +49,46 @@ def register_user(
     if session.scalar(select(User.id).where(User.email == email)) is not None:
         raise EmailAlreadyRegistered("This email is already registered.")
 
-    try:
-        user = User(email=email, password_hash=hasher.hash(password))
-        org = Org(name=name, slug=_unique_slug(session, slugify(name)))
-        session.add_all([user, org])
-        session.flush()
-        session.add(Membership(org_id=org.id, user_id=user.id, role=Role.OWNER))
-        audit(
-            session,
-            org.id,
-            "user.registered",
-            actor_id=user.id,
-            target_type="user",
-            target_id=str(user.id),
-        )
-        session.commit()
-    except IntegrityError as exc:
-        session.rollback()
-        # A concurrent signup with the same email passed the check above.
-        if _violated_constraint(exc) == _EMAIL_UNIQUE_CONSTRAINT:
-            raise EmailAlreadyRegistered("This email is already registered.") from None
-        raise
-    except Exception:
-        session.rollback()
-        raise
+    password_hash = hasher.hash(password)  # once: argon2 is deliberately slow
+    for attempt in range(1, _SLUG_ATTEMPTS + 1):
+        try:
+            user, org = _create_account(session, email, password_hash, name)
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            constraint = _violated_constraint(exc)
+            # A concurrent signup with the same email passed the check above.
+            if constraint == _EMAIL_UNIQUE_CONSTRAINT:
+                raise EmailAlreadyRegistered("This email is already registered.") from None
+            # A concurrent signup took the slug we picked: pick again (it is now visible).
+            if constraint == _SLUG_UNIQUE_CONSTRAINT and attempt < _SLUG_ATTEMPTS:
+                continue
+            raise
+        except Exception:
+            session.rollback()
+            raise
+        log.info("user registered", user_id=str(user.id), org_id=str(org.id))
+        return Registration(user=user, org=org)
+    raise AssertionError("unreachable: the last attempt returns or raises")  # pragma: no cover
 
-    log.info("user registered", user_id=str(user.id), org_id=str(org.id))
-    return Registration(user=user, org=org)
+
+def _create_account(
+    session: Session, email: str, password_hash: str, org_name: str
+) -> tuple[User, Org]:
+    user = User(email=email, password_hash=password_hash)
+    org = Org(name=org_name, slug=_unique_slug(session, slugify(org_name)))
+    session.add_all([user, org])
+    session.flush()
+    session.add(Membership(org_id=org.id, user_id=user.id, role=Role.OWNER))
+    audit(
+        session,
+        org.id,
+        "user.registered",
+        actor_id=user.id,
+        target_type="user",
+        target_id=str(user.id),
+    )
+    return user, org
 
 
 def _unique_slug(session: Session, base: str) -> str:

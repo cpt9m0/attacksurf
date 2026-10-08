@@ -117,11 +117,28 @@ def test_register_user_is_atomic_when_a_step_fails(
     )
 
 
-def test_register_user_reraises_other_integrity_errors(
+def test_register_user_retries_when_a_concurrent_signup_takes_the_slug(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     register_user(db_session, FakePasswordHasher(), "a@example.com", PASSWORD, org_name="acme")
-    # A concurrent signup took the slug between the lookup and the insert.
+    real_unique_slug = accounts._unique_slug
+    picks = iter(["acme"])  # first pick is stale: another signup already committed "acme"
+    monkeypatch.setattr(
+        accounts, "_unique_slug", lambda *args: next(picks, None) or real_unique_slug(*args)
+    )
+
+    result = register_user(
+        db_session, FakePasswordHasher(), "b@example.com", PASSWORD, org_name="acme"
+    )
+
+    assert result.org.slug == "acme-2"
+    assert _count(db_session, User) == 2
+
+
+def test_register_user_gives_up_after_repeated_slug_conflicts(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register_user(db_session, FakePasswordHasher(), "a@example.com", PASSWORD, org_name="acme")
     monkeypatch.setattr(accounts, "_unique_slug", lambda *_a: "acme")
 
     with pytest.raises(IntegrityError):
