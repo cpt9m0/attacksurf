@@ -1,0 +1,8 @@
+{#- Always rendered so screen readers announce messages added by HTMX swaps. -#}
+{% macro flash_messages() -%}
+<div class="flash-region" role="status" aria-live="polite">
+  {%- for category, message in get_flashed_messages(with_categories=true) %}
+  <div class="flash flash-{{ category if category in ('success', 'error', 'info') else 'info' }}">{{ message }}</div>
+  {%- endfor %}
+</div>
+{%- endmacro %}

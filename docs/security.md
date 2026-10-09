@@ -17,8 +17,11 @@ their security data. Both make it a target. These rules apply to all code.
 |---|---|
 | SSRF via user targets, redirects, custom LLM `base_url` | ScopeGuard blocks private, loopback, link-local (incl. `169.254.169.254`), CGNAT, reserved and IPv6-equivalent ranges; the safe HTTP client pins the resolved IP and re-checks every redirect |
 | Cross-tenant data access | `org_id` on every tenant row, scoped queries, an isolation test per endpoint; Postgres RLS later |
-| XSS from scan data (TXT records, HTML, banners) | Jinja autoescape, never `|safe` on scan data, strict CSP without inline scripts |
-| CSRF | Flask-WTF tokens on all forms and HTMX requests |
+| XSS from scan data (TXT records, HTML, banners) | Jinja autoescape, never `|safe` on scan data; CSP `default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'` (no `unsafe-inline`/`unsafe-eval`; Alpine CSP build; a test rejects inline script/style/handlers in rendered pages) |
+| CSRF | Flask-WTF tokens on all forms and HTMX requests (#7) |
+| Clickjacking, sniffing, downgrade | `X-Frame-Options: DENY` + `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`, HSTS in prod (`web/security.py`) |
+| Tampered front-end dependencies | HTMX/Alpine vendored from verified npm tarballs, pinned by `static/vendor/SHA256SUMS` (checked by a test) |
+| Information leaks in errors | error pages show static text only; 500s show the request ID, details go to logs |
 | Prompt injection via scan data | scan data is delimited and size-capped in prompts, output is schema-validated, AI cannot take actions |
 | Secret leakage / forged sessions | env vars and connection URLs typed as `SecretStr` (masked in repr); `ENV=prod` refuses to start unless `SECRET_KEY` is ≥ 32 chars and not a placeholder such as `change-me`; org API keys encrypted at rest (Fernet/MultiFernet); structlog redacts secret-looking keys; keys never rendered back in full |
 | Log injection | client `X-Request-ID` accepted only if it matches `[A-Za-z0-9-]{1,64}`, otherwise replaced; structured (JSON) logs |

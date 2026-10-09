@@ -1,0 +1,9 @@
+{%- from "components/icon.html" import icon -%}
+{% macro empty_state(title, message, icon_name="inbox") -%}
+<div class="empty-state">
+  {{ icon(icon_name) }}
+  <h2>{{ title }}</h2>
+  <p>{{ message }}</p>
+  {%- if caller %}{{ caller() }}{% endif %}
+</div>
+{%- endmacro %}

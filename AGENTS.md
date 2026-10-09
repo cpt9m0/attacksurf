@@ -89,6 +89,10 @@ sync" rule below is satisfied**. Do not claim done without running them.
    sees normalized findings. All LLM output is schema-validated (pydantic).
 8. **Scan-derived content is untrusted:** escape in templates (never `|safe` on it), and wrap it as
    delimited data in prompts (prompt-injection defense).
+9. **UI under a strict CSP:** no inline `<script>`, `style=`, `on*=` handlers or Alpine inline
+   expressions; JS goes in `static/js/app.js` (`Alpine.data`), styles use `tokens.css` variables.
+   Routes render with `web.rendering.render_page()`; reusable markup is a macro in
+   `templates/components/`.
 
 ## Code conventions
 

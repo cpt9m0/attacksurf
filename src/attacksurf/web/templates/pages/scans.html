@@ -1,0 +1,9 @@
+{% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
+{% from "components/empty_state.html" import empty_state %}
+{% block title %}Scans{% endblock %}
+{% block content %}
+<h1>Scans</h1>
+<div class="card">
+  {{ empty_state("No scans yet", "Scans check your assets for issues. Scan history and live progress will appear here.", icon_name="radar") }}
+</div>
+{% endblock %}

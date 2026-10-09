@@ -1,0 +1,5 @@
+{#- HTMX partial response: what replaces <main id="content">. HTMX updates the title from <title>. -#}
+{%- from "components/flash.html" import flash_messages -%}
+<title>{% block title %}{% endblock %} · attacksurf</title>
+{{ flash_messages() }}
+{% block content %}{% endblock %}

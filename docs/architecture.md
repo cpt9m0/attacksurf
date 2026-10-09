@@ -123,7 +123,13 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 ## Frontend
 
 Server-rendered Jinja templates + HTMX for partial updates (polling for job progress) + Alpine.js
-for small client-side state. A JSON API (`/api/v1`) shares the same services.
+(CSP build) for small client-side state. A JSON API (`/api/v1`) shares the same services.
+
+- `web/rendering.py`: `render_page()` returns a fragment for HTMX requests, the full shell otherwise.
+- `web/security.py`: CSP and other security headers on every response; `web/errors.py`: HTML error
+  pages, JSON errors under `/api/`, unexpected exceptions logged and shown as a 500 with the
+  request ID.
+- Styling and components follow `DESIGN.md` (plain CSS + tokens, Jinja macros).
 
 ## Deployment
 

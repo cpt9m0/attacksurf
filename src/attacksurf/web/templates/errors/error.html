@@ -1,0 +1,13 @@
+{% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<section class="error-page">
+  <p class="code">{{ code }}</p>
+  <h1>{{ title }}</h1>
+  <p>{{ message }}</p>
+  {%- if request_id %}
+  <p class="mono">Request ID: {{ request_id }}</p>
+  {%- endif %}
+  <p><a class="btn btn-secondary" href="{{ url_for('ui.dashboard') }}">Back to dashboard</a></p>
+</section>
+{% endblock %}
