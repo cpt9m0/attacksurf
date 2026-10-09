@@ -2,26 +2,25 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-10-08 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #5 (Org/User/Membership)
+**Updated:** 2026-10-09 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #6 (UI foundation)
 
 ## Status
-#5 implemented; PR open, waiting for CI + review, then squash-merge. #1–#4 merged.
+#6 implemented; PR open, waiting for CI + review, then squash-merge. #1–#5 merged.
 
 ## Last task
-- Migration `0002`: `orgs.slug` (backfilled, unique) + `plan`; `users` (global, email unique
-  lowercase), `memberships` (TenantScoped, role VARCHAR+CHECK, unique org/user), `audit_log`
-  (TenantScoped, `details` JSONB, append-only)
-- `domain/accounts.py`: `Role`, `has_role`, email/password (12–1024)/org-name rules, `slugify`,
-  `PasswordHasher` protocol, `InvalidSignup`, `EmailAlreadyRegistered`
-- `infra/crypto.py`: `Argon2PasswordHasher` (moved here from #7's scope; commented on #7)
-- `services/accounts.py`: `register_user` (one commit; race on email → `EmailAlreadyRegistered`);
-  `services/audit.py`: `audit()` (caller's transaction)
-- Tests: `tests/fakes.py` (`FakePasswordHasher`), unit + integration; 119 tests, 100% coverage
+- Shell `templates/layouts/base.html` (+ `fragment.html` for HTMX), 5 nav pages (empty states),
+  `errors/error.html`; macros in `templates/components/`
+- `static/css/tokens.css` (placeholder tokens, light/dark) + `app.css`; `js/theme.js`, `js/app.js`
+  (`themeToggle`); vendored HTMX 2.0.11 + Alpine CSP 3.17.4 (`vendor/SHA256SUMS`); Lucide sprite
+- `web/rendering.py` (`render_page`, `is_htmx`), `web/security.py` (CSP etc., HSTS prod),
+  `web/errors.py` (HTML/JSON, 500 logs + request ID)
+- Verified in Chromium: no CSP violations, theme toggle persists, HTMX swap, skip link, mobile
+  layout; screenshots in `docs/images/`
 
 ## Next step
-After #5 merges: #6 (UI foundation) needs `DESIGN.md` values (Claude Design) — check with the
-user; otherwise #7 (auth: Flask-Login, login/logout, CSRF, rate limit) builds on `register_user`
-and `Argon2PasswordHasher.verify`.
+After #6 merges: #7 (auth: Flask-Login, signup/login/logout with `register_user` and
+`Argon2PasswordHasher.verify`, CSRF incl. HTMX `hx-headers`, Flask-Limiter, `@require_role`
+using `domain.accounts.has_role`, audit login events). Forms must stay CSP-clean.
 
 ## Open threads
 - Optional (user): ruleset on `main` requiring PRs + checks `lint`, `test (3.12)`,
@@ -29,8 +28,11 @@ and `Argon2PasswordHasher.verify`.
 - #32: GitHub Sponsors / Ko-fi accounts not set up yet (Ko-fi username assumed `cpt9m0`)
 - Repo settings for the user: description, topics, Discussions, Sponsorships,
   private vulnerability reporting, social preview
-- `DESIGN.md` values are `TBD`: to be completed with Claude Design before/during #6
-- context7 MCP blocked by the environment's network proxy (403); brave-search needs `BRAVE_API_KEY`
+- `DESIGN.md` visual values are placeholders in `static/css/tokens.css` (`TODO(DESIGN.md)`):
+  replace via Claude Design (tokens, severity colors, favicon/brand); no template changes needed
+- context7 MCP blocked by the environment's network proxy (403); brave-search needs `BRAVE_API_KEY`;
+  playwright MCP wants Google Chrome (absent): use Python Playwright with
+  `executable_path=/opt/pw-browsers/chromium-1194/chrome-linux/chrome` instead
 
 ## Notes for the next agent
 - Repo: default branch `main`, squash-merge only (PR title = commit subject), head branches

@@ -6,6 +6,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- UI foundation: app shell (top bar, nav for Dashboard/Assets/Scans/Findings/Settings, light/dark
+  theme toggle, AGPL source link), HTMX fragment rendering, Jinja component macros (button,
+  severity badge, status pill, data table, pagination, empty state, flash), design tokens as CSS
+  custom properties (placeholder values), vendored HTMX 2.0.11 + Alpine 3.17.4 (CSP build) with
+  checksums, Lucide icons
+- Security headers (strict CSP, frame/sniffing/referrer/permissions policies, HSTS in prod) and
+  403/404/500 error pages (JSON under `/api/`)
 - Accounts: `users`, `memberships` (roles owner/admin/member), `audit_log` tables and org
   `slug`/`plan` (migration `0002`); `register_user` service (user + personal org + owner
   membership + audit entry in one transaction); argon2id password hashing; `audit()` helper

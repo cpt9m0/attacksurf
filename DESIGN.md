@@ -1,9 +1,10 @@
 # DESIGN.md: attacksurf web UI design system
 
-> **Status: draft skeleton.** Structure and constraints are final; visual values marked `TBD` will
-> be filled in using Claude Design (or another design tool) before/while building the UI
-> foundation (#6). Agents: follow what's defined, don't invent values for `TBD` items. Use
-> neutral defaults and leave a `TODO(DESIGN.md)` comment instead.
+> **Status: foundation built (#6), visual values are placeholders.** Structure, constraints and
+> token *names* are final. Token *values* live in `src/attacksurf/web/static/css/tokens.css` as
+> neutral, contrast-checked placeholders marked `TODO(DESIGN.md)`; the Claude Design pass replaces
+> them there (and in the tables below) without touching templates. Agents: follow what's defined,
+> don't invent new values; use existing tokens.
 
 ## 1. Principles
 
@@ -18,10 +19,15 @@
 
 - Jinja templates + HTMX + Alpine.js (ADR 0002). No SPA framework, no Node build step required
   at runtime.
-- CSS approach: `TBD` (Tailwind standalone CLI or Pico.css + custom properties, decided in #6).
-  Either way, **all values come from the design tokens below as CSS custom properties**.
-- Vendored assets only (no CDNs at runtime); CSP without inline scripts.
-- Icons: `TBD` (e.g. Lucide / Heroicons as inline SVG sprites).
+- CSS approach (decided in #6): **plain CSS + design tokens**, no framework, no build step.
+  `static/css/tokens.css` holds every value; `static/css/app.css` uses only `var(--…)`.
+- Vendored assets only (no CDNs at runtime): HTMX and the **Alpine CSP build** in
+  `static/vendor/` with `SHA256SUMS` (see its README). Strict CSP: no inline `<script>`, `style=`,
+  `on*=` or `eval`. Alpine components are registered in `static/js/app.js` (`Alpine.data`), not
+  written as inline expressions.
+- Icons: Lucide (ISC) as an SVG sprite, `static/icons.svg`; use the `icon(name)` macro
+  (`components/icon.html`), always next to visible text or an `aria-label`.
+- Theme: `static/js/theme.js` sets `data-theme` before first paint (saved choice, else OS).
 
 ## 3. Design tokens
 
@@ -41,11 +47,11 @@ Defined once as CSS custom properties on `:root`, overridden under `[data-theme=
 ### Severity scale (core)
 | Token | Severity | Color | Icon/shape (non-color cue) |
 |---|---|---|---|
-| `--sev-critical` | critical | TBD | TBD |
-| `--sev-high` | high | TBD | TBD |
-| `--sev-medium` | medium | TBD | TBD |
-| `--sev-low` | low | TBD | TBD |
-| `--sev-info` | info | TBD | TBD |
+| `--sev-critical-fg/-bg` | critical | TBD (placeholder: red) | `octagon-alert` |
+| `--sev-high-fg/-bg` | high | TBD (placeholder: orange) | `triangle-alert` |
+| `--sev-medium-fg/-bg` | medium | TBD (placeholder: amber) | `circle-alert` |
+| `--sev-low-fg/-bg` | low | TBD (placeholder: blue) | `circle-arrow-down` |
+| `--sev-info-fg/-bg` | info | TBD (placeholder: slate) | `info` |
 
 All severity colors must reach 4.5:1 contrast for text on their badge background in both themes.
 
@@ -68,11 +74,15 @@ All severity colors must reach 4.5:1 contrast for text on their badge background
 - App shell: top bar (logo, org, user menu, theme toggle) + left nav (Dashboard, Assets, Scans,
   Findings, Settings) + content area. Collapses to a top menu on mobile.
 - Footer: "Source code" link (required by AGPL §13).
-- Max content width: TBD. Data tables may go full width.
+- Max content width: `--content-max-width` (placeholder 72rem). Data tables may go full width.
+- Templates: `layouts/base.html` (shell), `layouts/fragment.html` (HTMX partial), pages in
+  `pages/`, errors in `errors/error.html`.
 
 ## 5. Components
 
 Implemented as Jinja macros in `templates/components/`. Each entry: purpose, variants, states.
+Built in #6: `button`, `severity_badge` + `status_pill` (`badges.html`), `data_table` +
+`pagination` (`table.html`), `empty_state`, `flash_messages`, `icon`. Specs (visuals) stay TBD.
 
 | Component | Notes | Spec |
 |---|---|---|
@@ -91,7 +101,9 @@ Implemented as Jinja macros in `templates/components/`. Each entry: purpose, var
 
 ## 6. Interaction patterns (HTMX)
 
-- Partial responses: if `HX-Request` header is present, return the fragment; otherwise the full page.
+- Partial responses: routes call `web.rendering.render_page()`; pages start with
+  `{% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}`. HTMX requests get
+  the fragment, boosted requests and normal loads the full page (`Vary: HX-Request`).
 - Long-running work: show job progress via polling (`hx-trigger="every 2s"`), stop when done.
 - Forms: inline validation errors; disable the submit button during request.
 - Destructive actions: confirm modal; never one-click delete.
@@ -119,4 +131,4 @@ Implemented as Jinja macros in `templates/components/`. Each entry: purpose, var
 - [ ] Typography and spacing scales
 - [ ] Component specs for the table above
 - [ ] Key screens: dashboard, asset list/detail, scan progress, findings list/detail, settings
-- [ ] Decide CSS approach (#6)
+- [x] Decide CSS approach (#6): plain CSS + tokens
