@@ -1,0 +1,7 @@
+{#- variant: primary | secondary | danger | ghost. HTMX adds .htmx-request while in flight. -#}
+{% macro button(label, variant="primary", type="button", icon_name=none) -%}
+{%- from "components/icon.html" import icon -%}
+<button type="{{ type }}" class="btn btn-{{ variant if variant in ('primary', 'secondary', 'danger', 'ghost') else 'secondary' }}"
+        {{- ' ' ~ kwargs | xmlattr if kwargs }}>
+  {%- if icon_name %}{{ icon(icon_name) }}{% endif %}{{ label }}</button>
+{%- endmacro %}

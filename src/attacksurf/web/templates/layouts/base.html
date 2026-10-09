@@ -1,0 +1,60 @@
+{#- App shell (DESIGN.md §4). No inline <script>, style= or on*= anywhere: the CSP forbids them. -#}
+{%- from "components/icon.html" import icon -%}
+{%- from "components/flash.html" import flash_messages -%}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{% endblock %} · attacksurf</title>
+  <meta name="description" content="attacksurf: open-source, AI-powered attack surface management.">
+  {#- includeIndicatorStyles=false: HTMX would otherwise inject an inline <style> (blocked by CSP). #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false, "allowScriptTags": false}'>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='vendor/alpinejs-csp-3.17.4.min.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='vendor/htmx-2.0.11.min.js') }}" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="{{ url_for('ui.dashboard') }}">{{ icon("shield-check") }} attacksurf</a>
+      <div class="topbar-actions">
+        <button type="button" class="btn btn-ghost theme-toggle" x-data="themeToggle" @click="toggle"
+                aria-label="Toggle dark mode">
+          <span class="icon-sun">{{ icon("sun") }}</span><span class="icon-moon">{{ icon("moon") }}</span>
+        </button>
+        {#- User menu arrives with authentication (#7). #}
+        <span class="user-menu">Not signed in</span>
+      </div>
+    </header>
+
+    <nav class="sidenav" aria-label="Main">
+      <ul>
+        {%- for item in nav_items %}
+        <li>
+          <a href="{{ url_for(item.endpoint) }}"
+             {%- if request.endpoint == item.endpoint %} aria-current="page"{% endif %}>
+            {{ icon(item.icon) }} {{ item.label }}
+          </a>
+        </li>
+        {%- endfor %}
+      </ul>
+    </nav>
+
+    <main class="content" id="content">
+      {{ flash_messages() }}
+      {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+      {#- AGPL-3.0 §13: network users must be offered the source. #}
+      <a href="https://github.com/cpt9m0/attacksurf">Source code</a> (AGPL-3.0)
+    </footer>
+  </div>
+</body>
+</html>

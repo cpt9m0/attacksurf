@@ -1,0 +1,26 @@
+{%- from "components/icon.html" import icon -%}
+
+{#- Severity: color + icon + text (DESIGN.md §1: never color alone). Unknown values render as info. -#}
+{% set _severity_icons = {
+  "critical": "octagon-alert",
+  "high": "triangle-alert",
+  "medium": "circle-alert",
+  "low": "circle-arrow-down",
+  "info": "info",
+} %}
+
+{% macro severity_badge(severity) -%}
+{%- set level = severity if severity in _severity_icons else "info" -%}
+<span class="badge sev-{{ level }}">{{ icon(_severity_icons[level]) }}{{ level | capitalize }}</span>
+{%- endmacro %}
+
+{#- Finding and scan statuses (DESIGN.md §5). -#}
+{% set _status_tones = {
+  "fixed": "good", "completed": "good",
+  "regressed": "bad", "failed": "bad",
+  "queued": "active", "running": "active",
+} %}
+
+{% macro status_pill(status) -%}
+<span class="pill pill-{{ _status_tones.get(status, 'neutral') }}">{{ status | replace("_", " ") }}</span>
+{%- endmacro %}

@@ -1,0 +1,122 @@
+/*
+ * Design tokens (DESIGN.md §3). The ONLY place raw values live; app.css uses var(--…).
+ * TODO(DESIGN.md): neutral, contrast-checked placeholders until the Claude Design pass.
+ * Replace values here; names are the contract.
+ */
+:root {
+  color-scheme: light;
+
+  --color-bg: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-surface-2: #eef0f3;
+  --color-border: #d5d9e0;
+  --color-text: #1b1f27;
+  --color-text-muted: #545b68;
+  --color-primary: #1d4ed8;
+  --color-primary-contrast: #ffffff;
+  --color-success: #166534;
+  --color-warning: #92400e;
+  --color-danger: #b91c1c;
+
+  /* Severity: text (fg) on badge background (bg), ≥ 4.5:1 in both themes. */
+  --sev-critical-fg: #991b1b;
+  --sev-critical-bg: #fee2e2;
+  --sev-high-fg: #9a3412;
+  --sev-high-bg: #ffedd5;
+  --sev-medium-fg: #854d0e;
+  --sev-medium-bg: #fef9c3;
+  --sev-low-fg: #1e40af;
+  --sev-low-bg: #dbeafe;
+  --sev-info-fg: #334155;
+  --sev-info-bg: #f1f5f9;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 6%);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 10%);
+
+  --content-max-width: 72rem;
+  --nav-width: 13rem;
+}
+
+/* Dark: explicit choice, or the OS preference when the user hasn't chosen. */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-bg: #0f1218;
+  --color-surface: #171b23;
+  --color-surface-2: #1f2430;
+  --color-border: #2e3442;
+  --color-text: #e6e8ec;
+  --color-text-muted: #a3aab8;
+  --color-primary: #7aa2ff;
+  --color-primary-contrast: #0b1020;
+  --color-success: #4ade80;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+
+  --sev-critical-fg: #fecaca;
+  --sev-critical-bg: #450a0a;
+  --sev-high-fg: #fed7aa;
+  --sev-high-bg: #431407;
+  --sev-medium-fg: #fef08a;
+  --sev-medium-bg: #422006;
+  --sev-low-fg: #bfdbfe;
+  --sev-low-bg: #172554;
+  --sev-info-fg: #cbd5e1;
+  --sev-info-bg: #1e293b;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 50%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --color-bg: #0f1218;
+    --color-surface: #171b23;
+    --color-surface-2: #1f2430;
+    --color-border: #2e3442;
+    --color-text: #e6e8ec;
+    --color-text-muted: #a3aab8;
+    --color-primary: #7aa2ff;
+    --color-primary-contrast: #0b1020;
+    --color-success: #4ade80;
+    --color-warning: #fbbf24;
+    --color-danger: #f87171;
+
+    --sev-critical-fg: #fecaca;
+    --sev-critical-bg: #450a0a;
+    --sev-high-fg: #fed7aa;
+    --sev-high-bg: #431407;
+    --sev-medium-fg: #fef08a;
+    --sev-medium-bg: #422006;
+    --sev-low-fg: #bfdbfe;
+    --sev-low-bg: #172554;
+    --sev-info-fg: #cbd5e1;
+    --sev-info-bg: #1e293b;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow-md: 0 4px 12px rgb(0 0 0 / 50%);
+  }
+}

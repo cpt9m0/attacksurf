@@ -1,0 +1,4 @@
+{#- Decorative icon from the Lucide sprite; always paired with visible text or an aria-label. -#}
+{% macro icon(name) -%}
+<svg class="icon" aria-hidden="true" focusable="false"><use href="{{ url_for('static', filename='icons.svg') }}#i-{{ name }}"></use></svg>
+{%- endmacro %}

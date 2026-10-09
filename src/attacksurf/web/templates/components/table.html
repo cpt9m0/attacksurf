@@ -1,0 +1,37 @@
+{%- from "components/empty_state.html" import empty_state -%}
+
+{#- columns: [(key, label)], rows: [mapping]. Cells are autoescaped: scan data is untrusted. -#}
+{% macro data_table(columns, rows, caption, empty_title="Nothing here yet", empty_message="") -%}
+{%- if rows %}
+<div class="table-wrap">
+  <table class="data">
+    <caption class="visually-hidden">{{ caption }}</caption>
+    <thead>
+      <tr>{% for key, label in columns %}<th scope="col">{{ label }}</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+      {%- for row in rows %}
+      <tr>{% for key, label in columns %}<td>{{ row[key] }}</td>{% endfor %}</tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+</div>
+{%- else %}
+{{ empty_state(empty_title, empty_message) }}
+{%- endif %}
+{%- endmacro %}
+
+{#- Page links keep the current query string's other args via **args. -#}
+{% macro pagination(page, pages, endpoint) -%}
+{%- if pages > 1 %}
+<nav class="pagination" aria-label="Pagination">
+  {%- if page > 1 %}
+  <a class="btn btn-secondary" href="{{ url_for(endpoint, page=page - 1, **kwargs) }}" rel="prev">Previous</a>
+  {%- else %}<span></span>{% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {%- if page < pages %}
+  <a class="btn btn-secondary" href="{{ url_for(endpoint, page=page + 1, **kwargs) }}" rel="next">Next</a>
+  {%- else %}<span></span>{% endif %}
+</nav>
+{%- endif %}
+{%- endmacro %}
