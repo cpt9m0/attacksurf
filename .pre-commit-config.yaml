@@ -3,6 +3,8 @@
 # ruff/pyright/pytest run from uv.lock via `repo: local`, so their versions live in one place.
 default_install_hook_types: [pre-commit, commit-msg, pre-push]
 default_stages: [pre-commit]
+# Vendored upstream files are byte-for-byte copies pinned by SHA256SUMS: never rewrite them.
+exclude: ^src/attacksurf/web/static/vendor/
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
