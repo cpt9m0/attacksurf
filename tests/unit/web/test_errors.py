@@ -50,6 +50,22 @@ def test_500_is_logged(failing_app: Flask, caplog: pytest.LogCaptureFixture) -> 
     assert any("unhandled exception" in r.getMessage() for r in caplog.records)
 
 
+def test_405_keeps_allow_header(client: FlaskClient) -> None:
+    response = client.post("/")
+
+    assert response.status_code == 405
+    assert "GET" in response.headers["Allow"]
+    assert response.mimetype == "text/html"
+
+
+def test_api_405_is_json_and_keeps_allow_header(failing_app: Flask) -> None:
+    response = failing_app.test_client().post("/api/v1/_test/boom")
+
+    assert response.status_code == 405
+    assert response.get_json() == {"error": "Method Not Allowed"}
+    assert "GET" in response.headers["Allow"]
+
+
 def test_api_errors_are_json(client: FlaskClient) -> None:
     response = client.get("/api/v1/no-such-endpoint")
 

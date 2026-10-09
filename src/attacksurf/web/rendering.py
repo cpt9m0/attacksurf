@@ -15,6 +15,7 @@ def is_htmx_request() -> bool:
 def render_page(template: str, status: int = 200, **context: Any) -> Response:
     """Render a page template; it extends the fragment layout for HTMX requests (`is_htmx`)."""
     response = make_response(render_template(template, **context), status)
-    # Same URL, two representations: caches must key on the header.
+    # Same URL, two representations chosen by these headers: caches must key on both.
     response.vary.add("HX-Request")
+    response.vary.add("HX-Boosted")
     return response

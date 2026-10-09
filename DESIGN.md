@@ -68,6 +68,11 @@ All severity colors must reach 4.5:1 contrast for text on their badge background
 | `--space-1 … --space-8` | TBD (4px base suggested) |
 | `--radius-sm/md/lg` | TBD |
 | `--shadow-sm/md` | TBD |
+| Borders, focus ring, opacity | `--border-width`, `--border-width-accent`, `--focus-ring-width/-offset`, `--opacity-disabled` (placeholders) |
+| Line heights, weights, icons | `--line-height-body/-heading/-badge`, `--font-weight-semibold/-bold`, `--icon-size`, `--icon-size-lg`, `--measure` (placeholders) |
+
+`app.css` uses only these variables (a test rejects raw colors); the only raw dimension is the
+48rem mobile breakpoint, because CSS can't read custom properties inside `@media`.
 
 ## 4. Layout
 

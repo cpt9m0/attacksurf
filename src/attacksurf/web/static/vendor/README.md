@@ -11,3 +11,8 @@ and the references in `templates/layouts/base.html`. A test checks the hashes.
 | `../icons.svg` | npm `lucide-static` `icons/*.svg`, merged into a `<symbol>` sprite | 1.54.0 | ISC |
 
 Each npm tarball was verified against the registry's `sha512` integrity before extraction.
+
+**License notices** (MIT and ISC require them to accompany copies) are in `licenses/`:
+`htmx-LICENSE.txt` (from the npm package), `alpinejs-LICENSE.md` (repository tag `v3.17.4`; the npm
+package ships none), `lucide-LICENSE.txt` (from the npm package; ISC, plus MIT for icons derived
+from Feather). Update them together with the assets.

@@ -8,8 +8,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{% endblock %} · attacksurf</title>
   <meta name="description" content="attacksurf: open-source, AI-powered attack surface management.">
-  {#- includeIndicatorStyles=false: HTMX would otherwise inject an inline <style> (blocked by CSP). #}
-  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false, "allowScriptTags": false}'>
+  {#- includeIndicatorStyles=false: HTMX would otherwise inject an inline <style> (blocked by CSP).
+      responseHandling: also swap 4xx/5xx so our error fragments are shown (HTMX default drops them). #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false, "allowScriptTags": false, "responseHandling": [{"code": "204", "swap": false}, {"code": "[2345]..", "swap": true}]}'>
   <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
@@ -25,7 +26,7 @@
       <a class="brand" href="{{ url_for('ui.dashboard') }}">{{ icon("shield-check") }} attacksurf</a>
       <div class="topbar-actions">
         <button type="button" class="btn btn-ghost theme-toggle" x-data="themeToggle" @click="toggle"
-                aria-label="Toggle dark mode">
+                aria-label="Dark mode" aria-pressed="false" :aria-pressed="pressed">
           <span class="icon-sun">{{ icon("sun") }}</span><span class="icon-moon">{{ icon("moon") }}</span>
         </button>
         {#- User menu arrives with authentication (#7). #}

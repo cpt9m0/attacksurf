@@ -1,7 +1,15 @@
+import json
 import re
+from pathlib import Path
 
 import pytest
+from flask import Flask, Response, flash
 from flask.testing import FlaskClient
+
+import attacksurf.web
+from attacksurf.web.rendering import render_page
+
+STATIC = Path(attacksurf.web.__file__).parent / "static"
 
 PAGES = [
     ("/", "Dashboard"),
@@ -54,10 +62,49 @@ def test_boosted_htmx_request_gets_full_page(client: FlaskClient) -> None:
     assert b'class="shell"' in response.data
 
 
-def test_pages_vary_on_htmx_header(client: FlaskClient) -> None:
-    response = client.get("/")
+def test_pages_vary_on_htmx_headers(client: FlaskClient) -> None:
+    vary = client.get("/").headers["Vary"]
 
-    assert "HX-Request" in response.headers["Vary"]
+    assert "HX-Request" in vary
+    assert "HX-Boosted" in vary
+
+
+def test_htmx_fragment_includes_flash_messages(app: Flask) -> None:
+    @app.get("/_test/flash")
+    def flashing() -> Response:
+        flash("Saved", "success")
+        return render_page("pages/assets.html")
+
+    html = (
+        app.test_client().get("/_test/flash", headers={"HX-Request": "true"}).get_data(as_text=True)
+    )
+
+    assert 'class="shell"' not in html
+    assert 'class="flash flash-success">Saved' in html
+
+
+def test_htmx_config_swaps_error_responses(client: FlaskClient) -> None:
+    html = client.get("/").get_data(as_text=True)
+
+    match = re.search(r"<meta name=\"htmx-config\" content='([^']+)'", html)
+    assert match
+    config = json.loads(match.group(1))
+    assert config["includeIndicatorStyles"] is False
+    assert config["allowEval"] is False
+    assert {"code": "[2345]..", "swap": True} in config["responseHandling"]
+
+
+def test_theme_toggle_exposes_pressed_state(client: FlaskClient) -> None:
+    html = client.get("/").get_data(as_text=True)
+
+    assert 'aria-label="Dark mode" aria-pressed="false" :aria-pressed="pressed"' in html
+
+
+def test_app_css_uses_tokens_not_raw_colors() -> None:
+    # Claude Design swaps tokens.css only; app.css must not hard-code colors.
+    css = (STATIC / "css" / "app.css").read_text()
+
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(", css)
 
 
 @pytest.mark.parametrize("path", [p for p, _ in PAGES])

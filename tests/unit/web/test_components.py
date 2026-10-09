@@ -102,7 +102,9 @@ def test_button_variants_and_attributes(app: Flask) -> None:
     )
 
     assert 'class="btn btn-danger"' in html
-    assert 'hx_delete="/x"' in html
+    # HTMX only recognizes the hyphenated attribute name.
+    assert 'hx-delete="/x"' in html
+    assert "hx_delete" not in html
     assert 'class="btn btn-secondary"' in html
 
 

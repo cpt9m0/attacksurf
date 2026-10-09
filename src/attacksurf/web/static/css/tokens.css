@@ -38,6 +38,8 @@
   --text-lg: 1.25rem;
   --text-xl: 1.5rem;
   --text-2xl: 2rem;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
 
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -51,11 +53,27 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 10px;
+  --radius-full: 999px;
+
+  --border-width: 1px;
+  --border-width-accent: 4px;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --opacity-disabled: 0.6;
+
+  --line-height-body: 1.5;
+  --line-height-heading: 1.25;
+  --line-height-badge: 1.75;
+  --measure: 32rem; /* max line length for prose */
+
+  --icon-size: 1.1em;
+  --icon-size-lg: 2.5rem;
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 6%);
   --shadow-md: 0 4px 12px rgb(0 0 0 / 10%);
 
   --content-max-width: 72rem;
   --nav-width: 13rem;
+  /* Mobile breakpoint: 48rem. CSS can't read custom properties in @media, so app.css repeats it. */
 }
 
 /* Dark: explicit choice, or the OS preference when the user hasn't chosen. */

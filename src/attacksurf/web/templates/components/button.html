@@ -1,7 +1,8 @@
-{#- variant: primary | secondary | danger | ghost. HTMX adds .htmx-request while in flight. -#}
+{#- variant: primary | secondary | danger | ghost. HTMX adds .htmx-request while in flight.
+    Extra keyword args become attributes with "_" turned into "-": hx_delete="/x" → hx-delete="/x". -#}
 {% macro button(label, variant="primary", type="button", icon_name=none) -%}
 {%- from "components/icon.html" import icon -%}
 <button type="{{ type }}" class="btn btn-{{ variant if variant in ('primary', 'secondary', 'danger', 'ghost') else 'secondary' }}"
-        {{- ' ' ~ kwargs | xmlattr if kwargs }}>
+        {%- for name, value in kwargs | dictsort %} {{ name | replace("_", "-") }}="{{ value }}"{% endfor %}>
   {%- if icon_name %}{{ icon(icon_name) }}{% endif %}{{ label }}</button>
 {%- endmacro %}
