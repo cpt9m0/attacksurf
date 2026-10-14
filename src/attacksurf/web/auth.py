@@ -1,5 +1,6 @@
 """Authentication: login/signup/logout, login gate, CSRF, rate limits, roles (ADR 0009)."""
 
+import time
 from collections.abc import Callable
 from datetime import timedelta
 from functools import wraps
@@ -7,6 +8,7 @@ from typing import cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
+import structlog
 from flask import (
     Blueprint,
     Flask,
@@ -34,6 +36,7 @@ from attacksurf.domain.accounts import (
     InvalidCredentials,
     PasswordHasher,
     Role,
+    SignupClosed,
     has_role,
 )
 from attacksurf.infra.crypto import Argon2PasswordHasher
@@ -42,6 +45,8 @@ from attacksurf.services import auth as auth_service
 from attacksurf.services.auth import SessionUser
 from attacksurf.web.db import get_session
 from attacksurf.web.rendering import is_htmx_request, render_page
+
+log = structlog.get_logger(__name__)
 
 bp = Blueprint("auth", __name__)
 
@@ -52,6 +57,7 @@ LOGIN_PER_EMAIL_LIMIT = "10 per hour"
 SIGNUP_LIMIT = "5 per hour"
 _HASHER_KEY = "password_hasher"
 _SETTINGS_KEY = "auth_settings"
+_AUTH_AT = "auth_at"  # login time (epoch seconds) in the session
 
 
 class WebUser(UserMixin):
@@ -87,14 +93,18 @@ def init_auth(app: Flask, settings: Settings) -> None:
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         PERMANENT_SESSION_LIFETIME=timedelta(hours=settings.session_lifetime_hours),
+        # Fewer cookie re-issues; the absolute lifetime itself is enforced via _AUTH_AT below,
+        # because any session change (e.g. a new CSRF token) would push the cookie expiry out.
+        SESSION_REFRESH_EACH_REQUEST=False,
     )
     app.extensions[_HASHER_KEY] = Argon2PasswordHasher()
     app.extensions[_SETTINGS_KEY] = settings
 
-    CSRFProtect(app)
     manager = LoginManager(app)
     manager.user_loader(_load_user)
+    # Before CSRFProtect: anonymous requests get 401/redirect, not a CSRF 400.
     app.before_request(_require_login)
+    CSRFProtect(app)
     app.register_blueprint(bp)
     _apply_rate_limits(app, settings)
 
@@ -145,8 +155,15 @@ def signup() -> BaseResponse:
         org_name = request.form.get("org_name", "").strip() or None
         try:
             registration = accounts_service.register_user(
-                get_session(), _hasher(), email, request.form.get("password", ""), org_name
+                get_session(),
+                _hasher(),
+                email,
+                request.form.get("password", ""),
+                org_name,
+                first_user_only=not _settings().allow_signup,
             )
+        except SignupClosed:
+            abort(404)
         except AccountError as exc:
             return _render_form("auth/signup.html", str(exc), email, None)
         _start_session(
@@ -165,7 +182,11 @@ def signup() -> BaseResponse:
 
 @bp.post("/logout")
 def logout() -> BaseResponse:
-    auth_service.record_logout(get_session(), current_user.session_user)
+    try:
+        auth_service.record_logout(get_session(), current_user.session_user)
+    except Exception:
+        # Never leave a live session behind because the audit write failed.
+        log.exception("logout audit failed")
     logout_user()
     session.clear()
     flash("You have been logged out.", "info")
@@ -176,6 +197,7 @@ def _start_session(user: SessionUser) -> None:
     # New session on login: drops anything set before (session fixation, stale CSRF token).
     session.clear()
     session.permanent = True
+    session[_AUTH_AT] = int(time.time())
     login_user(WebUser(user))
 
 
@@ -197,12 +219,24 @@ def _require_login() -> BaseResponse | None:
 
 
 def _load_user(user_id: str) -> WebUser | None:
+    if not _session_within_lifetime():
+        session.clear()
+        return None
     try:
         uid = UUID(user_id)
     except ValueError:
         return None
     user = auth_service.load_session_user(get_session(), uid)
     return WebUser(user) if user else None
+
+
+def _session_within_lifetime() -> bool:
+    """Absolute lifetime counted from login, however active the session has been since."""
+    started = session.get(_AUTH_AT)
+    if not isinstance(started, int):
+        return False
+    lifetime = timedelta(hours=_settings().session_lifetime_hours).total_seconds()
+    return 0 <= time.time() - started <= lifetime
 
 
 def _safe_next(target: str | None) -> str | None:
@@ -213,10 +247,14 @@ def _safe_next(target: str | None) -> str | None:
     return None if parts.scheme or parts.netloc else target
 
 
+def _settings() -> Settings:
+    return current_app.extensions[_SETTINGS_KEY]
+
+
 def _signup_open() -> bool:
-    settings: Settings = current_app.extensions[_SETTINGS_KEY]
     # The first user may always sign up, so a private instance can create its admin.
-    return settings.allow_signup or not auth_service.has_users(get_session())
+    # (Display check only; register_user re-checks atomically.)
+    return _settings().allow_signup or not auth_service.has_users(get_session())
 
 
 def _hasher() -> PasswordHasher:

@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from attacksurf.domain.accounts import InvalidCredentials, Role
+from attacksurf.domain.accounts import MAX_PASSWORD_LENGTH, InvalidCredentials, Role
 from attacksurf.infra.db.models import AuditLog, Membership, Org, User
 from attacksurf.services.accounts import Registration, register_user
 from attacksurf.services.auth import (
@@ -159,3 +159,33 @@ def test_has_users(db_session: Session) -> None:
     assert has_users(db_session) is False
     register_user(db_session, FakePasswordHasher(), "a@example.com", PASSWORD)
     assert has_users(db_session) is True
+
+
+@pytest.mark.parametrize("email", ["alice@example.com", "nobody@example.com"])
+def test_oversized_password_is_rejected_with_fixed_hashing_work(
+    db_session: Session, alice: Registration, email: str
+) -> None:
+    hasher = FakePasswordHasher()
+    hasher.hash = Mock(wraps=hasher.hash)  # type: ignore[method-assign]
+    hasher.verify = Mock(wraps=hasher.verify)  # type: ignore[method-assign]
+
+    with pytest.raises(InvalidCredentials):
+        authenticate(db_session, hasher, email, "x" * (MAX_PASSWORD_LENGTH + 1))
+
+    # Same fixed argon2 cost for known and unknown accounts; the oversized input is never hashed.
+    hasher.hash.assert_called_once()
+    assert len(hasher.hash.call_args.args[0]) < MAX_PASSWORD_LENGTH
+    hasher.verify.assert_not_called()
+
+
+def test_oversized_password_for_known_account_is_audited(
+    db_session: Session, alice: Registration
+) -> None:
+    with pytest.raises(InvalidCredentials):
+        authenticate(db_session, FakePasswordHasher(), "alice@example.com", "x" * 1025)
+
+    failed = _failed_login(db_session)
+    assert (failed.actor_user_id, failed.details) == (
+        alice.user.id,
+        {"reason": "password_too_long"},
+    )

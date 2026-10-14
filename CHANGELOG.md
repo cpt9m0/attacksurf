@@ -5,6 +5,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 
 ## [Unreleased]
 
+### Fixed
+- Auth hardening from review: atomic first-user signup, login password length bound, login
+  gate before CSRF (anonymous writes get 401/redirect), logout clears the session even if the
+  audit write fails, absolute session lifetime enforced server-side
+
 ### Added
 - Authentication: signup, login, logout (Flask-Login), login required everywhere by default,
   `@require_role`, CSRF on all POSTs incl. HTMX, rate-limited login/signup (Flask-Limiter),

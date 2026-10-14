@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import NoReturn
 from uuid import UUID
 
 import structlog
@@ -9,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from attacksurf.domain.accounts import (
+    MAX_PASSWORD_LENGTH,
     InvalidCredentials,
     InvalidSignup,
     PasswordHasher,
@@ -19,6 +21,8 @@ from attacksurf.infra.db.models import Membership, Org, User
 from attacksurf.services.audit import audit
 
 log = structlog.get_logger(__name__)
+
+_TIMING_DUMMY_PASSWORD = "timing-equalizer-not-a-password"  # noqa: S105
 
 
 @dataclass(frozen=True)
@@ -41,29 +45,21 @@ def authenticate(
     except InvalidSignup:
         email = ""
     user = session.scalar(select(User).where(User.email == email)) if email else None
+    membership = _first_membership(session, user.id) if user else None
+
+    if len(password) > MAX_PASSWORD_LENGTH:
+        # No valid password is this long, so the oversized value is never hashed (hashing-DoS
+        # bound). A fixed-size dummy hash keeps the usual argon2 cost on every path, masking
+        # the audit write for known accounts like the normal failure path does.
+        hasher.hash(_TIMING_DUMMY_PASSWORD)
+        _reject(session, user, membership, "password_too_long")
     if user is None:
         # Spend the same argon2 work as a real check so timing doesn't reveal unknown emails.
         hasher.hash(password)
-        log.info("login failed", reason="unknown_user")
-        raise InvalidCredentials
-
-    membership = _first_membership(session, user.id)
+        _reject(session, None, None, "unknown_user")
     password_ok = hasher.verify(user.password_hash, password)
     if not (password_ok and user.is_active and membership):
-        reason = "bad_password" if not password_ok else "inactive"
-        if membership is not None:
-            audit(
-                session,
-                membership.org_id,
-                "user.login_failed",
-                actor_id=user.id,
-                target_type="user",
-                target_id=str(user.id),
-                details={"reason": reason},
-            )
-            session.commit()
-        log.info("login failed", reason=reason, user_id=str(user.id))
-        raise InvalidCredentials
+        _reject(session, user, membership, "bad_password" if not password_ok else "inactive")
 
     if hasher.needs_rehash(user.password_hash):
         user.password_hash = hasher.hash(password)
@@ -79,6 +75,25 @@ def authenticate(
     session.commit()
     log.info("user logged in", user_id=str(user.id), org_id=str(membership.org_id))
     return _session_user(session, user, membership)
+
+
+def _reject(
+    session: Session, user: User | None, membership: Membership | None, reason: str
+) -> NoReturn:
+    """Audit a failed login for a known account (in its org), log it, and raise."""
+    if user is not None and membership is not None:
+        audit(
+            session,
+            membership.org_id,
+            "user.login_failed",
+            actor_id=user.id,
+            target_type="user",
+            target_id=str(user.id),
+            details={"reason": reason},
+        )
+        session.commit()
+    log.info("login failed", reason=reason, user_id=str(user.id) if user else None)
+    raise InvalidCredentials
 
 
 def record_logout(session: Session, user: SessionUser) -> None:
