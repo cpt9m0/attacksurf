@@ -1,0 +1,17 @@
+{% extends "layouts/fragment.html" if is_htmx else "layouts/auth.html" %}
+{% from "components/form.html" import csrf_field, form_field, form_error %}
+{% block title %}Sign up{% endblock %}
+{% block content %}
+<h1>Create your account</h1>
+{{ form_error(error) }}
+<form method="post" action="{{ url_for('auth.signup') }}" class="form">
+  {{ csrf_field() }}
+  {{ form_field("email", "Email", type="email", value=email, autocomplete="username") }}
+  {{ form_field("password", "Password", type="password", autocomplete="new-password",
+                hint="At least 12 characters. A passphrase works well.") }}
+  {{ form_field("org_name", "Organization name", required=false, autocomplete="organization",
+                hint="Optional. Defaults to the part of your email before the @.") }}
+  <button type="submit" class="btn btn-primary">Create account</button>
+</form>
+<p class="auth-switch">Already have an account? <a href="{{ url_for('auth.login') }}">Log in</a></p>
+{% endblock %}

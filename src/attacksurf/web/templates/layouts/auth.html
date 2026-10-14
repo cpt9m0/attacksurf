@@ -1,0 +1,21 @@
+{#- Signed-out pages (login, signup): no app navigation. Same CSP rules as the shell. -#}
+{%- from "components/flash.html" import flash_messages -%}
+<!doctype html>
+<html lang="en">
+<head>
+  {% include "layouts/_head.html" %}
+  <title>{% block title %}{% endblock %} · attacksurf</title>
+</head>
+<body hx-headers='{{ {"X-CSRFToken": csrf_token()} | tojson }}'>
+  <main class="auth-page" id="content">
+    <div class="auth-card card">
+      <p class="brand">attacksurf</p>
+      {{ flash_messages() }}
+      {% block content %}{% endblock %}
+    </div>
+    <footer class="footer">
+      <a href="https://github.com/cpt9m0/attacksurf">Source code</a> (AGPL-3.0)
+    </footer>
+  </main>
+</body>
+</html>
