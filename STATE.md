@@ -2,25 +2,22 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-10-14 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #7 (authentication)
+**Updated:** 2026-10-14 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #7 follow-up
 
 ## Status
-#7 implemented; PR open, waiting for CI + review, then squash-merge. #1–#6 merged.
+#1–#7 merged (#7 = PR #45). Follow-up PR open with fixes for Codex's late review of #45.
 
 ## Last task
-- `services/auth.py`: `authenticate` (generic failure, equal hashing work, rehash, audit
-  login/login_failed), `record_logout`, `load_session_user` → `SessionUser`, `has_users`
-- `web/auth.py`: Flask-Login, `CSRFProtect`, Flask-Limiter (per-app limiter), default-deny gate
-  (`PUBLIC_ENDPOINTS`; HTMX → `HX-Redirect`, `/api/` → 401), `require_role`, `/login`,
-  `/signup`, `POST /logout`, `_safe_next`
-- Templates: `layouts/auth.html`, `layouts/_head.html`, `auth/login.html`, `auth/signup.html`,
-  `components/form.html`; user menu + logout in the shell; `<body hx-headers>` CSRF token
-- Settings `ALLOW_SIGNUP`, `SESSION_LIFETIME_HOURS`, `PROXY_COUNT` (not yet in `.env.example`:
-  this sandbox can't read that file; the user adds the lines)
-- ADR 0009. 242 tests, 99% coverage with DB, 86% without. Verified in Chromium.
+- `register_user(..., first_user_only=True)`: advisory lock + recheck (`SignupClosed`)
+- `authenticate` rejects passwords > `MAX_PASSWORD_LENGTH` before hashing
+- `web/auth.py`: login gate registered before `CSRFProtect`; logout clears the session even if the
+  audit write fails; absolute session lifetime via `session["auth_at"]` checked in the user
+  loader (+ `SESSION_REFRESH_EACH_REQUEST=False`)
+- Tests: 252 with DB (99%), 198 without (84%)
 
 ## Next step
-After #7 merges: next unblocked issue in epic #31 (check #8+ dependencies).
+After the follow-up merges: #8 (Asset model + relations graph, value normalization, migration
+`0003`; acceptance: re-upserting a discovered asset updates `last_seen`).
 
 ## Open threads
 - `.env.example` needs: `ALLOW_SIGNUP=true`, `SESSION_LIFETIME_HOURS=12`, `PROXY_COUNT=0`
