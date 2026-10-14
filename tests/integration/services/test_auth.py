@@ -174,3 +174,16 @@ def test_oversized_password_is_rejected_without_hashing(
 
     hasher.hash.assert_not_called()
     hasher.verify.assert_not_called()
+
+
+def test_oversized_password_for_known_account_is_audited(
+    db_session: Session, alice: Registration
+) -> None:
+    with pytest.raises(InvalidCredentials):
+        authenticate(db_session, FakePasswordHasher(), "alice@example.com", "x" * 1025)
+
+    failed = _failed_login(db_session)
+    assert (failed.actor_user_id, failed.details) == (
+        alice.user.id,
+        {"reason": "password_too_long"},
+    )
