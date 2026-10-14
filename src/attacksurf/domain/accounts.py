@@ -43,10 +43,16 @@ class EmailAlreadyRegistered(AccountError):
     pass
 
 
+class InvalidCredentials(AccountError):
+    """Wrong email or password, or an account that may not log in. Never says which."""
+
+
 class PasswordHasher(Protocol):
     def hash(self, password: str) -> str: ...
 
     def verify(self, password_hash: str, password: str) -> bool: ...
+
+    def needs_rehash(self, password_hash: str) -> bool: ...
 
 
 def normalize_email(raw: str) -> str:
