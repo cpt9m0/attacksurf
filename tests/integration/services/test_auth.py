@@ -162,7 +162,7 @@ def test_has_users(db_session: Session) -> None:
 
 
 @pytest.mark.parametrize("email", ["alice@example.com", "nobody@example.com"])
-def test_oversized_password_is_rejected_without_hashing(
+def test_oversized_password_is_rejected_with_fixed_hashing_work(
     db_session: Session, alice: Registration, email: str
 ) -> None:
     hasher = FakePasswordHasher()
@@ -172,7 +172,9 @@ def test_oversized_password_is_rejected_without_hashing(
     with pytest.raises(InvalidCredentials):
         authenticate(db_session, hasher, email, "x" * (MAX_PASSWORD_LENGTH + 1))
 
-    hasher.hash.assert_not_called()
+    # Same fixed argon2 cost for known and unknown accounts; the oversized input is never hashed.
+    hasher.hash.assert_called_once()
+    assert len(hasher.hash.call_args.args[0]) < MAX_PASSWORD_LENGTH
     hasher.verify.assert_not_called()
 
 

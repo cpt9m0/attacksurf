@@ -22,6 +22,8 @@ from attacksurf.services.audit import audit
 
 log = structlog.get_logger(__name__)
 
+_TIMING_DUMMY_PASSWORD = "timing-equalizer-not-a-password"  # noqa: S105
+
 
 @dataclass(frozen=True)
 class SessionUser:
@@ -46,8 +48,10 @@ def authenticate(
     membership = _first_membership(session, user.id) if user else None
 
     if len(password) > MAX_PASSWORD_LENGTH:
-        # No valid password is this long: reject before argon2 (hashing-DoS bound). Same for
-        # known and unknown accounts, so it reveals nothing; known ones are still audited.
+        # No valid password is this long, so the oversized value is never hashed (hashing-DoS
+        # bound). A fixed-size dummy hash keeps the usual argon2 cost on every path, masking
+        # the audit write for known accounts like the normal failure path does.
+        hasher.hash(_TIMING_DUMMY_PASSWORD)
         _reject(session, user, membership, "password_too_long")
     if user is None:
         # Spend the same argon2 work as a real check so timing doesn't reveal unknown emails.
