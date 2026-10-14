@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Authentication: signup, login, logout (Flask-Login), login required everywhere by default,
+  `@require_role`, CSRF on all POSTs incl. HTMX, rate-limited login/signup (Flask-Limiter),
+  hardened session cookies, audit of login/logout/failed logins; settings `ALLOW_SIGNUP`,
+  `SESSION_LIFETIME_HOURS`, `PROXY_COUNT`
 - UI foundation: app shell (top bar, nav for Dashboard/Assets/Scans/Findings/Settings, light/dark
   theme toggle, AGPL source link), HTMX fragment rendering, Jinja component macros (button,
   severity badge, status pill, data table, pagination, empty state, flash), design tokens as CSS

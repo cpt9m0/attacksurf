@@ -2,27 +2,29 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-10-09 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #6 (UI foundation)
+**Updated:** 2026-10-14 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #7 (authentication)
 
 ## Status
-#6 implemented; PR open, waiting for CI + review, then squash-merge. #1–#5 merged.
+#7 implemented; PR open, waiting for CI + review, then squash-merge. #1–#6 merged.
 
 ## Last task
-- Shell `templates/layouts/base.html` (+ `fragment.html` for HTMX), 5 nav pages (empty states),
-  `errors/error.html`; macros in `templates/components/`
-- `static/css/tokens.css` (placeholder tokens, light/dark) + `app.css`; `js/theme.js`, `js/app.js`
-  (`themeToggle`); vendored HTMX 2.0.11 + Alpine CSP 3.17.4 (`vendor/SHA256SUMS`); Lucide sprite
-- `web/rendering.py` (`render_page`, `is_htmx`), `web/security.py` (CSP etc., HSTS prod),
-  `web/errors.py` (HTML/JSON, 500 logs + request ID)
-- Verified in Chromium: no CSP violations, theme toggle persists, HTMX swap, skip link, mobile
-  layout; screenshots in `docs/images/`
+- `services/auth.py`: `authenticate` (generic failure, equal hashing work, rehash, audit
+  login/login_failed), `record_logout`, `load_session_user` → `SessionUser`, `has_users`
+- `web/auth.py`: Flask-Login, `CSRFProtect`, Flask-Limiter (per-app limiter), default-deny gate
+  (`PUBLIC_ENDPOINTS`; HTMX → `HX-Redirect`, `/api/` → 401), `require_role`, `/login`,
+  `/signup`, `POST /logout`, `_safe_next`
+- Templates: `layouts/auth.html`, `layouts/_head.html`, `auth/login.html`, `auth/signup.html`,
+  `components/form.html`; user menu + logout in the shell; `<body hx-headers>` CSRF token
+- Settings `ALLOW_SIGNUP`, `SESSION_LIFETIME_HOURS`, `PROXY_COUNT` (not yet in `.env.example`:
+  this sandbox can't read that file; the user adds the lines)
+- ADR 0009. 242 tests, 99% coverage with DB, 86% without. Verified in Chromium.
 
 ## Next step
-After #6 merges: #7 (auth: Flask-Login, signup/login/logout with `register_user` and
-`Argon2PasswordHasher.verify`, CSRF incl. HTMX `hx-headers`, Flask-Limiter, `@require_role`
-using `domain.accounts.has_role`, audit login events). Forms must stay CSP-clean.
+After #7 merges: next unblocked issue in epic #31 (check #8+ dependencies).
 
 ## Open threads
+- `.env.example` needs: `ALLOW_SIGNUP=true`, `SESSION_LIFETIME_HOURS=12`, `PROXY_COUNT=0`
+  (prod behind Caddy: `PROXY_COUNT=1`)
 - Optional (user): ruleset on `main` requiring PRs + checks `lint`, `test (3.12)`,
   `test (3.13)`, `secrets`, `compose`, `pr-title`
 - #32: GitHub Sponsors / Ko-fi accounts not set up yet (Ko-fi username assumed `cpt9m0`)

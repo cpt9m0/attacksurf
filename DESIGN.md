@@ -87,7 +87,9 @@ All severity colors must reach 4.5:1 contrast for text on their badge background
 
 Implemented as Jinja macros in `templates/components/`. Each entry: purpose, variants, states.
 Built in #6: `button`, `severity_badge` + `status_pill` (`badges.html`), `data_table` +
-`pagination` (`table.html`), `empty_state`, `flash_messages`, `icon`. Specs (visuals) stay TBD.
+`pagination` (`table.html`), `empty_state`, `flash_messages`, `icon`; #7 added `form_field`,
+`form_error`, `csrf_field` (`form.html`) and `layouts/auth.html` (signed-out pages). Specs
+(visuals) stay TBD.
 
 | Component | Notes | Spec |
 |---|---|---|

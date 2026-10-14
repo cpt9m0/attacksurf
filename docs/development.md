@@ -60,6 +60,11 @@ All settings live in `src/attacksurf/config.py` and are read from environment va
 (see `.env.example`). Leave `SECRET_KEY` empty in dev (an ephemeral key is generated);
 `ENV=prod` refuses to start without a random `SECRET_KEY` of ≥ 32 characters. Never commit `.env`.
 
+Auth settings: `ALLOW_SIGNUP` (default `true`; when `false` only the first user can sign up),
+`SESSION_LIFETIME_HOURS` (default 12), `PROXY_COUNT` (reverse proxies in front of the app; 0 in
+dev, 1 behind Caddy). Login/signup rate limits use Redis (`REDIS_URL`) and fall back to memory if
+it is down. Open http://127.0.0.1:5000, sign up; the first account owns a new org.
+
 ## Everyday commands
 
 | Task | Command |
