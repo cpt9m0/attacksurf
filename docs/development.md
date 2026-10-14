@@ -23,13 +23,17 @@ uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 | Service | Host port (localhost only) | Notes |
 |---|---|---|
 | `web` | 5000 | Flask debug server, hot reload (`./src` is bind-mounted) |
-| `postgres` | 5432 | PostgreSQL 16, user/password/db `attacksurf` (dev only), volume `pgdata` |
+| `postgres` | 5432 | PostgreSQL 18, user/password/db `attacksurf` (dev only), volume `pgdata` |
 | `redis` | 6379 | Redis 7 |
 | `worker-passive`, `worker-ai`, `beat` | n/a | placeholders until #10; start with `docker compose --profile workers up` |
 
 Inside compose, `DATABASE_URL` / `REDIS_URL` point at the service names; your `.env` supplies the
 rest. Targets: `make up | down | logs | ps | build | shell | test | check | migrate | revision`
 (`make` lists them). `make down` keeps the database; `docker compose down -v` wipes it.
+
+PostgreSQL 18 stores data in a major-version subdirectory of `/var/lib/postgresql` (mounted as
+`pgdata`), so a `pgdata` volume created by PostgreSQL 16 cannot be reused: run
+`docker compose down -v` once to start a fresh one (dev data only; restore from a dump if needed).
 
 ## Database and migrations
 

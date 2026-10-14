@@ -96,6 +96,10 @@ jobs:
         run: curl -fsS http://127.0.0.1:5000/healthz
       - name: Migrations apply on a fresh database (make migrate)
         run: docker compose run --rm web alembic upgrade head
+      - name: A real worker completes an enqueued job (make test-worker)
+        run: |
+          docker compose run --rm -v ./tests:/app/tests -e RUN_WORKER_TESTS=1 \
+            web pytest -m worker --no-cov -p no:cacheprovider tests/e2e
       - name: Show logs on failure
         if: failure()
         run: docker compose logs
