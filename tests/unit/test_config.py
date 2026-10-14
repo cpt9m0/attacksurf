@@ -98,3 +98,34 @@ def test_get_settings_is_cached() -> None:
 
     assert get_settings() is get_settings()
     get_settings.cache_clear()
+
+
+def test_auth_settings_defaults() -> None:
+    settings = make_settings()
+
+    assert settings.allow_signup is True
+    assert settings.session_lifetime_hours == 12
+    assert settings.proxy_count == 0
+
+
+def test_auth_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("ALLOW_SIGNUP", "false")
+    clean_env.setenv("SESSION_LIFETIME_HOURS", "8")
+    clean_env.setenv("PROXY_COUNT", "1")
+
+    settings = settings_from_env()
+
+    assert (settings.allow_signup, settings.session_lifetime_hours, settings.proxy_count) == (
+        False,
+        8,
+        1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("session_lifetime_hours", 0), ("proxy_count", -1), ("proxy_count", 6)],
+)
+def test_auth_settings_reject_out_of_range(field: str, value: int) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(**{field: value})

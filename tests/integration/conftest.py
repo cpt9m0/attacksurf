@@ -7,8 +7,14 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from flask import Flask
+from pydantic import SecretStr
 from sqlalchemy import Engine, create_engine, make_url, text
 from sqlalchemy.orm import Session
+
+from attacksurf.app import create_app
+from tests.fakes import FakePasswordHasher
+from tests.helpers import make_settings
 
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 
@@ -53,3 +59,12 @@ def db_session(db_engine: Engine) -> Iterator[Session]:
         finally:
             session.close()
             transaction.rollback()
+
+
+@pytest.fixture
+def db_app(db_session: Session) -> Flask:
+    """App whose requests use the test's rolled-back session and a fast fake password hasher."""
+    app = create_app(make_settings(env="test", secret_key=SecretStr("test-secret-key")))
+    app.extensions["db_session_factory"] = lambda: db_session
+    app.extensions["password_hasher"] = FakePasswordHasher()
+    return app

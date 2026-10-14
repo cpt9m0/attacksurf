@@ -131,6 +131,15 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
   request ID.
 - Styling and components follow `DESIGN.md` (plain CSS + tokens, Jinja macros).
 
+## Authentication (ADR 0009)
+
+- `web/auth.py`: Flask-Login + signed cookie sessions, `CSRFProtect`, Flask-Limiter, the login
+  gate (default deny) and `@require_role(Role.X)`. Pages: `/login`, `/signup`, `POST /logout`.
+- `services/auth.py`: `authenticate` (checks credentials, audits, rehashes), `record_logout`,
+  `load_session_user` (per request: the user and the org they act in, as a `SessionUser`;
+  MVP: their first membership), `has_users`.
+- Templates get `current_user` (`email`, `org_name`, `role`); services get org IDs from it.
+
 ## Deployment
 
 Single VPS: Caddy → gunicorn (web), Celery workers, beat, PostgreSQL, Redis, all in Docker Compose.

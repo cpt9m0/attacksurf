@@ -9,3 +9,6 @@ class FakePasswordHasher:
 
     def verify(self, password_hash: str, password: str) -> bool:
         return password_hash == self.hash(password)
+
+    def needs_rehash(self, password_hash: str) -> bool:
+        return not password_hash.startswith("fake$")

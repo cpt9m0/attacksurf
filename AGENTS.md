@@ -93,6 +93,9 @@ sync" rule below is satisfied**. Do not claim done without running them.
    expressions; JS goes in `static/js/app.js` (`Alpine.data`), styles use `tokens.css` variables.
    Routes render with `web.rendering.render_page()`; reusable markup is a macro in
    `templates/components/`.
+10. **Auth by default:** every route requires login unless listed in `web.auth.PUBLIC_ENDPOINTS`;
+   admin-only routes add `@require_role(Role.ADMIN)`; forms include `csrf_field()`. Act in
+   `current_user.session_user.org_id`, never an org ID from the request.
 
 ## Code conventions
 
@@ -117,6 +120,9 @@ sync" rule below is satisfied**. Do not claim done without running them.
 ## Testing
 
 - pytest, Arrange/Act/Assert, one behavior per test, descriptive names (`test_<unit>_<behavior>`).
+- Web unit tests: `auth_client` / `login_as(client, make_session_user(role=...))` fake the
+  logged-in user (`tests/unit/web/conftest.py`); DB-backed flows use `db_app`
+  (`tests/integration/conftest.py`). POSTs need a CSRF token from a rendered form.
 - Build settings with `tests.helpers.make_settings(...)`: it ignores `.env` **and** OS env, so
   tests are hermetic. Tests of env loading use `settings_from_env()` with the `clean_env`
   fixture. Use the `app` / `client` fixtures from `tests/conftest.py`.

@@ -73,6 +73,7 @@
 
   --content-max-width: 72rem;
   --nav-width: 13rem;
+  --auth-card-width: 26rem;
   /* Mobile breakpoint: 48rem. CSS can't read custom properties in @media, so app.css repeats it. */
 }
 
