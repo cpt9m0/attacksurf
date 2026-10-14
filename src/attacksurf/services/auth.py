@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from attacksurf.domain.accounts import (
+    MAX_PASSWORD_LENGTH,
     InvalidCredentials,
     InvalidSignup,
     PasswordHasher,
@@ -36,6 +37,10 @@ def authenticate(
     session: Session, hasher: PasswordHasher, email: str, password: str
 ) -> SessionUser:
     """Check credentials and record the attempt. Raises `InvalidCredentials` on any failure."""
+    if len(password) > MAX_PASSWORD_LENGTH:
+        # No valid password is this long: reject before argon2 (hashing-DoS bound). Independent
+        # of whether the account exists, so it reveals nothing.
+        raise InvalidCredentials
     try:
         email = normalize_email(email)
     except InvalidSignup:

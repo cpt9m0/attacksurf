@@ -1,5 +1,6 @@
 """Logged-in clients without a database: the identity lookup is faked."""
 
+import time
 from collections.abc import Callable
 
 import pytest
@@ -28,6 +29,7 @@ def login_as(monkeypatch: pytest.MonkeyPatch) -> LoginAs:
         with client.session_transaction() as sess:
             sess["_user_id"] = str(user.user_id)
             sess["_fresh"] = True
+            sess["auth_at"] = int(time.time())
 
     return _login
 

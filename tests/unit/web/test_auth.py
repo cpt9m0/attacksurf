@@ -2,6 +2,7 @@
 
 import json
 import re
+import time
 from typing import Any
 from unittest.mock import Mock
 from uuid import UUID
@@ -12,7 +13,7 @@ from flask.testing import FlaskClient
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from attacksurf.app import create_app
-from attacksurf.domain.accounts import InvalidCredentials, InvalidSignup, Role
+from attacksurf.domain.accounts import InvalidCredentials, InvalidSignup, Role, SignupClosed
 from attacksurf.services import accounts as accounts_service
 from attacksurf.services import auth as auth_service
 from attacksurf.services.accounts import Registration
@@ -432,3 +433,80 @@ def test_proxy_count_enables_forwarded_headers() -> None:
 
 def test_no_proxy_fix_by_default(app: Flask) -> None:
     assert not isinstance(app.wsgi_app, ProxyFix)
+
+
+# Regressions from review of #45
+
+
+def test_anonymous_post_is_gated_before_csrf(app: Flask) -> None:
+    app.add_url_rule("/api/v1/_test/do", "api_do", view_func=lambda: "x", methods=["POST"])
+    client = app.test_client()
+
+    assert client.post("/api/v1/_test/do").status_code == 401
+    assert client.post("/logout").headers["Location"].startswith("/login")
+
+
+def test_logout_clears_session_even_if_audit_fails(
+    auth_client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(auth_service, "record_logout", Mock(side_effect=RuntimeError("db down")))
+    token = csrf_token(auth_client, "/")
+
+    response = auth_client.post("/logout", data={"csrf_token": token})
+
+    assert response.headers["Location"] == "/login"
+    with auth_client.session_transaction() as sess:
+        assert "_user_id" not in sess
+
+
+def test_session_expires_at_absolute_lifetime_despite_activity(
+    client: FlaskClient, fake_authenticate: Mock, signup_state: dict
+) -> None:
+    token = csrf_token(client)
+    client.post("/login", data={"email": "a@x.io", "password": "right", "csrf_token": token})
+    assert client.get("/scans").status_code == 200
+
+    with client.session_transaction() as sess:
+        sess["auth_at"] = int(time.time()) - 12 * 3600 - 1  # logged in just over 12h ago
+
+    assert client.get("/scans").status_code == 302
+    with client.session_transaction() as sess:
+        assert "_user_id" not in sess
+
+
+def test_session_without_login_time_is_rejected(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user = make_session_user()
+    monkeypatch.setattr(auth_service, "load_session_user", lambda _s, _uid: user)
+    with client.session_transaction() as sess:
+        sess["_user_id"] = str(user.user_id)  # e.g. a cookie minted before this check existed
+
+    assert client.get("/").status_code == 302
+
+
+def test_unchanged_session_cookie_is_not_reissued(
+    client: FlaskClient, fake_authenticate: Mock, signup_state: dict
+) -> None:
+    token = csrf_token(client)
+    client.post("/login", data={"email": "a@x.io", "password": "right", "csrf_token": token})
+    client.get("/scans")  # first page after login stores a fresh CSRF token
+
+    assert "Set-Cookie" not in client.get("/scans").headers
+
+
+def test_signup_with_signup_off_asks_service_for_first_user_only(
+    signup_state: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signup_state["has_users"] = False
+    register = Mock(side_effect=SignupClosed("closed"))
+    monkeypatch.setattr(accounts_service, "register_user", register)
+    client = _app_with_signup_off().test_client()
+    token = csrf_token(client, "/signup")
+
+    response = client.post(
+        "/signup", data={"email": "n@example.com", "password": "x" * 12, "csrf_token": token}
+    )
+
+    assert response.status_code == 404
+    assert register.call_args.kwargs["first_user_only"] is True

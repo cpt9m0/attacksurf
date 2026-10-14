@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from attacksurf.domain.accounts import InvalidCredentials, Role
+from attacksurf.domain.accounts import MAX_PASSWORD_LENGTH, InvalidCredentials, Role
 from attacksurf.infra.db.models import AuditLog, Membership, Org, User
 from attacksurf.services.accounts import Registration, register_user
 from attacksurf.services.auth import (
@@ -159,3 +159,18 @@ def test_has_users(db_session: Session) -> None:
     assert has_users(db_session) is False
     register_user(db_session, FakePasswordHasher(), "a@example.com", PASSWORD)
     assert has_users(db_session) is True
+
+
+@pytest.mark.parametrize("email", ["alice@example.com", "nobody@example.com"])
+def test_oversized_password_is_rejected_without_hashing(
+    db_session: Session, alice: Registration, email: str
+) -> None:
+    hasher = FakePasswordHasher()
+    hasher.hash = Mock(wraps=hasher.hash)  # type: ignore[method-assign]
+    hasher.verify = Mock(wraps=hasher.verify)  # type: ignore[method-assign]
+
+    with pytest.raises(InvalidCredentials):
+        authenticate(db_session, hasher, email, "x" * (MAX_PASSWORD_LENGTH + 1))
+
+    hasher.hash.assert_not_called()
+    hasher.verify.assert_not_called()
