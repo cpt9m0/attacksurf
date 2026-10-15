@@ -24,6 +24,7 @@ from attacksurf.domain.assets import (
         # UTS46 maps capital sigma to small sigma; Python's lower() gives final sigma here.
         ("\u039f\u03a3-a.example", "xn---a-ibcq.example"),
         ("\u03bf\u03c3-a.example", "xn---a-ibcq.example"),
+        ("例え。テスト。", "xn--r8jz45g.xn--zckzah"),  # ideographic full stops, root label
     ],
 )
 def test_normalize_hostname(raw: str, expected: str) -> None:
@@ -42,6 +43,8 @@ def test_normalize_hostname(raw: str, expected: str) -> None:
         "bad-.example.com",
         "exa mple.com",
         "a..example.com",
+        "example.com..",  # only one root dot is dropped
+        "1.2.3.4.",
         "example.123",
         "1.2.3.4",
         "2001:db8::1",
@@ -89,6 +92,17 @@ def test_normalize_ip_rejects_invalid(raw: str) -> None:
         ("https://example.com/100%25", "https://example.com/100%25"),
         ("https://example.com/café?q=é", "https://example.com/caf%C3%A9?q=%C3%A9"),
         ("https://example.com/caf%c3%a9", "https://example.com/caf%C3%A9"),
+        ("https://example.com/100%", "https://example.com/100%25"),
+        ("https://example.com/%GG", "https://example.com/%25GG"),
+        ("https://example.com/a|b?x=<y>", "https://example.com/a%7Cb?x=%3Cy%3E"),
+        ("https://example.com/?", "https://example.com/?"),
+        ("https://example.com?#frag", "https://example.com/?"),
+        ("https://example.com/a/./b/../c", "https://example.com/a/c"),
+        ("https://example.com/a/%2E%2E/b", "https://example.com/b"),
+        ("https://example.com/../a", "https://example.com/a"),
+        ("https://example.com/a/b/..", "https://example.com/a/"),
+        ("https://example.com/a/.", "https://example.com/a/"),
+        ("https://example.com//a/", "https://example.com//a/"),
     ],
 )
 def test_normalize_url(raw: str, expected: str) -> None:

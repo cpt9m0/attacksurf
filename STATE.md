@@ -5,7 +5,7 @@
 **Updated:** 2026-10-15 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #8 (asset model)
 
 ## Status
-#8 implemented; PR #47 open. Third Codex round (on `347da8e`) fixed; waiting for CI + the
+#8 implemented; PR #47 open. Fourth Codex round (on `d3ce7a5`) fixed; waiting for CI + the
 next Codex review (wait for it before merging), then squash-merge. #1–#7 merged.
 
 ## Last task
@@ -17,7 +17,7 @@ next Codex review (wait for it before merging), then squash-merge. #1–#7 merge
 - `services/assets.py`: `record_asset`, `record_relation` (`INSERT … ON CONFLICT`, parent fixed
   at first sighting, promotion to `user` detaches, endpoints locked `FOR KEY SHARE` →
   `AssetNotFound`; building blocks, no commit)
-- Tests: 347 with DB (99%)
+- Tests: 361 with DB (99%)
 
 ## Next step
 After #8 merges: #9 (Scan, Job, Finding, Evidence with fingerprint + lifecycle, rule catalog,

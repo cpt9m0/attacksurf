@@ -15,7 +15,9 @@ _DEFAULT_PORTS = {"http": 80, "https": 443}
 # Anything a browser would percent-encode or strip; never valid inside a stored URL value.
 _UNSAFE_URL_CHARS = re.compile(r"[\x00-\x20\x7f]")
 _PERCENT_ENCODED = re.compile(r"%([0-9A-Fa-f]{2})")
-_NON_ASCII = re.compile(r"[^\x00-\x7f]")
+# Characters RFC 3986 doesn't allow in a path or query (incl. non-ASCII and a "%" that
+# doesn't start an escape); they get UTF-8 percent-encoded, as browsers do.
+_NOT_URI_CHAR = re.compile(r"%(?![0-9A-Fa-f]{2})|[^A-Za-z0-9\-._~!$&'()*+,;=:@/?%]")
 _UNRESERVED = frozenset(string.ascii_letters + string.digits + "-._~")
 
 
@@ -73,14 +75,15 @@ def normalize_hostname(raw: str) -> str:
     """Lowercase ASCII (punycode) hostname without trailing dot, e.g. `xn--bcher-kva.example`."""
     # No str.lower() first: UTS46 does the case mapping, and Python's context-sensitive
     # lowercasing differs from it (a word-final capital sigma becomes final, not small, sigma).
-    name = raw.strip().removesuffix(".")
-    if not name:
+    name = raw.strip()
+    if not name.removesuffix("."):
         raise InvalidAssetValue("Enter a domain name.")
-    if _is_ip(name):
+    if _is_ip(name.removesuffix(".")):
         raise InvalidAssetValue(f"{name!r} is an IP address, not a domain.")
     try:
         # UTS46 mapping + IDNA2008; stdlib "idna" codec is IDNA2003 and mishandles e.g. "ß".
-        ascii_name = idna.encode(name, uts46=True).decode("ascii")
+        # The root dot is dropped only after mapping: UTS46 also maps e.g. "。" to ".".
+        ascii_name = idna.encode(name, uts46=True).decode("ascii").removesuffix(".")
     except idna.IDNAError as exc:
         raise InvalidAssetValue(f"{raw.strip()!r} is not a valid domain name.") from exc
     labels = ascii_name.split(".")
@@ -136,12 +139,13 @@ def normalize_url(raw: str) -> str:
     if port is not None and port != _DEFAULT_PORTS[scheme]:
         host = f"{host}:{port}"
     try:
-        path = _normalize_percent_encoding(parts.path)
+        path = _remove_dot_segments(_normalize_percent_encoding(parts.path))
         query = _normalize_percent_encoding(parts.query)
     except UnicodeEncodeError as exc:  # lone surrogates
         raise InvalidAssetValue("The URL is malformed.") from exc
-    url = f"{scheme}://{host}{path or '/'}"
-    if query:
+    url = f"{scheme}://{host}{path}"
+    # An empty query ("/?") is a distinct URI from no query ("/"), but urlsplit drops the "?".
+    if query or "?" in value.partition("#")[0]:
         url = f"{url}?{query}"
     if len(url) > MAX_URL_LENGTH:
         raise InvalidAssetValue(f"URLs can be at most {MAX_URL_LENGTH} characters.")
@@ -161,11 +165,11 @@ def _normalize_url_host(netloc: str, hostname: str) -> str:
 
 
 def _normalize_percent_encoding(component: str) -> str:
-    """RFC 3986 6.2.2 (+ RFC 3987 3.1 for IRIs): UTF-8 percent-encode non-ASCII, decode
+    """RFC 3986 6.2.2 (+ RFC 3987 3.1 for IRIs): percent-encode what isn't allowed, decode
     unreserved characters, uppercase the hex of everything else.
 
-    Otherwise `/%7Ealice` and `/~alice` (or `/café` and `/caf%C3%A9`) would be two assets
-    for the same resource.
+    Otherwise `/%7Ealice` and `/~alice` (or `/café` and `/caf%C3%A9`, `/a|b` and `/a%7Cb`)
+    would be two assets for the same resource.
     """
 
     def encode(match: re.Match[str]) -> str:
@@ -175,7 +179,22 @@ def _normalize_percent_encoding(component: str) -> str:
         char = chr(int(match.group(1), 16))
         return char if char in _UNRESERVED else f"%{match.group(1).upper()}"
 
-    return _PERCENT_ENCODED.sub(canonical, _NON_ASCII.sub(encode, component))
+    return _PERCENT_ENCODED.sub(canonical, _NOT_URI_CHAR.sub(encode, component))
+
+
+def _remove_dot_segments(path: str) -> str:
+    """RFC 3986 5.2.4 for an absolute path: `/a/./b/../c` -> `/a/c`. Empty path -> `/`."""
+    segments = path.split("/")[1:]
+    output: list[str] = []
+    for segment in segments:
+        if segment == "..":
+            if output:
+                output.pop()
+        elif segment != ".":
+            output.append(segment)
+    if segments and segments[-1] in {".", ".."}:
+        output.append("")  # "/a/b/.." -> "/a/", not "/a"
+    return "/" + "/".join(output)
 
 
 def _is_ipv6(value: str) -> bool:
