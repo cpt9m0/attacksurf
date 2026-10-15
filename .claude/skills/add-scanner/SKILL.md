@@ -17,10 +17,15 @@ Read `docs/architecture.md` (scan pipeline section) first.
 - Never exploit, brute force, or claim resources (e.g. takeover checks only *detect*).
 
 ## Steps
-1. **Rules first:** add rule entries to the rule catalog for the scanner's target type:
-   - `rule_id`: dotted, `<target>.<area>.<issue>` e.g. `dns.email.dmarc_missing`
-   - default severity (`info|low|medium|high|critical`), title, description, remediation,
-     references (RFCs, vendor docs)
+1. **Rules first:** add `Rule` entries to the catalog in `src/attacksurf/domain/rules/<target>.py`
+   and list them in `_ALL_RULES` (`domain/rules/__init__.py`):
+   - `id`: dotted, `<target>.<area>.<issue>` e.g. `dns.email.dmarc_missing`
+   - `default_severity` (`info|low|medium|high|critical`), `title`, `description`,
+     `remediation` (`$name` placeholders, filled by `render_remediation`), `references`
+     (RFCs, vendor docs)
+   - Findings carry a `location` when one rule can fire several times on one asset (e.g. the
+     DKIM selector); it feeds `domain.findings.finding_fingerprint`, so it must not contain
+     anything that changes between scans (TTLs, record order, timestamps).
 2. **Plugin:** `src/attacksurf/scanners/<target>/<name>.py`
    - Implement the `Scanner` protocol, decorate with `@register_scanner`.
    - Set `asset_types`, `queue` (`passive` / `active` / `analysis`), `requires_verification`, timeout.

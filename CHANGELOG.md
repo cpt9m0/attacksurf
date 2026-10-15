@@ -11,6 +11,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   audit write fails, absolute session lifetime enforced server-side
 
 ### Added
+- Scan results model (migration `0004`): `scans` and `jobs` (status, trigger, timings,
+  stats), `findings` unique by `(org_id, fingerprint)` with severity, confidence, status
+  lifecycle and AI triage slot, and `evidence`; stable versioned finding fingerprints and an
+  in-code rule catalog (`domain.rules`)
 - Asset model: `assets` (domain, subdomain, IP, URL; repo/binary reserved) with per-type value
   normalization (IDNA2008 punycode, canonical IPs, credential-free http(s) URLs with
   RFC 3986/3987 normalization) and `asset_relations` graph (migration `0003`); same-org links
