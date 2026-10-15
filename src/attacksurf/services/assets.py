@@ -1,13 +1,18 @@
-"""Recording assets and their relations (used by the scan pipeline and asset management)."""
+"""Recording assets and their relations (used by the scan pipeline and asset management).
 
+These are building blocks: they don't commit; the use case that calls them commits once.
+"""
+
+from collections.abc import Collection
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import case, func
+from sqlalchemy import case, func, null
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from attacksurf.domain.assets import (
+    AssetNotFound,
     AssetSource,
     AssetType,
     InvalidAssetValue,
@@ -16,6 +21,7 @@ from attacksurf.domain.assets import (
 )
 from attacksurf.domain.ids import uuid7
 from attacksurf.infra.db.models import Asset, AssetRelation
+from attacksurf.infra.db.tenancy import scoped
 
 
 def record_asset(
@@ -31,9 +37,15 @@ def record_asset(
     """Insert the asset or, if the org already has it, mark it seen again. Doesn't commit.
 
     One atomic `INSERT ... ON CONFLICT`, so concurrent scans can't create duplicates.
-    Re-seeing an asset never downgrades `source=user` and keeps its first parent.
-    Raises `InvalidAssetValue` / `UnsupportedAssetType` for values that can't be normalized.
+    Re-seeing an asset never downgrades `source=user` and keeps its first parent; a user
+    adding a discovered asset detaches it, since user-added assets are roots.
+    Raises `InvalidAssetValue` / `UnsupportedAssetType` for values that can't be normalized
+    and `AssetNotFound` if `parent_id` isn't one of the org's assets.
     """
+    if parent_id is not None:
+        if source == AssetSource.USER:
+            raise ValueError("User-added assets are roots; only discovered assets have a parent.")
+        _lock_existing_assets(session, org_id, {parent_id})
     seen = seen_at or datetime.now(UTC)
     stmt = insert(Asset).values(
         id=uuid7(),
@@ -46,17 +58,19 @@ def record_asset(
         last_seen=seen,
     )
     new = stmt.excluded
+    # Only a sighting after the scan that found it gone reactivates it; delayed older results don't.
+    reactivate = Asset.deactivated_at.is_(None) | (new.last_seen > Asset.deactivated_at)
     stmt = stmt.on_conflict_do_update(
         index_elements=[Asset.org_id, Asset.type, Asset.value],
         set_={
             # greatest/least: results processed out of order never move the window backwards.
             "last_seen": func.greatest(Asset.last_seen, new.last_seen),
             "first_seen": func.least(Asset.first_seen, new.first_seen),
-            # A stale sighting (older than what's stored) must not resurrect an asset that
-            # newer results marked inactive.
-            "is_active": case((new.last_seen >= Asset.last_seen, True), else_=Asset.is_active),
+            "is_active": reactivate,
+            "deactivated_at": case((reactivate, null()), else_=Asset.deactivated_at),
             "source": case((Asset.source == AssetSource.USER, Asset.source), else_=new.source),
-            "parent_id": func.coalesce(Asset.parent_id, new.parent_id),
+            # Never re-parented after insert, so the parent graph stays acyclic.
+            "parent_id": case((new.source == AssetSource.USER, null()), else_=Asset.parent_id),
             "updated_at": func.now(),
         },
     )
@@ -74,9 +88,13 @@ def record_relation(
     *,
     seen_at: datetime | None = None,
 ) -> AssetRelation:
-    """Insert the edge or mark it seen again. Doesn't commit. Both assets must be the org's."""
+    """Insert the edge or mark it seen again. Doesn't commit.
+
+    Raises `AssetNotFound` unless both endpoints are the org's assets.
+    """
     if from_asset_id == to_asset_id:
         raise InvalidAssetValue("An asset can't be related to itself.")
+    _lock_existing_assets(session, org_id, {from_asset_id, to_asset_id})
     seen = seen_at or datetime.now(UTC)
     stmt = insert(AssetRelation).values(
         id=uuid7(),
@@ -103,3 +121,16 @@ def record_relation(
     return session.scalars(
         stmt.returning(AssetRelation), execution_options={"populate_existing": True}
     ).one()
+
+
+def _lock_existing_assets(session: Session, org_id: UUID, ids: Collection[UUID]) -> None:
+    """Raise `AssetNotFound` unless all `ids` are the org's assets.
+
+    FOR KEY SHARE keeps them from being deleted until the transaction ends, so the insert that
+    references them can't fail on its foreign key (and abort the caller's transaction) instead.
+    """
+    found = session.scalars(
+        scoped(Asset, org_id).where(Asset.id.in_(ids)).with_for_update(key_share=True)
+    ).all()
+    if len(found) != len(ids):
+        raise AssetNotFound("Asset not found.")

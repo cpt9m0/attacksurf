@@ -81,6 +81,9 @@ def test_normalize_ip_rejects_invalid(raw: str) -> None:
         ("http://192.0.2.1/", "http://192.0.2.1/"),
         ("http://[2001:DB8::1]:8443", "http://[2001:db8::1]:8443/"),
         ("https://www.example.com./login", "https://www.example.com/login"),
+        ("https://example.com/%7Ealice", "https://example.com/~alice"),
+        ("https://example.com/a%2fb?q=%41%3d", "https://example.com/a%2Fb?q=A%3D"),
+        ("https://example.com/100%25", "https://example.com/100%25"),
     ],
 )
 def test_normalize_url(raw: str, expected: str) -> None:

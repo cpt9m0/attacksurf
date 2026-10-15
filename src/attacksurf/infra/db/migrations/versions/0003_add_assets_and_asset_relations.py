@@ -61,6 +61,7 @@ def upgrade() -> None:
         sa.Column("first_seen", sa.DateTime(timezone=True), nullable=False),
         sa.Column("last_seen", sa.DateTime(timezone=True), nullable=False),
         sa.Column("is_active", sa.Boolean(), server_default=sa.text("true"), nullable=False),
+        sa.Column("deactivated_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "details",
             postgresql.JSONB(astext_type=sa.Text()),
@@ -83,6 +84,15 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "type IN ('domain', 'subdomain', 'ip', 'url', 'repo', 'binary')",
             name=op.f("ck_assets_asset_type"),
+        ),
+        sa.CheckConstraint(
+            "is_active = (deactivated_at IS NULL)", name=op.f("ck_assets_deactivated_at_matches")
+        ),
+        sa.CheckConstraint(
+            "parent_id IS NULL OR parent_id <> id", name=op.f("ck_assets_no_self_parent")
+        ),
+        sa.CheckConstraint(
+            "source = 'discovered' OR parent_id IS NULL", name=op.f("ck_assets_user_asset_is_root")
         ),
         sa.ForeignKeyConstraint(
             ["org_id"], ["orgs.id"], name=op.f("fk_assets_org_id_orgs"), ondelete="CASCADE"

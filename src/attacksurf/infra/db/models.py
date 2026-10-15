@@ -83,6 +83,9 @@ class Asset(TenantScoped, Timestamps, Base):
     """Anything an org owns or we discovered for it: domain, subdomain, IP, URL (repo/binary later).
 
     `value` is always the normalized form (`domain.assets.normalize_asset_value`).
+    `parent_id` is the asset a discovered one was found under and is fixed at the first
+    sighting (so the parent graph can't form cycles). Deleting a parent deletes what was
+    discovered under it; user-added assets are always roots, so they never go with it.
     """
 
     __tablename__ = "assets"
@@ -93,6 +96,9 @@ class Asset(TenantScoped, Timestamps, Base):
         ForeignKeyConstraint(
             ["parent_id", "org_id"], ["assets.id", "assets.org_id"], ondelete="CASCADE"
         ),
+        CheckConstraint("parent_id IS NULL OR parent_id <> id", name="no_self_parent"),
+        CheckConstraint("source = 'discovered' OR parent_id IS NULL", name="user_asset_is_root"),
+        CheckConstraint("is_active = (deactivated_at IS NULL)", name="deactivated_at_matches"),
     )
 
     type: Mapped[AssetType] = mapped_column(_str_enum(AssetType, "asset_type"))
@@ -105,6 +111,8 @@ class Asset(TenantScoped, Timestamps, Base):
     first_seen: Mapped[datetime]
     last_seen: Mapped[datetime]
     is_active: Mapped[bool] = mapped_column(server_default=text("true"))
+    # When a scan found it gone; only sightings after this reactivate it.
+    deactivated_at: Mapped[datetime | None]
     details: Mapped[dict[str, Any]] = mapped_column(
         JSONB, default=dict, server_default=text("'{}'::jsonb")
     )

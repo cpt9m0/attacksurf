@@ -14,12 +14,18 @@ from attacksurf.infra.db.tenancy import scoped
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
 
 
-def _asset(org: Org, value: str, asset_type: AssetType = AssetType.DOMAIN, **kw: object) -> Asset:
+def _asset(
+    org: Org,
+    value: str,
+    asset_type: AssetType = AssetType.DOMAIN,
+    source: AssetSource = AssetSource.USER,
+    **kw: object,
+) -> Asset:
     return Asset(
         org_id=org.id,
         type=asset_type,
         value=value,
-        source=AssetSource.USER,
+        source=source,
         first_seen=NOW,
         last_seen=NOW,
         **kw,
@@ -49,7 +55,13 @@ def test_parent_must_belong_to_the_same_org(db_session: Session, two_orgs: tuple
     db_session.flush()
 
     db_session.add(
-        _asset(acme, "www.globex.example", AssetType.SUBDOMAIN, parent_id=foreign_root.id)
+        _asset(
+            acme,
+            "www.globex.example",
+            AssetType.SUBDOMAIN,
+            AssetSource.DISCOVERED,
+            parent_id=foreign_root.id,
+        )
     )
 
     with pytest.raises(IntegrityError):
@@ -120,7 +132,9 @@ def test_deleting_root_cascades_to_children_and_relations(
     root = _asset(acme, "example.com")
     db_session.add(root)
     db_session.flush()
-    child = _asset(acme, "www.example.com", AssetType.SUBDOMAIN, parent_id=root.id)
+    child = _asset(
+        acme, "www.example.com", AssetType.SUBDOMAIN, AssetSource.DISCOVERED, parent_id=root.id
+    )
     ip = _asset(acme, "192.0.2.1", AssetType.IP)
     db_session.add_all([child, ip])
     db_session.flush()
@@ -141,6 +155,28 @@ def test_deleting_root_cascades_to_children_and_relations(
 
     assert [a.value for a in db_session.scalars(select(Asset))] == ["192.0.2.1"]
     assert db_session.scalars(select(AssetRelation)).all() == []
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        "UPDATE assets SET parent_id = id, source = 'discovered'",
+        "UPDATE assets SET parent_id = (SELECT id FROM assets WHERE value = 'example.org')"
+        " WHERE value = 'example.com'",
+        "UPDATE assets SET is_active = false",
+        "UPDATE assets SET deactivated_at = now()",
+    ],
+    ids=["self_parent", "user_asset_with_parent", "inactive_without_time", "time_while_active"],
+)
+def test_parent_and_status_invariants_are_enforced(
+    db_session: Session, two_orgs: tuple[Org, Org], update: str
+) -> None:
+    acme, _ = two_orgs
+    db_session.add_all([_asset(acme, "example.com"), _asset(acme, "example.org")])
+    db_session.flush()
+
+    with pytest.raises(IntegrityError):
+        db_session.execute(text(update))
 
 
 def test_assets_are_tenant_isolated(db_session: Session, two_orgs: tuple[Org, Org]) -> None:

@@ -5,22 +5,24 @@
 **Updated:** 2026-10-15 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #8 (asset model)
 
 ## Status
-#8 implemented; PR open, waiting for CI + Codex review (wait for it before merging), then
-squash-merge. #1–#7 merged (auth review fixes: PR #46).
+#8 implemented; PR #47 open. Second Codex round (on `735ab86`) fixed; waiting for CI + the
+next Codex review (wait for it before merging), then squash-merge. #1–#7 merged.
 
 ## Last task
 - `domain/assets.py`: `AssetType`, `AssetSource`, `RelationKind`, `normalize_asset_value`
-  (hostname via `idna` UTS46/IDNA2008, IP via `ipaddress`, URL http(s) only, no credentials;
-  repo/binary → `UnsupportedAssetType`)
-- Models `Asset`, `AssetRelation` (migration `0003`); `_str_enum` helper (VARCHAR + CHECK);
-  composite FKs `(x_id, org_id) → assets(id, org_id)` for parent and relation endpoints
-- `services/assets.py`: `record_asset`, `record_relation` (`INSERT … ON CONFLICT`, `seen_at`,
-  greatest/least window, keep `source=user` and first parent, no commit)
-- Tests: 323 with DB (99%), 252 without (86%)
+  (hostname via `idna` UTS46/IDNA2008, IP via `ipaddress`, URL http(s) only, no credentials,
+  RFC 3986 percent-encoding; repo/binary → `UnsupportedAssetType`), `AssetNotFound`
+- Models `Asset` (incl. `deactivated_at`; CHECKs: no self-parent, user assets are roots,
+  `is_active` ⇔ `deactivated_at IS NULL`), `AssetRelation` (migration `0003`)
+- `services/assets.py`: `record_asset`, `record_relation` (`INSERT … ON CONFLICT`, parent fixed
+  at first sighting, promotion to `user` detaches, endpoints locked `FOR KEY SHARE` →
+  `AssetNotFound`; building blocks, no commit)
+- Tests: 341 with DB (99%)
 
 ## Next step
 After #8 merges: #9 (Scan, Job, Finding, Evidence with fingerprint + lifecycle, rule catalog,
-migration `0004`).
+migration `0004`). The scan that marks assets gone must set `is_active=False` and
+`deactivated_at` together.
 
 ## Open threads
 - `.env.example` needs: `ALLOW_SIGNUP=true`, `SESSION_LIFETIME_HOURS=12`, `PROXY_COUNT=0`

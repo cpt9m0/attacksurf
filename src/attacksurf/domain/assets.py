@@ -2,6 +2,7 @@
 
 import ipaddress
 import re
+import string
 from enum import StrEnum
 from urllib.parse import urlsplit
 
@@ -13,6 +14,8 @@ _LABEL = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 # Anything a browser would percent-encode or strip; never valid inside a stored URL value.
 _UNSAFE_URL_CHARS = re.compile(r"[\x00-\x20\x7f]")
+_PERCENT_ENCODED = re.compile(r"%([0-9A-Fa-f]{2})")
+_UNRESERVED = frozenset(string.ascii_letters + string.digits + "-._~")
 
 
 class AssetType(StrEnum):
@@ -46,6 +49,10 @@ class InvalidAssetValue(AssetError):
 
 class UnsupportedAssetType(AssetError):
     """The type exists in the model but has no normalization yet (repo, binary)."""
+
+
+class AssetNotFound(AssetError):
+    """The asset doesn't exist or belongs to another org (never says which)."""
 
 
 def normalize_asset_value(asset_type: AssetType, raw: str) -> str:
@@ -126,9 +133,9 @@ def normalize_url(raw: str) -> str:
     host = _normalize_url_host(parts.netloc, parts.hostname)
     if port is not None and port != _DEFAULT_PORTS[scheme]:
         host = f"{host}:{port}"
-    url = f"{scheme}://{host}{parts.path or '/'}"
+    url = f"{scheme}://{host}{_normalize_percent_encoding(parts.path) or '/'}"
     if parts.query:
-        url = f"{url}?{parts.query}"
+        url = f"{url}?{_normalize_percent_encoding(parts.query)}"
     if len(url) > MAX_URL_LENGTH:
         raise InvalidAssetValue(f"URLs can be at most {MAX_URL_LENGTH} characters.")
     return url
@@ -144,6 +151,19 @@ def _normalize_url_host(netloc: str, hostname: str) -> str:
     if _is_ip(hostname):
         return normalize_ip(hostname)
     return normalize_hostname(hostname)
+
+
+def _normalize_percent_encoding(component: str) -> str:
+    """RFC 3986 6.2.2: decode unreserved characters, uppercase the hex of everything else.
+
+    Otherwise `/%7Ealice` and `/~alice` would be two assets for the same resource.
+    """
+
+    def canonical(match: re.Match[str]) -> str:
+        char = chr(int(match.group(1), 16))
+        return char if char in _UNRESERVED else f"%{match.group(1).upper()}"
+
+    return _PERCENT_ENCODED.sub(canonical, component)
 
 
 def _is_ipv6(value: str) -> bool:
