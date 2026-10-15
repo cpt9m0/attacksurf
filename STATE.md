@@ -2,31 +2,37 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-10-15 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #9 (scan results model)
+**Updated:** 2026-10-15 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #10 (Celery)
 
 ## Status
-#9 implemented; PR open, waiting for CI + Codex review (wait for it before merging), then
-squash-merge. #1–#8 merged.
+#10 implemented; PR open, waiting for CI + Codex review (wait for it before merging), then
+squash-merge. #1–#9 merged.
 
 ## Last task
-- `domain/scans.py`: `ScanStatus`, `ScanTrigger`, `JobStatus` (`skipped` = not run)
-- `domain/findings.py`: `Severity`, `Confidence`, `FindingStatus`, `EvidenceKind`,
-  `finding_fingerprint(org_id, asset_id, rule_id, location="")` (SHA-256 of
-  `["v1", org, asset, rule, location]`; pinned by a test)
-- `domain/rules/`: `Rule` (remediation via `string.Template`), `build_catalog`, `get_rule`,
-  `UnknownRule`; catalog empty until scanners land (#15–#19 add `domain/rules/dns.py`)
-- Models `Scan`, `Job`, `Finding`, `Evidence` (migration `0004`): composite same-org FKs;
-  finding scan refs and job asset use `ON DELETE SET NULL (col)` (Postgres 15+); CHECKs for
-  `fixed_at` ⇔ `fixed`, `last_seen >= first_seen`, finish ≥ start, `attempts >= 0`
-- Tests: 420 with DB (99%)
+- `infra/queue.py`: `create_celery(settings)` (Redis broker/backend from `REDIS_URL`, JSON,
+  `acks_late`, prefetch 1, results ignored), queues `passive`/`ai` (+ reserved
+  `active`/`analysis`), task-name prefix = queue (`queue_for`), `CeleryTaskQueue`
+- `domain/jobs.py`: `TaskQueue` port, `TransientJobError`, `JobNotFound`
+- `services/jobs.py`: `create_job` (commit, then enqueue; broker error → job failed),
+  `mark_job_running` (None for finished jobs = skip redelivery), `mark_job_completed`,
+  `mark_job_failed`, `mark_job_retrying`; row-locked, DB-clock timestamps, cancellation wins
+- `workers/`: `app.py` (entrypoint, `TASK_MODULES`, logging + per-process DB pool signals),
+  `runtime.py`, `base.py` (`TrackedTask`), `tasks/system.py` (`passive.ping`)
+- `web/queue.py`: `get_task_queue()`; compose runs `worker-passive`, `worker-ai`, `beat`;
+  CI compose job + `make test-worker` run `tests/e2e/test_worker.py` against a real worker
+- Deps: `celery[redis]` 5.6.3, dev `celery-types`; young transitive releases pinned back in
+  `[tool.uv] constraint-dependencies`
+- Tests: 459 with DB (99%) + 1 real-worker test (`make test-worker`, CI)
 
 ## Next step
-After #9 merges: #10 (Celery app, queues, `TrackedTask` updating `Job` rows, compose workers).
+After #10 merges: #11 (scanner plugin framework, `ScanOutput`, registry/profiles, pipeline
+chain/chord, persistence of assets/findings by fingerprint, fake scanner).
 
 ## Open threads
 - `.env.example` needs: `ALLOW_SIGNUP=true`, `SESSION_LIFETIME_HOURS=12`, `PROXY_COUNT=0`
   (prod behind Caddy: `PROXY_COUNT=1`)
-- Later issues own: upserting findings by fingerprint + evidence size cap (#11), status
+- Later issues own: upserting findings by fingerprint + evidence size cap (#11), a sweeper for
+  jobs left `running` by a hard time-limit kill (#21), status
   transitions/regressions/`Scan.stats` (#20), one active scan per root + severity ordering
   (#21/#22); the scan that marks assets gone sets `is_active=False` and `deactivated_at` together
 - Optional (user): ruleset on `main` requiring PRs + checks `lint`, `test (3.12)`,

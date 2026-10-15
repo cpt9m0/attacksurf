@@ -74,7 +74,9 @@ sync" rule below is satisfied**. Do not claim done without running them.
 1. **Layers point inward:** `web`/`workers` → `services` → `domain`. `infra` and `scanners`
    implement interfaces the services use. `domain` imports nothing from the other layers.
 2. **Thin routes, thin tasks:** routes and Celery tasks parse input, call one service, render or
-   return. Business logic lives in `services/`.
+   return. Business logic lives in `services/`. Tasks: `@app.task(base=TrackedTask,
+   name="<queue>.<task>")` taking `org_id` + `job_id` kwargs; enqueue via `services.jobs.create_job`
+   (commits, then sends through the `TaskQueue` port); raise `TransientJobError` to retry.
 3. **Never run scans or LLM calls inside a web request.** Enqueue a Celery task, return a job ID,
    poll with HTMX.
 4. **Every tenant-owned row has `org_id`** (model inherits `TenantScoped`), and every query is
