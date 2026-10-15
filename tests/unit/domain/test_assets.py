@@ -57,6 +57,7 @@ def test_normalize_hostname_rejects_invalid(raw: str) -> None:
         ("192.0.2.1", "192.0.2.1"),
         (" 2001:DB8:0:0:0:0:0:1 ", "2001:db8::1"),
         ("::ffff:192.0.2.1", "::ffff:192.0.2.1"),
+        ("::ffff:c000:201", "::ffff:192.0.2.1"),  # same address, hex form: one canonical value
     ],
 )
 def test_normalize_ip(raw: str, expected: str) -> None:

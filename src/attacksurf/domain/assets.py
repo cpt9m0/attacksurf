@@ -91,9 +91,14 @@ def normalize_ip(raw: str) -> str:
     if "%" in value:
         raise InvalidAssetValue("IPv6 zone IDs are not allowed.")
     try:
-        return str(ipaddress.ip_address(value))
+        address = ipaddress.ip_address(value)
     except ValueError as exc:
         raise InvalidAssetValue(f"{value!r} is not a valid IP address.") from exc
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        # Python 3.13 prints these dotted, 3.12 in hex: pin one form so stored values (and
+        # uniqueness) don't depend on the interpreter version.
+        return f"::ffff:{address.ipv4_mapped}"
+    return str(address)
 
 
 def normalize_url(raw: str) -> str:
