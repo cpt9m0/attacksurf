@@ -15,7 +15,8 @@ description: Change the database schema safely (SQLAlchemy model + Alembic migra
    `src/attacksurf/infra/db/migrations/versions/`).
 3. **Review the generated file by hand.** Autogenerate misses or gets wrong:
    enum changes, server defaults, renames (shows as drop + add: rewrite as rename),
-   data migrations, constraint names.
+   data migrations, constraint names. Enum columns (`_str_enum`) come out with two CHECKs
+   each: set `create_constraint=False` in `sa.Enum` and keep only the convention-named `ck_*`.
 4. **Safety:**
    - Never drop or rename a column with data in the same release that stops using it.
    - Adding a NOT NULL column to an existing table needs a server default or a backfill step.
