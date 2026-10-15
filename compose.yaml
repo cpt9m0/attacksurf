@@ -56,17 +56,34 @@ services:
       timeout: 3s
       retries: 10
 
-  # Celery placeholders until #10 (not started by default: `docker compose --profile workers up`).
-  worker-passive: &placeholder
+  # Celery (ADR 0003). No hot reload: `docker compose restart worker-passive` after code changes.
+  worker-passive: &worker
     <<: *app
-    profiles: ["workers"]
+    command:
+      ["celery", "-A", "attacksurf.workers.app", "worker", "-Q", "passive", "-c", "4",
+       "-n", "passive@%h", "--loglevel", "INFO"]
+    healthcheck: &worker-health
+      test: ["CMD-SHELL", "celery -A attacksurf.workers.app inspect ping -d passive@$$HOSTNAME --timeout 5"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+  worker-ai:
+    <<: *worker
+    command:
+      ["celery", "-A", "attacksurf.workers.app", "worker", "-Q", "ai", "-c", "2",
+       "-n", "ai@%h", "--loglevel", "INFO"]
+    healthcheck:
+      <<: *worker-health
+      test: ["CMD-SHELL", "celery -A attacksurf.workers.app inspect ping -d ai@$$HOSTNAME --timeout 5"]
+  beat:
+    <<: *app
+    # Schedule state in /tmp: the image's /app is not meant to be written at runtime.
+    command:
+      ["celery", "-A", "attacksurf.workers.app", "beat", "--loglevel", "INFO",
+       "--schedule", "/tmp/celerybeat-schedule"]
     healthcheck:
       disable: true
-    command: ["sh", "-c", "echo 'worker placeholder: Celery arrives in #10'; exec sleep infinity"]
-  worker-ai:
-    <<: *placeholder
-  beat:
-    <<: *placeholder
 
 volumes:
   pgdata:

@@ -12,5 +12,5 @@ def create_db_engine(settings: Settings) -> Engine:
 
 
 def create_session_factory(engine: Engine) -> sessionmaker[Session]:
-    """Celery tasks use `with factory.begin() as session:` (commit on success, else rollback)."""
+    """Web: one session per request (`web.db`); workers: `with factory() as session:`."""
     return sessionmaker(engine, expire_on_commit=False)
