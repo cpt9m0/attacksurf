@@ -32,6 +32,7 @@ their security data. Both make it a target. These rules apply to all code.
 | Session theft / fixation | signed cookie session cleared on login and logout; `HttpOnly`, `SameSite=Lax`, prod: `Secure` + `__Host-` prefix; absolute lifetime `SESSION_LIFETIME_HOURS` (12h) counted from login and checked server-side (`auth_at` in the session), so activity can't extend it; cookie not re-issued on every request; no remember-me. Known limit: a stolen cookie stays valid until it expires (server-side revocation later) |
 | Open redirect | login `next` accepts only same-site paths (`/…`, not `//…`, no scheme/host) |
 | Unauthenticated access | default deny (the login gate runs before CSRF validation, so anonymous writes get 401/redirect): every route needs login except `/login`, `/signup`, `/healthz`, static; HTML redirects to login, HTMX gets `HX-Redirect`, `/api/` gets 401 JSON; roles via `@require_role` |
+| Job errors and worker logs | `Job.error` and worker logs keep the exception type and stack frames; messages only for our own `JobError`s (third-party messages can embed tokens, authenticated URLs or response bodies); Celery's tracer logger is silenced in workers |
 | Supply chain | locked deps (`uv.lock`), only releases at least two weeks old (transitive ones pinned via `[tool.uv] constraint-dependencies`), `pip-audit` in CI, pinned MCP server versions, minimal dependencies |
 
 ## Accounts

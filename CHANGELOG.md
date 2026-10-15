@@ -11,6 +11,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   audit write fails, absolute session lifetime enforced server-side
 
 ### Added
+- Celery workers (ADR 0003): `passive` / `ai` queues routed by task-name prefix, `TrackedTask`
+  base recording each task's lifecycle on its `Job` (attempts, retries with backoff for
+  `TransientJobError`, time limits, redelivery-safe), `services.jobs.create_job` (commit, then
+  enqueue), compose `worker-passive`, `worker-ai`, `beat`, and a real-worker check in CI
+  (`make test-worker`)
 - Scan results model (migration `0004`): `scans` and `jobs` (status, trigger, timings,
   stats), `findings` unique by `(org_id, fingerprint)` with severity, confidence, status
   lifecycle and AI triage slot, and `evidence`; stable versioned finding fingerprints and an

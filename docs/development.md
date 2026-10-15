@@ -25,10 +25,13 @@ uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 | `web` | 5000 | Flask debug server, hot reload (`./src` is bind-mounted) |
 | `postgres` | 5432 | PostgreSQL 16, user/password/db `attacksurf` (dev only), volume `pgdata` |
 | `redis` | 6379 | Redis 7 |
-| `worker-passive`, `worker-ai`, `beat` | n/a | placeholders until #10; start with `docker compose --profile workers up` |
+| `worker-passive`, `worker-ai` | n/a | Celery workers for the `passive` / `ai` queues; no hot reload: `docker compose restart worker-passive worker-ai` after code changes |
+| `beat` | n/a | Celery beat (schedules arrive with #27) |
 
 Inside compose, `DATABASE_URL` / `REDIS_URL` point at the service names; your `.env` supplies the
-rest. Targets: `make up | down | logs | ps | build | shell | test | check | migrate | revision`
+rest. Targets: `make up | down | logs | ps | build | shell | test | test-worker | check | migrate |
+revision`. `make test-worker` (after `make up` + `make migrate`) enqueues a real job and waits for
+a worker to complete it; CI's compose job runs the same test
 (`make` lists them). `make down` keeps the database; `docker compose down -v` wipes it.
 
 ## Database and migrations
@@ -110,7 +113,10 @@ pyright and pytest versions come from `uv.lock`.
 - Coverage must stay **≥ 80%** (`--cov-fail-under=80` in `pyproject.toml`; CI enforces it).
 - No live network in tests: use fixtures under `tests/fixtures/` and fake providers.
 - Layout: `tests/unit/`, `tests/integration/` (DB, Celery; fixtures `db_engine`, `db_session`),
-  `tests/e2e/` (Playwright).
+  `tests/e2e/` (against the running stack, e.g. `make test-worker`; Playwright later).
+- Celery tasks in tests: `task.apply(kwargs=...)` runs them in-process; patch
+  `workers.runtime.session_factory` to share the test's connection
+  (`tests/integration/workers/test_tracked_task.py`).
 
 ## Working with AI agents
 

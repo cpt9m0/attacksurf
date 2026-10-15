@@ -1,6 +1,6 @@
 # 0008. Plain SQLAlchemy 2.0 + Alembic, UUIDv7 keys
 
-- Status: accepted
+- Status: accepted; worker sessions superseded by 0010
 - Date: 2026-10-08
 
 ## Context
@@ -13,8 +13,8 @@ well in Postgres.
 - Plain SQLAlchemy 2.0 (typed `Mapped[...]`) in `infra/db`; plain Alembic with migrations inside
   the package (`attacksurf.infra.db:migrations`) so they ship in the image. The URL comes from
   `Settings`, never from `alembic.ini`.
-- The web layer gets one session per request (`web/db.py`); Celery tasks use
-  `sessionmaker.begin()`. Services commit explicitly.
+- The web layer gets one session per request (`web/db.py`); Celery tasks: see ADR 0010.
+  Services commit explicitly.
 - Constraint naming convention on the metadata; sequential revision IDs (`0001`, `0002`, ...).
 - Primary keys are UUIDv7 (time-ordered, random tail), generated in Python (`domain/ids.py`)
   until the stdlib's `uuid.uuid7` (3.14) is our minimum.
