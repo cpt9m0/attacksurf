@@ -103,6 +103,8 @@ def test_normalize_ip_rejects_invalid(raw: str) -> None:
         ("https://example.com/a/b/..", "https://example.com/a/"),
         ("https://example.com/a/.", "https://example.com/a/"),
         ("https://example.com//a/", "https://example.com//a/"),
+        ("https://\u039f\u03a3-a.example:8443", "https://xn---a-ibcq.example:8443/"),
+        ("https://\u03bf\u03c3-a.example:8443", "https://xn---a-ibcq.example:8443/"),
     ],
 )
 def test_normalize_url(raw: str, expected: str) -> None:

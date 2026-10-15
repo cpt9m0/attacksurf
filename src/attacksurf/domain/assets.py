@@ -159,9 +159,12 @@ def _normalize_url_host(netloc: str, hostname: str) -> str:
         if not _is_ipv6(hostname):
             raise InvalidAssetValue("Only IPv6 addresses may appear in brackets.")
         return f"[{normalize_ip(hostname)}]"
-    if _is_ip(hostname):
-        return normalize_ip(hostname)
-    return normalize_hostname(hostname)
+    # From netloc, not `hostname`: urlsplit lowercases that with str.lower(), which UTS46
+    # would map differently (see normalize_hostname). Credentials were rejected already.
+    host = netloc.partition(":")[0]
+    if _is_ip(host):
+        return normalize_ip(host)
+    return normalize_hostname(host)
 
 
 def _normalize_percent_encoding(component: str) -> str:
