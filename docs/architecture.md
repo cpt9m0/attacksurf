@@ -129,14 +129,20 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   name; `web.queue.get_task_queue()` in web). `services.jobs.create_job` commits the `Job` row
   first, then enqueues; a broker error marks the job `failed`.
 - Tasks (`workers/tasks/`, registered in `workers.app.TASK_MODULES`) use
-  `base=workers.base.TrackedTask` and take `org_id` + `job_id` keyword arguments. It records
-  the lifecycle on the `Job` (`queued → running → completed / failed`, back to `queued` on
-  retry; `attempts`, `celery_task_id`, DB-clock timings, capped `error`), skips redelivered
-  tasks of finished jobs, never overwrites a cancellation, binds `org_id`/`job_id`/`scan_id`
-  to the log context, retries only `domain.jobs.TransientJobError` (exponential backoff with
-  jitter, 3 retries) and has a 300 s soft time limit. Workers don't build a Flask app.
-- Known gap: a hard time-limit kill (330 s) leaves the job `running`; a stale-job sweeper
-  comes with scan cancellation (#21).
+  `base=workers.base.TrackedTask` and take `org_id` + `job_id` keyword arguments (ADR 0010).
+  It records the lifecycle on the `Job` (`queued → running → completed / failed`, back to
+  `queued` on retry; `attempts`, `celery_task_id`, DB-clock timings), skips redelivered tasks of
+  finished jobs, never overwrites a cancellation, binds `org_id`/`job_id`/`scan_id` to the log
+  context, retries `domain.jobs.TransientJobError` and database outages (exponential backoff with
+  jitter, 3 retries), caps deliveries at `max_retries + 2` (a task that keeps killing its
+  worker ends `failed`), and has a 300 s soft time limit. Workers don't build a Flask app and
+  read `Settings` lazily.
+- Error data: `Job.error` and logs hold the exception type (plus the message only for our own
+  `domain.jobs.JobError`s) and stack frames, never raw third-party exception messages; Celery's
+  tracer logger is silenced in workers.
+- Known gaps, closed by the stale-job sweeper (#21): a web process killed between commit and
+  enqueue leaves a `queued` job without a message, and a hard time-limit kill (330 s) leaves one
+  `running`.
 
 ## Frontend
 

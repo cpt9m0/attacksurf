@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from celery.signals import setup_logging, worker_process_init
 
@@ -22,7 +24,19 @@ def test_forked_worker_process_gets_its_own_session_factory() -> None:
 def test_worker_logging_goes_through_infra_logging(monkeypatch: pytest.MonkeyPatch) -> None:
     configured = []
     monkeypatch.setattr(worker_app, "configure_logging", configured.append)
+    tracer = logging.getLogger("celery.app.trace")
+    monkeypatch.setattr(tracer, "level", tracer.level)  # the handler changes it
 
     setup_logging.send(sender=None)
 
     assert configured == [runtime.settings()]
+
+
+def test_celery_tracer_does_not_log_raw_exceptions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(worker_app, "configure_logging", lambda _settings: None)
+    tracer = logging.getLogger("celery.app.trace")
+    monkeypatch.setattr(tracer, "level", tracer.level)  # restore after the test
+
+    setup_logging.send(sender=None)
+
+    assert not tracer.isEnabledFor(logging.ERROR)

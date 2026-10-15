@@ -6,7 +6,9 @@ from uuid import uuid4
 
 import pytest
 import structlog
+import structlog.testing
 from billiard.exceptions import SoftTimeLimitExceeded
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from attacksurf.domain.jobs import TransientJobError
@@ -15,7 +17,7 @@ from attacksurf.infra.db.models import Job, Scan
 from attacksurf.services import jobs
 from attacksurf.workers import runtime
 from attacksurf.workers.app import app
-from attacksurf.workers.base import TrackedTask
+from attacksurf.workers.base import EXTRA_DELIVERIES, TrackedTask
 from attacksurf.workers.tasks.system import ping
 from tests.fakes import FakeQueue
 from tests.integration.factories import make_scan
@@ -95,7 +97,7 @@ def test_failing_task_fails_its_job(db_session: Session, job: Job) -> None:
 
     assert result.failed()
     stored = _reload(db_session, job)
-    assert (stored.status, stored.error) == (JobStatus.FAILED, "RuntimeError: parser bug")
+    assert (stored.status, stored.error) == (JobStatus.FAILED, "RuntimeError")
 
 
 def test_soft_time_limit_fails_the_job(db_session: Session, job: Job) -> None:
@@ -161,3 +163,54 @@ def test_task_without_valid_job_ids_fails_without_running(kwargs: dict[str, str]
     assert result.failed()
     assert isinstance(result.result, (ValueError, TypeError))
     assert calls == []
+
+
+SECRET = "s3cret-token"
+
+
+@app.task(base=TrackedTask, name="passive.test_leaky")
+def leaky(*, org_id: str, job_id: str) -> None:
+    url = f"https://user:{SECRET}@api.example/"  # built at runtime, like a real client error
+    raise RuntimeError(f"GET {url} failed")
+
+
+def test_database_blip_when_starting_is_retried(
+    db_session: Session, job: Job, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = jobs.mark_job_running
+    failures = iter([True])
+
+    def flaky_start(*args: Any, **kwargs: Any) -> Job | None:
+        if next(failures, False):
+            raise OperationalError("SELECT", {}, Exception("server closed the connection"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(jobs, "mark_job_running", flaky_start)
+
+    result = flaky.apply(kwargs={**_ids(job), "failures": 0})
+
+    assert result.successful()
+    assert calls == ["run"]
+    assert _reload(db_session, job).status == JobStatus.COMPLETED
+
+
+def test_task_that_keeps_crashing_its_worker_is_given_up(db_session: Session, job: Job) -> None:
+    job.attempts = (flaky.max_retries or 0) + EXTRA_DELIVERIES  # e.g. redelivered after OOM kills
+    db_session.commit()
+
+    result = flaky.apply(kwargs={**_ids(job), "failures": 0})
+
+    assert result.successful()  # acked: no further redelivery
+    assert calls == []
+    assert _reload(db_session, job).status == JobStatus.FAILED
+
+
+def test_failure_logs_and_stores_no_exception_message(db_session: Session, job: Job) -> None:
+    with structlog.testing.capture_logs() as logs:
+        leaky.apply(kwargs=_ids(job))
+
+    assert SECRET not in repr(logs)
+    failed = next(entry for entry in logs if entry["event"] == "job failed")
+    assert failed["error"] == "RuntimeError"
+    assert "leaky" in failed["stack"]  # frames are kept for debugging
+    assert _reload(db_session, job).error == "RuntimeError"

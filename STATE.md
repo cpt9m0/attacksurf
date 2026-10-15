@@ -22,7 +22,11 @@ squash-merge. #1–#9 merged.
   CI compose job + `make test-worker` run `tests/e2e/test_worker.py` against a real worker
 - Deps: `celery[redis]` 5.6.3, dev `celery-types`; young transitive releases pinned back in
   `[tool.uv] constraint-dependencies`
-- Tests: 460 with DB (99%) + 1 real-worker test (`make test-worker`, CI)
+- Codex round 1 fixed: retry on DB outage at job start/finish, empty task suffix rejected,
+  lazy worker settings (hermetic tests), ADR 0010 (worker sessions, lifecycle, errors),
+  sanitized `Job.error`/logs (`JobError` messages only, Celery tracer silenced), fresh row
+  after lock, delivery cap `max_retries + 2` against poison tasks
+- Tests: 475 with DB (99%) + 1 real-worker test (`make test-worker`, CI)
 
 ## Next step
 After #10 merges: #11 (scanner plugin framework, `ScanOutput`, registry/profiles, pipeline
@@ -32,7 +36,8 @@ chain/chord, persistence of assets/findings by fingerprint, fake scanner).
 - `.env.example` needs: `ALLOW_SIGNUP=true`, `SESSION_LIFETIME_HOURS=12`, `PROXY_COUNT=0`
   (prod behind Caddy: `PROXY_COUNT=1`)
 - Later issues own: upserting findings by fingerprint + evidence size cap (#11), a sweeper for
-  jobs left `running` by a hard time-limit kill (#21), status
+  jobs left `running` (hard time-limit kill) or `queued` without a message (web died between
+  commit and enqueue) (#21), status
   transitions/regressions/`Scan.stats` (#20), one active scan per root + severity ordering
   (#21/#22); the scan that marks assets gone sets `is_active=False` and `deactivated_at` together
 - Optional (user): ruleset on `main` requiring PRs + checks `lint`, `test (3.12)`,

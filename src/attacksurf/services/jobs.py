@@ -10,7 +10,7 @@ import structlog
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from attacksurf.domain.jobs import JobNotFound, TaskQueue
+from attacksurf.domain.jobs import JobError, JobNotFound, TaskQueue
 from attacksurf.domain.scans import JobStatus
 from attacksurf.infra.db.models import Job
 from attacksurf.infra.db.tenancy import scoped
@@ -57,12 +57,28 @@ def create_job(
 
 
 def mark_job_running(
-    session: Session, org_id: UUID, job_id: UUID, celery_task_id: str | None
+    session: Session,
+    org_id: UUID,
+    job_id: UUID,
+    celery_task_id: str | None,
+    *,
+    max_attempts: int,
 ) -> Job | None:
-    """Start an attempt. None if the job already finished (a redelivered task): skip it."""
+    """Start an attempt. None means don't run: the job already finished (redelivered task) or
+    used up its attempts (then it is marked failed).
+
+    `attempts` counts deliveries in the database, so it also bounds the redelivery loop of a
+    task that keeps killing its worker (OOM, native crash), which Celery's retry count misses.
+    """
     job = _lock(session, org_id, job_id)
     if job.status in FINISHED:
         session.rollback()
+        return None
+    if job.attempts >= max_attempts:
+        job.status = JobStatus.FAILED
+        job.error = f"Gave up after {job.attempts} attempts (the worker may have crashed)."
+        job.finished_at = func.now()
+        session.commit()
         return None
     # RUNNING again is fine: the worker died mid-task and the broker redelivered it.
     job.status = JobStatus.RUNNING
@@ -93,10 +109,14 @@ def mark_job_retrying(session: Session, org_id: UUID, job_id: UUID, exc: BaseExc
 
 
 def describe_error(exc: BaseException) -> str:
-    """Exception type + message, capped. Full tracebacks go to the logs only."""
-    message = str(exc)
-    text = f"{type(exc).__name__}: {message}" if message else type(exc).__name__
-    return text[:MAX_ERROR_LENGTH]
+    """What is safe to store and show: the type, plus the message only for our own `JobError`s.
+
+    Other exceptions (SDKs, HTTP clients, drivers) can carry tokens, authenticated URLs or
+    response bodies in their message, so only their type name is kept.
+    """
+    name = type(exc).__name__
+    message = str(exc) if isinstance(exc, JobError) else ""
+    return (f"{name}: {message}" if message else name)[:MAX_ERROR_LENGTH]
 
 
 def _finish(
@@ -116,8 +136,11 @@ def _finish(
 
 def _lock(session: Session, org_id: UUID, job_id: UUID) -> Job:
     # Row lock: a redelivered duplicate can't interleave its state changes with ours.
+    # populate_existing: a copy already in this session must not hide a status another
+    # transaction committed (e.g. a cancellation).
     job = session.scalars(
-        scoped(Job, org_id).where(Job.id == job_id).with_for_update()
+        scoped(Job, org_id).where(Job.id == job_id).with_for_update(),
+        execution_options={"populate_existing": True},
     ).one_or_none()
     if job is None:
         raise JobNotFound(str(job_id))

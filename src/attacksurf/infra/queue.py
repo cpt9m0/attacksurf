@@ -16,8 +16,8 @@ RESERVED_QUEUES = ("active", "analysis")  # no workers yet: active checks, sandb
 
 
 def queue_for(task_name: str) -> str:
-    queue = task_name.partition(".")[0]
-    if queue not in QUEUES + RESERVED_QUEUES:
+    queue, dot, task = task_name.partition(".")
+    if not dot or not task or queue not in QUEUES + RESERVED_QUEUES:
         # Fail loudly: a task routed to a queue nobody consumes would wait forever.
         raise ValueError(f"task {task_name!r} must be named <queue>.<task>, queue in {QUEUES}")
     return queue
@@ -27,35 +27,42 @@ def _route(name: str, *_args: Any, **_kwargs: Any) -> dict[str, str]:
     return {"queue": queue_for(name)}
 
 
-def create_celery(settings: Settings, include: tuple[str, ...] = ()) -> Celery:
+def create_celery(settings: Settings) -> Celery:
+    app = Celery("attacksurf")
+    app.conf.update(celery_config(settings))
+    return app
+
+
+def celery_config(settings: Settings) -> dict[str, Any]:
     redis_url = settings.redis_url.get_secret_value()
-    app = Celery("attacksurf", broker=redis_url, backend=redis_url, include=list(include))
-    app.conf.update(
-        accept_content=["json"],
-        task_serializer="json",
-        result_serializer="json",
+    return {
+        "broker_url": redis_url,
+        "result_backend": redis_url,
+        "accept_content": ["json"],
+        "task_serializer": "json",
+        "result_serializer": "json",
         # Explicit exchange + routing key per queue: otherwise kombu binds every queue to the
         # default queue's exchange and key, and an `ai` worker would also consume `passive`.
-        task_queues=[
+        "task_queues": [
             Queue(name, Exchange(name, type="direct"), routing_key=name)
             for name in QUEUES + RESERVED_QUEUES
         ],
-        task_routes=(_route,),
-        task_create_missing_queues=False,
-        task_default_queue="passive",  # Celery needs one; `_route` still picks every queue
-        # Ack after the task ran, and requeue if the worker dies mid-task: tasks are idempotent.
-        task_acks_late=True,
-        task_reject_on_worker_lost=True,
-        worker_prefetch_multiplier=1,
+        "task_routes": (_route,),
+        "task_create_missing_queues": False,
+        "task_default_queue": "passive",  # Celery needs one; `_route` still picks every queue
+        # Ack after the task ran, and requeue if the worker dies mid-task: tasks are idempotent,
+        # and TrackedTask caps deliveries via `Job.attempts` so a poison task cannot loop.
+        "task_acks_late": True,
+        "task_reject_on_worker_lost": True,
+        "worker_prefetch_multiplier": 1,
         # The `Job` row is the source of truth; tasks that feed a chord turn results back on.
-        task_ignore_result=True,
-        result_expires=24 * 3600,
-        worker_hijack_root_logger=False,  # logging comes from infra.logging
-        broker_connection_retry_on_startup=True,
-        enable_utc=True,
-        timezone="UTC",
-    )
-    return app
+        "task_ignore_result": True,
+        "result_expires": 24 * 3600,
+        "worker_hijack_root_logger": False,  # logging comes from infra.logging
+        "broker_connection_retry_on_startup": True,
+        "enable_utc": True,
+        "timezone": "UTC",
+    }
 
 
 class CeleryTaskQueue:

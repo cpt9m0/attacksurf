@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from typing import Any
 from uuid import UUID
 
@@ -12,6 +15,7 @@ from attacksurf.infra.queue import (
     create_celery,
     queue_for,
 )
+from attacksurf.workers import runtime
 from attacksurf.workers.app import app as worker_app
 from tests.helpers import make_settings
 
@@ -27,7 +31,9 @@ def test_task_name_prefix_is_the_queue(task_name: str, queue: str) -> None:
     assert queue_for(task_name) == queue
 
 
-@pytest.mark.parametrize("task_name", ["ping", "celery.ping", "Passive.ping", ""])
+@pytest.mark.parametrize(
+    "task_name", ["ping", "celery.ping", "Passive.ping", "", "passive", "passive.", ".ping"]
+)
 def test_unroutable_task_names_are_rejected(task_name: str) -> None:
     with pytest.raises(ValueError, match=r"<queue>\.<task>"):
         queue_for(task_name)
@@ -91,3 +97,20 @@ def test_task_queue_refuses_unroutable_tasks() -> None:
 
     with pytest.raises(ValueError, match=r"<queue>\.<task>"):
         queue.enqueue("ping", org_id=ORG, job_id=JOB)
+
+
+def test_worker_app_reads_settings_lazily_from_runtime() -> None:
+    # tests/conftest.py swaps runtime.settings for hermetic ones before any config access.
+    assert worker_app.conf.broker_url == runtime.settings().redis_url.get_secret_value()
+
+
+def test_importing_worker_tasks_does_not_read_the_environment() -> None:
+    # ENV=prod without SECRET_KEY makes Settings() fail: importing must not construct it.
+    code = "import attacksurf.workers.app, attacksurf.workers.tasks.system"
+    env = {**os.environ, "ENV": "prod", "SECRET_KEY": ""}
+
+    result = subprocess.run(  # noqa: S603 (fixed argv)
+        [sys.executable, "-c", code], env=env, check=False, capture_output=True
+    )
+
+    assert result.returncode == 0, result.stderr.decode()
