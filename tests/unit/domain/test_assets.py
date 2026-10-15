@@ -21,6 +21,9 @@ from attacksurf.domain.assets import (
         ("straße.de", "xn--strae-oqa.de"),  # IDNA2008, not IDNA2003's "strasse.de"
         ("xn--bcher-kva.example", "xn--bcher-kva.example"),
         ("a-b.c-d.example", "a-b.c-d.example"),
+        # UTS46 maps capital sigma to small sigma; Python's lower() gives final sigma here.
+        ("\u039f\u03a3-a.example", "xn---a-ibcq.example"),
+        ("\u03bf\u03c3-a.example", "xn---a-ibcq.example"),
     ],
 )
 def test_normalize_hostname(raw: str, expected: str) -> None:
@@ -84,6 +87,8 @@ def test_normalize_ip_rejects_invalid(raw: str) -> None:
         ("https://example.com/%7Ealice", "https://example.com/~alice"),
         ("https://example.com/a%2fb?q=%41%3d", "https://example.com/a%2Fb?q=A%3D"),
         ("https://example.com/100%25", "https://example.com/100%25"),
+        ("https://example.com/café?q=é", "https://example.com/caf%C3%A9?q=%C3%A9"),
+        ("https://example.com/caf%c3%a9", "https://example.com/caf%C3%A9"),
     ],
 )
 def test_normalize_url(raw: str, expected: str) -> None:
@@ -108,6 +113,7 @@ def test_normalize_url(raw: str, expected: str) -> None:
         "http://[127.0.0.1]/",  # IPv4 in brackets: urlsplit raises
         "http://[v1.foo]/",  # IPvFuture: would otherwise become the domain "v1.foo"
         "http://[::1]:x/",
+        "https://example.com/\ud800",  # lone surrogate: not encodable as UTF-8
     ],
 )
 def test_normalize_url_rejects_invalid(raw: str) -> None:

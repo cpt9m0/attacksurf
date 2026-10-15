@@ -44,7 +44,9 @@ def record_asset(
     """
     if parent_id is not None:
         if source == AssetSource.USER:
-            raise ValueError("User-added assets are roots; only discovered assets have a parent.")
+            raise InvalidAssetValue(
+                "User-added assets are roots; only discovered assets have a parent."
+            )
         _lock_existing_assets(session, org_id, {parent_id})
     seen = seen_at or datetime.now(UTC)
     stmt = insert(Asset).values(
@@ -126,11 +128,13 @@ def record_relation(
 def _lock_existing_assets(session: Session, org_id: UUID, ids: Collection[UUID]) -> None:
     """Raise `AssetNotFound` unless all `ids` are the org's assets.
 
-    FOR KEY SHARE keeps them from being deleted until the transaction ends, so the insert that
-    references them can't fail on its foreign key (and abort the caller's transaction) instead.
+    FOR KEY SHARE (needs `read=True` too, else it's FOR NO KEY UPDATE) keeps them from being
+    deleted until the transaction ends, so the insert that references them can't fail on its
+    foreign key (and abort the caller's transaction) instead. Key-share locks don't conflict
+    with each other, so concurrent scans touching the same assets don't serialize.
     """
     found = session.scalars(
-        scoped(Asset, org_id).where(Asset.id.in_(ids)).with_for_update(key_share=True)
+        scoped(Asset, org_id).where(Asset.id.in_(ids)).with_for_update(read=True, key_share=True)
     ).all()
     if len(found) != len(ids):
         raise AssetNotFound("Asset not found.")

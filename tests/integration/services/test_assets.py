@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, event, func, select
 from sqlalchemy.orm import Session
 
 from attacksurf.domain.assets import (
@@ -196,7 +196,7 @@ def test_user_assets_cannot_have_a_parent(db_session: Session, org: Org) -> None
         db_session, org.id, AssetType.DOMAIN, "example.com", source=AssetSource.USER
     )
 
-    with pytest.raises(ValueError, match="roots"):
+    with pytest.raises(InvalidAssetValue, match="roots"):
         record_asset(
             db_session,
             org.id,
@@ -335,3 +335,29 @@ def test_relation_to_another_orgs_asset_raises_not_found(db_session: Session, or
         record_relation(db_session, org.id, host.id, foreign_ip.id, RelationKind.RESOLVES_TO)
 
     assert _count(db_session, AssetRelation) == 0  # session still usable
+
+
+def test_existence_check_takes_a_key_share_lock(db_session: Session, org: Org) -> None:
+    root = record_asset(
+        db_session, org.id, AssetType.DOMAIN, "example.com", source=AssetSource.USER
+    )
+    statements: list[str] = []
+
+    @event.listens_for(db_session.bind, "before_cursor_execute")
+    def capture(_conn, _cursor, statement, *_args) -> None:
+        statements.append(statement)
+
+    try:
+        record_asset(
+            db_session,
+            org.id,
+            AssetType.SUBDOMAIN,
+            "www.example.com",
+            source=AssetSource.DISCOVERED,
+            parent_id=root.id,
+        )
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", capture)
+
+    # FOR KEY SHARE locks don't conflict with each other, so concurrent scans don't serialize.
+    assert any(s.rstrip().endswith("FOR KEY SHARE") for s in statements)

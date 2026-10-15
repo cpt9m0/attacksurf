@@ -13,7 +13,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ### Added
 - Asset model: `assets` (domain, subdomain, IP, URL; repo/binary reserved) with per-type value
   normalization (IDNA2008 punycode, canonical IPs, credential-free http(s) URLs with
-  RFC 3986 percent-encoding) and `asset_relations` graph (migration `0003`); same-org links
+  RFC 3986/3987 percent-encoding) and `asset_relations` graph (migration `0003`); same-org links
   enforced by composite foreign keys; atomic upserts that update `last_seen` instead of
   duplicating; `deactivated_at` so delayed results can't reactivate an asset; user-added
   assets are roots, so deleting a parent only removes what was discovered under it

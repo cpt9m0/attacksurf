@@ -15,6 +15,7 @@ _DEFAULT_PORTS = {"http": 80, "https": 443}
 # Anything a browser would percent-encode or strip; never valid inside a stored URL value.
 _UNSAFE_URL_CHARS = re.compile(r"[\x00-\x20\x7f]")
 _PERCENT_ENCODED = re.compile(r"%([0-9A-Fa-f]{2})")
+_NON_ASCII = re.compile(r"[^\x00-\x7f]")
 _UNRESERVED = frozenset(string.ascii_letters + string.digits + "-._~")
 
 
@@ -70,8 +71,9 @@ def normalize_asset_value(asset_type: AssetType, raw: str) -> str:
 
 def normalize_hostname(raw: str) -> str:
     """Lowercase ASCII (punycode) hostname without trailing dot, e.g. `xn--bcher-kva.example`."""
-    name = raw.strip().lower()
-    name = name.removesuffix(".")
+    # No str.lower() first: UTS46 does the case mapping, and Python's context-sensitive
+    # lowercasing differs from it (a word-final capital sigma becomes final, not small, sigma).
+    name = raw.strip().removesuffix(".")
     if not name:
         raise InvalidAssetValue("Enter a domain name.")
     if _is_ip(name):
@@ -133,9 +135,14 @@ def normalize_url(raw: str) -> str:
     host = _normalize_url_host(parts.netloc, parts.hostname)
     if port is not None and port != _DEFAULT_PORTS[scheme]:
         host = f"{host}:{port}"
-    url = f"{scheme}://{host}{_normalize_percent_encoding(parts.path) or '/'}"
-    if parts.query:
-        url = f"{url}?{_normalize_percent_encoding(parts.query)}"
+    try:
+        path = _normalize_percent_encoding(parts.path)
+        query = _normalize_percent_encoding(parts.query)
+    except UnicodeEncodeError as exc:  # lone surrogates
+        raise InvalidAssetValue("The URL is malformed.") from exc
+    url = f"{scheme}://{host}{path or '/'}"
+    if query:
+        url = f"{url}?{query}"
     if len(url) > MAX_URL_LENGTH:
         raise InvalidAssetValue(f"URLs can be at most {MAX_URL_LENGTH} characters.")
     return url
@@ -154,16 +161,21 @@ def _normalize_url_host(netloc: str, hostname: str) -> str:
 
 
 def _normalize_percent_encoding(component: str) -> str:
-    """RFC 3986 6.2.2: decode unreserved characters, uppercase the hex of everything else.
+    """RFC 3986 6.2.2 (+ RFC 3987 3.1 for IRIs): UTF-8 percent-encode non-ASCII, decode
+    unreserved characters, uppercase the hex of everything else.
 
-    Otherwise `/%7Ealice` and `/~alice` would be two assets for the same resource.
+    Otherwise `/%7Ealice` and `/~alice` (or `/café` and `/caf%C3%A9`) would be two assets
+    for the same resource.
     """
+
+    def encode(match: re.Match[str]) -> str:
+        return "".join(f"%{byte:02X}" for byte in match.group().encode())
 
     def canonical(match: re.Match[str]) -> str:
         char = chr(int(match.group(1), 16))
         return char if char in _UNRESERVED else f"%{match.group(1).upper()}"
 
-    return _PERCENT_ENCODED.sub(canonical, component)
+    return _PERCENT_ENCODED.sub(canonical, _NON_ASCII.sub(encode, component))
 
 
 def _is_ipv6(value: str) -> bool:
