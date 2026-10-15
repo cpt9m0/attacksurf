@@ -11,6 +11,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   audit write fails, absolute session lifetime enforced server-side
 
 ### Added
+- Asset model: `assets` (domain, subdomain, IP, URL; repo/binary reserved) with per-type value
+  normalization (IDNA2008 punycode, canonical IPs, credential-free http(s) URLs) and
+  `asset_relations` graph (migration `0003`); same-org links enforced by composite foreign
+  keys; atomic upserts that update `last_seen` instead of duplicating
 - Authentication: signup, login, logout (Flask-Login), login required everywhere by default,
   `@require_role`, CSRF on all POSTs incl. HTMX, rate-limited login/signup (Flask-Limiter),
   hardened session cookies, audit of login/logout/failed logins; settings `ALLOW_SIGNUP`,

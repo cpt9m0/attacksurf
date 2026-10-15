@@ -79,8 +79,8 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 | Entity | Purpose |
 |---|---|
 | `Org`, `User`, `Membership` | tenancy; every tenant row carries `org_id`. `User` is global (one login, many orgs); `Membership.role` is `owner`/`admin`/`member` (`domain.accounts.has_role`) |
-| `Asset` | polymorphic target: `domain`, `subdomain`, `ip`, `url`, `repo`, `binary` |
-| `AssetRelation` | graph edges: `subdomain_of`, `cname_to`, `resolves_to`, `serves` |
+| `Asset` | polymorphic target: `domain`, `subdomain`, `ip`, `url`, `repo`, `binary`; one row per `(org_id, type, value)` with `value` normalized by `domain.assets.normalize_asset_value` (hostnames lowercase punycode via `idna`, canonical IPs, `http(s)` URLs without credentials/fragment/default port; repo/binary not yet); `source` user/discovered, `parent_id` = root asset, `first_seen`/`last_seen`, `is_active`, `tags`, `details` |
+| `AssetRelation` | graph edges: `subdomain_of`, `cname_to`, `resolves_to`, `serves`; unique per `(org_id, from, to, kind)`, no self-edges. `services.assets.record_asset` / `record_relation` upsert atomically (`INSERT … ON CONFLICT`): re-seen rows extend `last_seen`, never downgrade `source=user`, and don't commit (the pipeline commits once) |
 | `Verification` | proof of ownership (DNS TXT); gates active checks |
 | `Scan`, `Job` | one scan run, and its per-stage/per-scanner jobs |
 | `Finding`, `Evidence` | normalized result, unique by `(org_id, fingerprint)`; lifecycle `open → fixed / accepted_risk / false_positive`, with regression detection |
