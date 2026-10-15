@@ -2,22 +2,27 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-10-14 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #7 follow-up
+**Updated:** 2026-10-15 · **Branch:** `claude/blissful-goldberg-rd3suo` · **Issue:** #8 (asset model)
 
 ## Status
-#1–#7 merged (#7 = PR #45). Follow-up PR open with fixes for Codex's late review of #45.
+#8 implemented; PR #47 open. Fifth Codex round (on `96efb3b`) fixed; waiting for CI + the
+next Codex review (wait for it before merging), then squash-merge. #1–#7 merged.
 
 ## Last task
-- `register_user(..., first_user_only=True)`: advisory lock + recheck (`SignupClosed`)
-- `authenticate` rejects passwords > `MAX_PASSWORD_LENGTH` before hashing
-- `web/auth.py`: login gate registered before `CSRFProtect`; logout clears the session even if the
-  audit write fails; absolute session lifetime via `session["auth_at"]` checked in the user
-  loader (+ `SESSION_REFRESH_EACH_REQUEST=False`)
-- Tests: 252 with DB (99%), 198 without (84%)
+- `domain/assets.py`: `AssetType`, `AssetSource`, `RelationKind`, `normalize_asset_value`
+  (hostname via `idna` UTS46/IDNA2008, IP via `ipaddress`, URL http(s) only, no credentials,
+  RFC 3986 percent-encoding; repo/binary → `UnsupportedAssetType`), `AssetNotFound`
+- Models `Asset` (incl. `deactivated_at`; CHECKs: no self-parent, user assets are roots,
+  `is_active` ⇔ `deactivated_at IS NULL`), `AssetRelation` (migration `0003`)
+- `services/assets.py`: `record_asset`, `record_relation` (`INSERT … ON CONFLICT`, parent fixed
+  at first sighting, promotion to `user` detaches, endpoints locked `FOR KEY SHARE` →
+  `AssetNotFound`; building blocks, no commit)
+- Tests: 363 with DB (99%)
 
 ## Next step
-After the follow-up merges: #8 (Asset model + relations graph, value normalization, migration
-`0003`; acceptance: re-upserting a discovered asset updates `last_seen`).
+After #8 merges: #9 (Scan, Job, Finding, Evidence with fingerprint + lifecycle, rule catalog,
+migration `0004`). The scan that marks assets gone must set `is_active=False` and
+`deactivated_at` together.
 
 ## Open threads
 - `.env.example` needs: `ALLOW_SIGNUP=true`, `SESSION_LIFETIME_HOURS=12`, `PROXY_COUNT=0`

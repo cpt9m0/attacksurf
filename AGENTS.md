@@ -113,7 +113,8 @@ sync" rule below is satisfied**. Do not claim done without running them.
 - Errors: raise domain-specific exceptions in services; map them to HTTP responses in `web/`.
 - Services: verb functions taking a `Session` (plus adapters via `domain` protocols); they
   commit once per use case and record security-relevant actions with `services.audit.audit()`
-  in the same transaction. See `services/accounts.py`.
+  in the same transaction. See `services/accounts.py`. Building blocks that use cases compose
+  (e.g. `services.assets.record_asset`) don't commit and say so in their docstring.
 - Comments explain *why*, not *what*. No commented-out code.
 - DB schema changes only through Alembic migrations (see `.claude/skills/db-migration`).
 

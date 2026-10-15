@@ -1,15 +1,38 @@
 """ORM models. Alembic autogenerate sees every model imported here."""
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Enum, ForeignKey, String, UniqueConstraint, func, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import (
+    CheckConstraint,
+    Enum,
+    ForeignKey,
+    ForeignKeyConstraint,
+    String,
+    UniqueConstraint,
+    func,
+    text,
+)
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from attacksurf.domain.accounts import Role
+from attacksurf.domain.assets import MAX_URL_LENGTH, AssetSource, AssetType, RelationKind
 from attacksurf.infra.db.base import Base, TenantScoped, Timestamps, UUIDPrimaryKey
+
+
+def _str_enum(enum_cls: type[StrEnum], name: str) -> Enum:
+    """VARCHAR + CHECK, not a native enum: a new value is a constraint change, not ALTER TYPE."""
+    return Enum(
+        enum_cls,
+        name=name,
+        native_enum=False,
+        create_constraint=True,
+        length=20,
+        values_callable=lambda members: [m.value for m in members],
+    )
 
 
 class Org(UUIDPrimaryKey, Timestamps, Base):
@@ -38,17 +61,7 @@ class Membership(TenantScoped, Timestamps, Base):
     __table_args__ = (UniqueConstraint("org_id", "user_id"),)
 
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    # VARCHAR + CHECK, not a native enum: a new role is a constraint change, not ALTER TYPE.
-    role: Mapped[Role] = mapped_column(
-        Enum(
-            Role,
-            name="role",
-            native_enum=False,
-            create_constraint=True,
-            length=20,
-            values_callable=lambda roles: [r.value for r in roles],
-        )
-    )
+    role: Mapped[Role] = mapped_column(_str_enum(Role, "role"))
 
 
 class AuditLog(TenantScoped, Base):
@@ -64,3 +77,64 @@ class AuditLog(TenantScoped, Base):
         JSONB, default=dict, server_default=text("'{}'::jsonb")
     )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class Asset(TenantScoped, Timestamps, Base):
+    """Anything an org owns or we discovered for it: domain, subdomain, IP, URL (repo/binary later).
+
+    `value` is always the normalized form (`domain.assets.normalize_asset_value`).
+    `parent_id` is the asset a discovered one was found under and is fixed at the first
+    sighting (so the parent graph can't form cycles). Deleting a parent deletes what was
+    discovered under it; user-added assets are always roots, so they never go with it.
+    """
+
+    __tablename__ = "assets"
+    __table_args__ = (
+        UniqueConstraint("org_id", "type", "value"),
+        # Target of the composite FKs below: links can only point at assets of the same org.
+        UniqueConstraint("id", "org_id"),
+        ForeignKeyConstraint(
+            ["parent_id", "org_id"], ["assets.id", "assets.org_id"], ondelete="CASCADE"
+        ),
+        CheckConstraint("parent_id IS NULL OR parent_id <> id", name="no_self_parent"),
+        CheckConstraint("source = 'discovered' OR parent_id IS NULL", name="user_asset_is_root"),
+        CheckConstraint("is_active = (deactivated_at IS NULL)", name="deactivated_at_matches"),
+    )
+
+    type: Mapped[AssetType] = mapped_column(_str_enum(AssetType, "asset_type"))
+    value: Mapped[str] = mapped_column(String(MAX_URL_LENGTH))
+    source: Mapped[AssetSource] = mapped_column(_str_enum(AssetSource, "asset_source"))
+    parent_id: Mapped[UUID | None] = mapped_column(index=True)  # the root asset it was found under
+    tags: Mapped[list[str]] = mapped_column(
+        ARRAY(String(50)), default=list, server_default=text("'{}'")
+    )
+    first_seen: Mapped[datetime]
+    last_seen: Mapped[datetime]
+    is_active: Mapped[bool] = mapped_column(server_default=text("true"))
+    # When a scan found it gone; only sightings after this reactivate it.
+    deactivated_at: Mapped[datetime | None]
+    details: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
+
+
+class AssetRelation(TenantScoped, Base):
+    """Directed edge in the asset graph, e.g. `www.example.com --resolves_to--> 192.0.2.1`."""
+
+    __tablename__ = "asset_relations"
+    __table_args__ = (
+        UniqueConstraint("org_id", "from_asset_id", "to_asset_id", "kind"),
+        ForeignKeyConstraint(
+            ["from_asset_id", "org_id"], ["assets.id", "assets.org_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["to_asset_id", "org_id"], ["assets.id", "assets.org_id"], ondelete="CASCADE"
+        ),
+        CheckConstraint("from_asset_id <> to_asset_id", name="no_self_relation"),
+    )
+
+    from_asset_id: Mapped[UUID]
+    to_asset_id: Mapped[UUID] = mapped_column(index=True)
+    kind: Mapped[RelationKind] = mapped_column(_str_enum(RelationKind, "relation_kind"))
+    first_seen: Mapped[datetime]
+    last_seen: Mapped[datetime]
