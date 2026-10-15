@@ -81,6 +81,26 @@ def test_out_of_order_sighting_never_moves_last_seen_back(db_session: Session, o
     assert (asset.first_seen, asset.last_seen) == (T0 - timedelta(hours=1), T0)
 
 
+def test_stale_sighting_does_not_reactivate_asset(db_session: Session, org: Org) -> None:
+    asset = record_asset(
+        db_session, org.id, AssetType.IP, "192.0.2.1", source=AssetSource.DISCOVERED, seen_at=T0
+    )
+    asset.is_active = False  # a newer scan found it gone
+    db_session.flush()
+
+    late = record_asset(
+        db_session,
+        org.id,
+        AssetType.IP,
+        "192.0.2.1",
+        source=AssetSource.DISCOVERED,
+        seen_at=T0 - timedelta(hours=1),
+    )
+
+    assert late.is_active is False
+    assert late.last_seen == T0
+
+
 def test_rediscovery_keeps_user_source_and_first_parent(db_session: Session, org: Org) -> None:
     root = record_asset(
         db_session, org.id, AssetType.DOMAIN, "example.com", source=AssetSource.USER

@@ -52,7 +52,9 @@ def record_asset(
             # greatest/least: results processed out of order never move the window backwards.
             "last_seen": func.greatest(Asset.last_seen, new.last_seen),
             "first_seen": func.least(Asset.first_seen, new.first_seen),
-            "is_active": True,
+            # A stale sighting (older than what's stored) must not resurrect an asset that
+            # newer results marked inactive.
+            "is_active": case((new.last_seen >= Asset.last_seen, True), else_=Asset.is_active),
             "source": case((Asset.source == AssetSource.USER, Asset.source), else_=new.source),
             "parent_id": func.coalesce(Asset.parent_id, new.parent_id),
             "updated_at": func.now(),

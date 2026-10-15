@@ -106,7 +106,10 @@ def normalize_url(raw: str) -> str:
     value = raw.strip()
     if _UNSAFE_URL_CHARS.search(value):
         raise InvalidAssetValue("URLs can't contain spaces or control characters.")
-    parts = urlsplit(value)
+    try:
+        parts = urlsplit(value)
+    except ValueError as exc:  # e.g. unbalanced or IPv4-in-brackets hosts: "http://[::1"
+        raise InvalidAssetValue("The URL is malformed.") from exc
     scheme = parts.scheme.lower()
     if scheme not in _DEFAULT_PORTS:
         raise InvalidAssetValue("Only http and https URLs are supported.")
@@ -120,11 +123,7 @@ def normalize_url(raw: str) -> str:
     except ValueError as exc:
         raise InvalidAssetValue("The URL has an invalid port.") from exc
 
-    if _is_ip(parts.hostname):
-        ip = normalize_ip(parts.hostname)
-        host = f"[{ip}]" if ":" in ip else ip
-    else:
-        host = normalize_hostname(parts.hostname)
+    host = _normalize_url_host(parts.netloc, parts.hostname)
     if port is not None and port != _DEFAULT_PORTS[scheme]:
         host = f"{host}:{port}"
     url = f"{scheme}://{host}{parts.path or '/'}"
@@ -133,6 +132,26 @@ def normalize_url(raw: str) -> str:
     if len(url) > MAX_URL_LENGTH:
         raise InvalidAssetValue(f"URLs can be at most {MAX_URL_LENGTH} characters.")
     return url
+
+
+def _normalize_url_host(netloc: str, hostname: str) -> str:
+    if "[" in netloc:
+        # Brackets mean an IPv6 literal. Anything else in them (IPvFuture "[v1.foo]") would
+        # otherwise be stored as the unrelated DNS name "v1.foo".
+        if not _is_ipv6(hostname):
+            raise InvalidAssetValue("Only IPv6 addresses may appear in brackets.")
+        return f"[{normalize_ip(hostname)}]"
+    if _is_ip(hostname):
+        return normalize_ip(hostname)
+    return normalize_hostname(hostname)
+
+
+def _is_ipv6(value: str) -> bool:
+    try:
+        ipaddress.IPv6Address(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _is_ip(value: str) -> bool:

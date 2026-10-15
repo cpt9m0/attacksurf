@@ -101,6 +101,10 @@ def test_normalize_url(raw: str, expected: str) -> None:
         "https://example.com/\x00",
         "https://*.example.com/",
         "https://example.com/" + "a" * MAX_URL_LENGTH,
+        "http://[::1",  # urlsplit itself raises
+        "http://[127.0.0.1]/",  # IPv4 in brackets: urlsplit raises
+        "http://[v1.foo]/",  # IPvFuture: would otherwise become the domain "v1.foo"
+        "http://[::1]:x/",
     ],
 )
 def test_normalize_url_rejects_invalid(raw: str) -> None:
