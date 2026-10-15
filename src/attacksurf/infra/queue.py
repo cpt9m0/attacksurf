@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from celery import Celery
-from kombu import Queue
+from kombu import Exchange, Queue
 
 from attacksurf.config import Settings
 
@@ -34,7 +34,12 @@ def create_celery(settings: Settings, include: tuple[str, ...] = ()) -> Celery:
         accept_content=["json"],
         task_serializer="json",
         result_serializer="json",
-        task_queues=[Queue(name) for name in QUEUES + RESERVED_QUEUES],
+        # Explicit exchange + routing key per queue: otherwise kombu binds every queue to the
+        # default queue's exchange and key, and an `ai` worker would also consume `passive`.
+        task_queues=[
+            Queue(name, Exchange(name, type="direct"), routing_key=name)
+            for name in QUEUES + RESERVED_QUEUES
+        ],
         task_routes=(_route,),
         task_create_missing_queues=False,
         task_default_queue="passive",  # Celery needs one; `_route` still picks every queue

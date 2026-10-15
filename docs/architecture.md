@@ -167,7 +167,8 @@ The `Dockerfile` has two targets: `dev` (dev deps, Flask debug server, source bi
 `compose.yaml` for hot reload) and `prod` (no dev deps, gunicorn, non-root uid 10001). Base and
 service images are pinned by digest and updated by Dependabot. The dev `compose.yaml` runs `web`,
 `postgres`, `redis`, the Celery workers `worker-passive` (`-Q passive -c 4`) and `worker-ai`
-(`-Q ai -c 2`) with `inspect ping` healthchecks, and `beat` (no schedules until #27).
+(`-Q ai -c 2`) with `inspect ping` healthchecks, and `beat` (broker-connection healthcheck; no
+schedules until #27). Each queue has its own exchange and routing key.
 
 ## Decisions
 

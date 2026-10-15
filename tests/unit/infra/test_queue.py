@@ -47,7 +47,17 @@ def test_celery_is_configured_for_reliable_json_tasks() -> None:
     assert app.amqp.default_queue.name in QUEUES
 
 
+def test_each_queue_has_its_own_exchange_and_routing_key() -> None:
+    # Regression: queues without an explicit exchange all bound to the default queue's
+    # exchange and routing key, so the `ai` worker could consume `passive` tasks.
+    queues = worker_app.amqp.queues
+
+    for name in QUEUES + RESERVED_QUEUES:
+        assert (queues[name].exchange.name, queues[name].routing_key) == (name, name)
+
+
 def test_every_registered_task_routes_to_a_known_queue() -> None:
+    worker_app.loader.import_default_modules()  # what a worker does at startup (`include`)
     names = [name for name in worker_app.tasks if not name.startswith("celery.")]
 
     assert "passive.ping" in names

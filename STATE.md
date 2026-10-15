@@ -22,7 +22,7 @@ squash-merge. #1–#9 merged.
   CI compose job + `make test-worker` run `tests/e2e/test_worker.py` against a real worker
 - Deps: `celery[redis]` 5.6.3, dev `celery-types`; young transitive releases pinned back in
   `[tool.uv] constraint-dependencies`
-- Tests: 459 with DB (99%) + 1 real-worker test (`make test-worker`, CI)
+- Tests: 460 with DB (99%) + 1 real-worker test (`make test-worker`, CI)
 
 ## Next step
 After #10 merges: #11 (scanner plugin framework, `ScanOutput`, registry/profiles, pipeline

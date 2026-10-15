@@ -82,8 +82,13 @@ services:
     command:
       ["celery", "-A", "attacksurf.workers.app", "beat", "--loglevel", "INFO",
        "--schedule", "/tmp/celerybeat-schedule"]
+    # `up --wait` needs a healthcheck on every service; beat has no ping, so check its broker.
     healthcheck:
-      disable: true
+      test: ["CMD", "python", "-c", "from attacksurf.workers.app import app; app.connection_for_write().ensure_connection(max_retries=1)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
 
 volumes:
   pgdata:
