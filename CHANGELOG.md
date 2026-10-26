@@ -45,7 +45,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   per-request sessions, Alembic migrations (`make migrate`, `make revision`), minimal `orgs`
   table; DB tests against PostgreSQL in CI and `make test`
 - Docker: multi-stage `Dockerfile` (`dev` with hot reload, `prod` with gunicorn as non-root),
-  `compose.yaml` dev stack (web, PostgreSQL 16, Redis 7, worker/beat placeholders), `Makefile`,
+  `compose.yaml` dev stack (web, PostgreSQL, Redis, worker/beat placeholders), `Makefile`,
   CI `compose` smoke test
 - Layered package layout (`web`, `services`, `domain`, `scanners`, `ai`, `infra`, `workers`) with
   import-linter contracts; app factory with `ui`, `health` (`/healthz`) and `api_v1` blueprints

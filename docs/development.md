@@ -23,7 +23,7 @@ uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 | Service | Host port (localhost only) | Notes |
 |---|---|---|
 | `web` | 5000 | Flask debug server, hot reload (`./src` is bind-mounted) |
-| `postgres` | 5432 | PostgreSQL 16, user/password/db `attacksurf` (dev only), volume `pgdata` |
+| `postgres` | 5432 | PostgreSQL 18, user/password/db `attacksurf` (dev only), volume `pgdata` |
 | `redis` | 6379 | Redis 7 |
 | `worker-passive`, `worker-ai` | n/a | Celery workers for the `passive` / `ai` queues; no hot reload: `docker compose restart worker-passive worker-ai` after code changes |
 | `beat` | n/a | Celery beat (schedules arrive with #27) |
@@ -33,6 +33,10 @@ rest. Targets: `make up | down | logs | ps | build | shell | test | test-worker 
 revision`. `make test-worker` (after `make up` + `make migrate`) enqueues a real job and waits for
 a worker to complete it; CI's compose job runs the same test
 (`make` lists them). `make down` keeps the database; `docker compose down -v` wipes it.
+
+PostgreSQL 18 stores data in a major-version subdirectory of `/var/lib/postgresql` (mounted as
+`pgdata`), so a `pgdata` volume created by PostgreSQL 16 cannot be reused: run
+`docker compose down -v` once to start a fresh one (dev data only; restore from a dump if needed).
 
 ## Database and migrations
 
