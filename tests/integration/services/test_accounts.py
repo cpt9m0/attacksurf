@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from attacksurf.domain.accounts import EmailAlreadyRegistered, InvalidSignup, Role
+from attacksurf.domain.accounts import EmailAlreadyRegistered, InvalidSignup, Role, SignupClosed
 from attacksurf.infra.db.models import AuditLog, Membership, Org, User
 from attacksurf.services import accounts
 from attacksurf.services.accounts import register_user
@@ -143,4 +143,22 @@ def test_register_user_gives_up_after_repeated_slug_conflicts(
 
     with pytest.raises(IntegrityError):
         register_user(db_session, FakePasswordHasher(), "b@example.com", PASSWORD, org_name="acme")
+    assert _count(db_session, User) == 1
+
+
+def test_first_user_only_allows_the_first_signup(db_session: Session) -> None:
+    result = register_user(
+        db_session, FakePasswordHasher(), "admin@example.com", PASSWORD, first_user_only=True
+    )
+
+    assert result.user.email == "admin@example.com"
+
+
+def test_first_user_only_refuses_once_a_user_exists(db_session: Session) -> None:
+    register_user(db_session, FakePasswordHasher(), "admin@example.com", PASSWORD)
+
+    with pytest.raises(SignupClosed):
+        register_user(
+            db_session, FakePasswordHasher(), "late@example.com", PASSWORD, first_user_only=True
+        )
     assert _count(db_session, User) == 1

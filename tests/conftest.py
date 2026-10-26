@@ -1,3 +1,5 @@
+from collections.abc import Iterator
+
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
@@ -5,6 +7,7 @@ from pydantic import SecretStr
 
 from attacksurf import create_app
 from attacksurf.config import Settings
+from attacksurf.workers import runtime
 from tests.helpers import make_settings
 
 
@@ -29,3 +32,12 @@ def app(settings: Settings) -> Flask:
 @pytest.fixture
 def client(app: Flask) -> FlaskClient:
     return app.test_client()
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _hermetic_worker_settings() -> Iterator[None]:
+    """The worker app reads `runtime.settings()` lazily; give it test settings, not .env/env."""
+    worker_settings = make_settings(env="test", secret_key=SecretStr("test-secret-key"))
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(runtime, "settings", lambda: worker_settings)
+        yield

@@ -67,7 +67,8 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 - Tenant rows are read only via `scoped(Model, org_id)` (a `Select` with the org filter) or
   `get_scoped(session, Model, id, org_id)` (returns `None` for another org's row).
 - Sessions: one per request in `web` (`web.db.get_session()`, closed at teardown); Celery
-  tasks use `with factory.begin() as session:`. Services commit.
+  tasks open `with runtime.session_factory()() as session:` (one factory per worker
+  process). Services commit.
 - import-linter: `web` (except `web/db.py`), `scanners`, `ai` never import SQLAlchemy/Alembic.
 - Services are verb functions (`register_user(session, ...)`): they validate with pure `domain`
   rules, take adapters through `domain` protocols (e.g. `PasswordHasher`, implemented by
@@ -79,11 +80,11 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 | Entity | Purpose |
 |---|---|
 | `Org`, `User`, `Membership` | tenancy; every tenant row carries `org_id`. `User` is global (one login, many orgs); `Membership.role` is `owner`/`admin`/`member` (`domain.accounts.has_role`) |
-| `Asset` | polymorphic target: `domain`, `subdomain`, `ip`, `url`, `repo`, `binary` |
-| `AssetRelation` | graph edges: `subdomain_of`, `cname_to`, `resolves_to`, `serves` |
+| `Asset` | polymorphic target: `domain`, `subdomain`, `ip`, `url`, `repo`, `binary`; one row per `(org_id, type, value)` with `value` normalized by `domain.assets.normalize_asset_value` (hostnames lowercase punycode via `idna`, canonical IPs, `http(s)` URLs without credentials/fragment/default port; repo/binary not yet); `source` user/discovered, `parent_id` = asset a discovered one was found under (set once at first sighting, so no cycles; user-added assets are roots; deleting a parent cascades to its discovered children), `first_seen`/`last_seen`, `is_active` + `deactivated_at` (only sightings after it reactivate), `tags`, `details` |
+| `AssetRelation` | graph edges: `subdomain_of`, `cname_to`, `resolves_to`, `serves`; unique per `(org_id, from, to, kind)`, no self-edges. `services.assets.record_asset` / `record_relation` upsert atomically (`INSERT … ON CONFLICT`): re-seen rows extend `last_seen`, never downgrade `source=user`, don't commit (the pipeline commits once), and raise `AssetNotFound` for a parent or endpoint that isn't the org's (locked `FOR KEY SHARE` so it can't vanish before the insert) |
 | `Verification` | proof of ownership (DNS TXT); gates active checks |
-| `Scan`, `Job` | one scan run, and its per-stage/per-scanner jobs |
-| `Finding`, `Evidence` | normalized result, unique by `(org_id, fingerprint)`; lifecycle `open → fixed / accepted_risk / false_positive`, with regression detection |
+| `Scan`, `Job` | one run of a profile (`dns_passive`, …) against a root asset (`queued/running/completed/failed/cancelled`, triggered by `user`/`schedule`, `stats`), and its jobs: a pipeline stage, or one scanner on one asset (`skipped` = not run, e.g. denied by ScopeGuard). Deleting the root asset deletes its scans and jobs; deleting another asset keeps the job with `asset_id` NULL |
+| `Finding`, `Evidence` | normalized result, one row per issue across scans: unique `(org_id, fingerprint)`, with `fingerprint = domain.findings.finding_fingerprint(org_id, asset_id, rule_id, location)` (SHA-256 of a versioned JSON array; `location` tells apart several issues of one rule on one asset). `rule_id` points into the rule catalog (`domain.rules`: title, default severity, remediation template, references). Status `open → fixed / accepted_risk / false_positive` (`fixed_at` set exactly when `fixed`); regression detection in #20. Deleting a scan keeps its findings (scan references become NULL); evidence (`dns_record`/`http_response`/`raw`) goes with its finding |
 | `OrgSettings`, `LLMUsage` | LLM provider config (encrypted keys) and token/cost tracking |
 | `ScanSchedule`, `AuditLog` | continuous monitoring and an append-only audit trail (`services.audit.audit()`, written in the same transaction as the change) |
 
@@ -120,6 +121,29 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 | `active` *(later)* | port/web probes on verified targets | separate network, egress rules |
 | `analysis` *(later)* | code/binary analysis | gVisor, no network, read-only FS |
 
+- `infra/queue.py`: `create_celery(settings)` (Redis broker + result backend from `REDIS_URL`,
+  JSON only, `acks_late` + `reject_on_worker_lost`, prefetch 1, results ignored unless a
+  chord needs them). A task's **name prefix is its queue** (`passive.ping` → `passive`);
+  unknown prefixes are rejected, so nothing waits in a queue no worker reads.
+- Enqueue through the `domain.jobs.TaskQueue` port (`infra.queue.CeleryTaskQueue`, sent by
+  name; `web.queue.get_task_queue()` in web). `services.jobs.create_job` commits the `Job` row
+  first, then enqueues; a broker error marks the job `failed`.
+- Tasks (`workers/tasks/`, registered in `workers.app.TASK_MODULES`) use
+  `base=workers.base.TrackedTask` and take `org_id` + `job_id` keyword arguments (ADR 0010).
+  It records the lifecycle on the `Job` (`queued → running → completed / failed`, back to
+  `queued` on retry; `attempts`, `celery_task_id`, DB-clock timings), skips redelivered tasks of
+  finished jobs, never overwrites a cancellation, binds `org_id`/`job_id`/`scan_id` to the log
+  context, retries `domain.jobs.TransientJobError` and database outages (exponential backoff with
+  jitter, 3 retries), caps deliveries at `max_retries + 2` (a task that keeps killing its
+  worker ends `failed`), and has a 300 s soft time limit. Workers don't build a Flask app and
+  read `Settings` lazily.
+- Error data: `Job.error` and logs hold the exception type (plus the message only for our own
+  `domain.jobs.JobError`s) and stack frames, never raw third-party exception messages; Celery's
+  tracer logger is silenced in workers.
+- Known gaps, closed by the stale-job sweeper (#21): a web process killed between commit and
+  enqueue leaves a `queued` job without a message, and a hard time-limit kill (330 s) leaves one
+  `running`.
+
 ## Frontend
 
 Server-rendered Jinja templates + HTMX for partial updates (polling for job progress) + Alpine.js
@@ -131,6 +155,15 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
   request ID.
 - Styling and components follow `DESIGN.md` (plain CSS + tokens, Jinja macros).
 
+## Authentication (ADR 0009)
+
+- `web/auth.py`: Flask-Login + signed cookie sessions, `CSRFProtect`, Flask-Limiter, the login
+  gate (default deny) and `@require_role(Role.X)`. Pages: `/login`, `/signup`, `POST /logout`.
+- `services/auth.py`: `authenticate` (checks credentials, audits, rehashes), `record_logout`,
+  `load_session_user` (per request: the user and the org they act in, as a `SessionUser`;
+  MVP: their first membership), `has_users`.
+- Templates get `current_user` (`email`, `org_name`, `role`); services get org IDs from it.
+
 ## Deployment
 
 Single VPS: Caddy → gunicorn (web), Celery workers, beat, PostgreSQL, Redis, all in Docker Compose.
@@ -139,8 +172,9 @@ Nightly `pg_dump` off-box. See issue #29.
 The `Dockerfile` has two targets: `dev` (dev deps, Flask debug server, source bind-mounted by
 `compose.yaml` for hot reload) and `prod` (no dev deps, gunicorn, non-root uid 10001). Base and
 service images are pinned by digest and updated by Dependabot. The dev `compose.yaml` runs `web`,
-`postgres`, `redis`; `worker-passive`, `worker-ai`, `beat` are placeholders (profile `workers`)
-until Celery lands in #10.
+`postgres`, `redis`, the Celery workers `worker-passive` (`-Q passive -c 4`) and `worker-ai`
+(`-Q ai -c 2`) with `inspect ping` healthchecks, and `beat` (broker-connection healthcheck; no
+schedules until #27). Each queue has its own exchange and routing key.
 
 ## Decisions
 

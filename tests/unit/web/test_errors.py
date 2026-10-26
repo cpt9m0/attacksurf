@@ -2,6 +2,8 @@ import pytest
 from flask import Flask, abort
 from flask.testing import FlaskClient
 
+from tests.unit.web.conftest import LoginAs, make_session_user
+
 
 @pytest.fixture
 def failing_app(app: Flask) -> Flask:
@@ -17,6 +19,20 @@ def failing_app(app: Flask) -> Flask:
     return app
 
 
+@pytest.fixture
+def failing_client(failing_app: Flask, login_as: LoginAs) -> FlaskClient:
+    client = failing_app.test_client()
+    login_as(client, make_session_user())
+    return client
+
+
+@pytest.fixture
+def no_csrf(app: Flask) -> Flask:
+    # These tests are about routing errors, not CSRF (covered in test_auth.py).
+    app.config["WTF_CSRF_ENABLED"] = False
+    return app
+
+
 def test_404_renders_error_page_in_shell(client: FlaskClient) -> None:
     response = client.get("/no-such-page")
     html = response.get_data(as_text=True)
@@ -27,15 +43,15 @@ def test_404_renders_error_page_in_shell(client: FlaskClient) -> None:
     assert "Request ID" not in html
 
 
-def test_403_renders_error_page(failing_app: Flask) -> None:
-    response = failing_app.test_client().get("/_test/forbidden")
+def test_403_renders_error_page(failing_client: FlaskClient) -> None:
+    response = failing_client.get("/_test/forbidden")
 
     assert response.status_code == 403
     assert b"<h1>Forbidden</h1>" in response.data
 
 
-def test_500_hides_details_and_shows_request_id(failing_app: Flask) -> None:
-    response = failing_app.test_client().get("/_test/boom", headers={"X-Request-ID": "req-123"})
+def test_500_hides_details_and_shows_request_id(failing_client: FlaskClient) -> None:
+    response = failing_client.get("/_test/boom", headers={"X-Request-ID": "req-123"})
     html = response.get_data(as_text=True)
 
     assert response.status_code == 500
@@ -44,13 +60,13 @@ def test_500_hides_details_and_shows_request_id(failing_app: Flask) -> None:
     assert "req-123" in html
 
 
-def test_500_is_logged(failing_app: Flask, caplog: pytest.LogCaptureFixture) -> None:
-    failing_app.test_client().get("/_test/boom")
+def test_500_is_logged(failing_client: FlaskClient, caplog: pytest.LogCaptureFixture) -> None:
+    failing_client.get("/_test/boom")
 
     assert any("unhandled exception" in r.getMessage() for r in caplog.records)
 
 
-def test_405_keeps_allow_header(client: FlaskClient) -> None:
+def test_405_keeps_allow_header(no_csrf: Flask, client: FlaskClient) -> None:
     response = client.post("/")
 
     assert response.status_code == 405
@@ -58,8 +74,10 @@ def test_405_keeps_allow_header(client: FlaskClient) -> None:
     assert response.mimetype == "text/html"
 
 
-def test_api_405_is_json_and_keeps_allow_header(failing_app: Flask) -> None:
-    response = failing_app.test_client().post("/api/v1/_test/boom")
+def test_api_405_is_json_and_keeps_allow_header(
+    no_csrf: Flask, failing_client: FlaskClient
+) -> None:
+    response = failing_client.post("/api/v1/_test/boom")
 
     assert response.status_code == 405
     assert response.get_json() == {"error": "Method Not Allowed"}
@@ -74,8 +92,8 @@ def test_api_errors_are_json(client: FlaskClient) -> None:
     assert response.get_json() == {"error": "Not Found"}
 
 
-def test_api_500_is_json_without_details(failing_app: Flask) -> None:
-    response = failing_app.test_client().get("/api/v1/_test/boom")
+def test_api_500_is_json_without_details(failing_client: FlaskClient) -> None:
+    response = failing_client.get("/api/v1/_test/boom")
 
     assert response.status_code == 500
     assert response.get_json() == {"error": "Internal Server Error"}

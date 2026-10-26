@@ -5,7 +5,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 
 ## [Unreleased]
 
+### Fixed
+- Auth hardening from review: atomic first-user signup, login password length bound, login
+  gate before CSRF (anonymous writes get 401/redirect), logout clears the session even if the
+  audit write fails, absolute session lifetime enforced server-side
+
 ### Added
+- Celery workers (ADR 0003): `passive` / `ai` queues routed by task-name prefix, `TrackedTask`
+  base recording each task's lifecycle on its `Job` (attempts, retries with backoff for
+  `TransientJobError`, time limits, redelivery-safe), `services.jobs.create_job` (commit, then
+  enqueue), compose `worker-passive`, `worker-ai`, `beat`, and a real-worker check in CI
+  (`make test-worker`)
+- Scan results model (migration `0004`): `scans` and `jobs` (status, trigger, timings,
+  stats), `findings` unique by `(org_id, fingerprint)` with severity, confidence, status
+  lifecycle and AI triage slot, and `evidence`; stable versioned finding fingerprints and an
+  in-code rule catalog (`domain.rules`)
+- Asset model: `assets` (domain, subdomain, IP, URL; repo/binary reserved) with per-type value
+  normalization (IDNA2008 punycode, canonical IPs, credential-free http(s) URLs with
+  RFC 3986/3987 normalization) and `asset_relations` graph (migration `0003`); same-org links
+  enforced by composite foreign keys; atomic upserts that update `last_seen` instead of
+  duplicating; `deactivated_at` so delayed results can't reactivate an asset; user-added
+  assets are roots, so deleting a parent only removes what was discovered under it
+- Authentication: signup, login, logout (Flask-Login), login required everywhere by default,
+  `@require_role`, CSRF on all POSTs incl. HTMX, rate-limited login/signup (Flask-Limiter),
+  hardened session cookies, audit of login/logout/failed logins; settings `ALLOW_SIGNUP`,
+  `SESSION_LIFETIME_HOURS`, `PROXY_COUNT`
 - UI foundation: app shell (top bar, nav for Dashboard/Assets/Scans/Findings/Settings, light/dark
   theme toggle, AGPL source link), HTMX fragment rendering, Jinja component macros (button,
   severity badge, status pill, data table, pagination, empty state, flash), design tokens as CSS

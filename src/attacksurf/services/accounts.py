@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 import structlog
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -11,6 +11,7 @@ from attacksurf.domain.accounts import (
     EmailAlreadyRegistered,
     PasswordHasher,
     Role,
+    SignupClosed,
     normalize_email,
     normalize_org_name,
     slugify,
@@ -24,6 +25,8 @@ log = structlog.get_logger(__name__)
 _EMAIL_UNIQUE_CONSTRAINT = "uq_users_email"
 _SLUG_UNIQUE_CONSTRAINT = "uq_orgs_slug"
 _SLUG_ATTEMPTS = 3
+# Arbitrary app-wide key for pg_advisory_xact_lock (bigint); only bootstrap signup uses it.
+_FIRST_USER_LOCK = 0x6174_7375_7266_0001
 
 
 @dataclass(frozen=True)
@@ -38,14 +41,24 @@ def register_user(
     email: str,
     password: str,
     org_name: str | None = None,
+    *,
+    first_user_only: bool = False,
 ) -> Registration:
     """Create a user, their personal org and owner membership in one transaction, and commit.
 
     Raises `InvalidSignup` for bad input and `EmailAlreadyRegistered` for a taken email.
+    With `first_user_only` (signup disabled), raises `SignupClosed` unless no user exists yet.
     """
     email = normalize_email(email)
     validate_password(password)
     name = normalize_org_name(org_name if org_name is not None else email.split("@")[0])
+    if first_user_only:
+        # Serialize bootstrap signups: the lock is held until this transaction ends, so a
+        # concurrent request waits and then sees the first user. Checking outside it races.
+        session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _FIRST_USER_LOCK})
+        if session.scalar(select(User.id).limit(1)) is not None:
+            session.rollback()
+            raise SignupClosed("Signup is closed.")
     if session.scalar(select(User.id).where(User.email == email)) is not None:
         raise EmailAlreadyRegistered("This email is already registered.")
 

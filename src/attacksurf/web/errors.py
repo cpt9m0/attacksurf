@@ -13,8 +13,11 @@ log = structlog.get_logger(__name__)
 _BODY_HEADERS = {"content-type", "content-length"}
 
 _MESSAGES = {
+    # 400 is mostly a missing/expired CSRF token on a form.
+    400: "The form expired or was sent from another site. Reload the page and try again.",
     403: "You don't have permission to view this page.",
     404: "We couldn't find that page. It may have moved or never existed.",
+    429: "Too many attempts. Wait a minute and try again.",
     500: "Something went wrong on our side. Try again; if it keeps happening, report it with "
     "the request ID below.",
 }
