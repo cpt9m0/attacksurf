@@ -24,7 +24,7 @@ uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 |---|---|---|
 | `web` | 5000 | Flask debug server, hot reload (`./src` is bind-mounted) |
 | `postgres` | 5432 | PostgreSQL 18, user/password/db `attacksurf` (dev only), volume `pgdata` |
-| `redis` | 6379 | Redis 7 |
+| `redis` | 6379 | Redis 8 |
 | `worker-passive`, `worker-ai` | n/a | Celery workers for the `passive` / `ai` queues; no hot reload: `docker compose restart worker-passive worker-ai` after code changes |
 | `beat` | n/a | Celery beat (schedules arrive with #27) |
 
