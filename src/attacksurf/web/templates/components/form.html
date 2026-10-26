@@ -1,0 +1,28 @@
+{#- Form building blocks (DESIGN.md §5 "Form field"): label, optional hint, inline error. -#}
+
+{% macro csrf_field() -%}
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+{%- endmacro %}
+
+{% macro form_field(name, label, type="text", value="", error=none, hint=none, autocomplete=none, required=true) -%}
+{%- set described = (["f-" ~ name ~ "-hint"] if hint else []) + (["f-" ~ name ~ "-error"] if error else []) -%}
+<div class="field">
+  <label for="f-{{ name }}">{{ label }}</label>
+  <input id="f-{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ value }}"
+         {%- if autocomplete %} autocomplete="{{ autocomplete }}"{% endif %}
+         {%- if required %} required{% endif %}
+         {%- if described %} aria-describedby="{{ described | join(' ') }}"{% endif %}
+         {%- if error %} aria-invalid="true"{% endif %}>
+  {%- if hint %}
+  <p class="field-hint" id="f-{{ name }}-hint">{{ hint }}</p>
+  {%- endif %}
+  {%- if error %}
+  <p class="field-error" id="f-{{ name }}-error">{{ error }}</p>
+  {%- endif %}
+</div>
+{%- endmacro %}
+
+{#- Form-level error (e.g. bad credentials): announced immediately by screen readers. -#}
+{% macro form_error(message) -%}
+{%- if message %}<div class="form-error" role="alert">{{ message }}</div>{% endif -%}
+{%- endmacro %}

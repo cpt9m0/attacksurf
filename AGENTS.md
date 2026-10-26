@@ -74,7 +74,10 @@ sync" rule below is satisfied**. Do not claim done without running them.
 1. **Layers point inward:** `web`/`workers` → `services` → `domain`. `infra` and `scanners`
    implement interfaces the services use. `domain` imports nothing from the other layers.
 2. **Thin routes, thin tasks:** routes and Celery tasks parse input, call one service, render or
-   return. Business logic lives in `services/`.
+   return. Business logic lives in `services/`. Tasks: `@app.task(base=TrackedTask,
+   name="<queue>.<task>")` taking `org_id` + `job_id` kwargs; enqueue via `services.jobs.create_job`
+   (commits, then sends through the `TaskQueue` port); raise `TransientJobError` to retry
+   (ADR 0010). Only `JobError` messages are stored/shown, so keep them free of secrets/evidence.
 3. **Never run scans or LLM calls inside a web request.** Enqueue a Celery task, return a job ID,
    poll with HTMX.
 4. **Every tenant-owned row has `org_id`** (model inherits `TenantScoped`), and every query is
@@ -93,6 +96,9 @@ sync" rule below is satisfied**. Do not claim done without running them.
    expressions; JS goes in `static/js/app.js` (`Alpine.data`), styles use `tokens.css` variables.
    Routes render with `web.rendering.render_page()`; reusable markup is a macro in
    `templates/components/`.
+10. **Auth by default:** every route requires login unless listed in `web.auth.PUBLIC_ENDPOINTS`;
+   admin-only routes add `@require_role(Role.ADMIN)`; forms include `csrf_field()`. Act in
+   `current_user.session_user.org_id`, never an org ID from the request.
 
 ## Code conventions
 
@@ -110,13 +116,17 @@ sync" rule below is satisfied**. Do not claim done without running them.
 - Errors: raise domain-specific exceptions in services; map them to HTTP responses in `web/`.
 - Services: verb functions taking a `Session` (plus adapters via `domain` protocols); they
   commit once per use case and record security-relevant actions with `services.audit.audit()`
-  in the same transaction. See `services/accounts.py`.
+  in the same transaction. See `services/accounts.py`. Building blocks that use cases compose
+  (e.g. `services.assets.record_asset`) don't commit and say so in their docstring.
 - Comments explain *why*, not *what*. No commented-out code.
 - DB schema changes only through Alembic migrations (see `.claude/skills/db-migration`).
 
 ## Testing
 
 - pytest, Arrange/Act/Assert, one behavior per test, descriptive names (`test_<unit>_<behavior>`).
+- Web unit tests: `auth_client` / `login_as(client, make_session_user(role=...))` fake the
+  logged-in user (`tests/unit/web/conftest.py`); DB-backed flows use `db_app`
+  (`tests/integration/conftest.py`). POSTs need a CSRF token from a rendered form.
 - Build settings with `tests.helpers.make_settings(...)`: it ignores `.env` **and** OS env, so
   tests are hermetic. Tests of env loading use `settings_from_env()` with the `clean_env`
   fixture. Use the `app` / `client` fixtures from `tests/conftest.py`.

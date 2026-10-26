@@ -2,10 +2,10 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose
 
-.PHONY: help up down logs ps build shell test check migrate revision
+.PHONY: help up down logs ps build shell test test-worker check migrate revision
 
 help: ## Show available targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-8s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
 
 up: ## Start the stack and wait until healthy (http://127.0.0.1:5000)
 	$(COMPOSE) up -d --build --wait
@@ -29,6 +29,10 @@ test: ## Run the test suite (incl. DB tests) inside the web container
 	$(COMPOSE) run --rm -v ./tests:/app/tests \
 		-e TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@postgres:5432/attacksurf_test \
 		web pytest
+
+test-worker: ## End-to-end check against the running workers (needs `make up` + `make migrate`)
+	$(COMPOSE) run --rm -v ./tests:/app/tests -e RUN_WORKER_TESTS=1 \
+		web pytest -m worker --no-cov -p no:cacheprovider tests/e2e
 
 check: ## Run all git hooks (lint, format, layer rules, secrets) locally
 	uv run pre-commit run --all-files

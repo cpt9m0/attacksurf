@@ -1,0 +1,14 @@
+{#- Shared <head> contents for every full-page layout. -#}
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="attacksurf: open-source, AI-powered attack surface management.">
+  {#- includeIndicatorStyles=false: HTMX would otherwise inject an inline <style> (blocked by CSP).
+      responseHandling: also swap 4xx/5xx so our error fragments are shown (HTMX default drops them). #}
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false, "allowScriptTags": false, "responseHandling": [{"code": "204", "swap": false}, {"code": "[2345]..", "swap": true}]}'>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='vendor/alpinejs-csp-3.17.4.min.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='vendor/htmx-2.0.11.min.js') }}" defer></script>

@@ -4,7 +4,7 @@ import secrets
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import PrivateAttr, SecretStr, model_validator
+from pydantic import Field, PrivateAttr, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MIN_PROD_SECRET_KEY_LENGTH = 32
@@ -27,6 +27,13 @@ class Settings(BaseSettings):
         "postgresql+psycopg://attacksurf:attacksurf@localhost:5432/attacksurf"
     )
     redis_url: SecretStr = SecretStr("redis://localhost:6379/0")
+
+    # Auth (#7). With signup off, only the very first user can still sign up (instance admin).
+    allow_signup: bool = True
+    session_lifetime_hours: int = Field(default=12, ge=1, le=720)
+    # Reverse proxies in front of the app (Caddy in prod: 1). Decides which X-Forwarded-For
+    # entry is the client IP for rate limiting; leave 0 when the app is reached directly.
+    proxy_count: int = Field(default=0, ge=0, le=5)
 
     llm_provider: Literal["anthropic", "openai_compat"] = "anthropic"
     llm_model: str = "claude-sonnet-5-5"

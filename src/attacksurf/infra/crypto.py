@@ -18,3 +18,7 @@ class Argon2PasswordHasher:
             return self._hasher.verify(password_hash, password)
         except (VerificationError, InvalidHashError):
             return False
+
+    def needs_rehash(self, password_hash: str) -> bool:
+        """True when the hash used older parameters; rehash after a successful login."""
+        return self._hasher.check_needs_rehash(password_hash)

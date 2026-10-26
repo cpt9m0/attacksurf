@@ -1,0 +1,17 @@
+{% extends "layouts/fragment.html" if is_htmx else "layouts/auth.html" %}
+{% from "components/form.html" import csrf_field, form_field, form_error %}
+{% block title %}Log in{% endblock %}
+{% block content %}
+<h1>Log in</h1>
+{{ form_error(error) }}
+<form method="post" action="{{ url_for('auth.login') }}" class="form">
+  {{ csrf_field() }}
+  {%- if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+  {{ form_field("email", "Email", type="email", value=email, autocomplete="username") }}
+  {{ form_field("password", "Password", type="password", autocomplete="current-password") }}
+  <button type="submit" class="btn btn-primary">Log in</button>
+</form>
+{%- if signup_open %}
+<p class="auth-switch">No account yet? <a href="{{ url_for('auth.signup') }}">Sign up</a></p>
+{%- endif %}
+{% endblock %}

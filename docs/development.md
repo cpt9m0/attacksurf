@@ -25,10 +25,13 @@ uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 | `web` | 5000 | Flask debug server, hot reload (`./src` is bind-mounted) |
 | `postgres` | 5432 | PostgreSQL 16, user/password/db `attacksurf` (dev only), volume `pgdata` |
 | `redis` | 6379 | Redis 8 |
-| `worker-passive`, `worker-ai`, `beat` | n/a | placeholders until #10; start with `docker compose --profile workers up` |
+| `worker-passive`, `worker-ai` | n/a | Celery workers for the `passive` / `ai` queues; no hot reload: `docker compose restart worker-passive worker-ai` after code changes |
+| `beat` | n/a | Celery beat (schedules arrive with #27) |
 
 Inside compose, `DATABASE_URL` / `REDIS_URL` point at the service names; your `.env` supplies the
-rest. Targets: `make up | down | logs | ps | build | shell | test | check | migrate | revision`
+rest. Targets: `make up | down | logs | ps | build | shell | test | test-worker | check | migrate |
+revision`. `make test-worker` (after `make up` + `make migrate`) enqueues a real job and waits for
+a worker to complete it; CI's compose job runs the same test
 (`make` lists them). `make down` keeps the database; `docker compose down -v` wipes it.
 
 ## Database and migrations
@@ -59,6 +62,11 @@ Each DB test runs in a transaction that is rolled back (fixture `db_session`).
 All settings live in `src/attacksurf/config.py` and are read from environment variables or `.env`
 (see `.env.example`). Leave `SECRET_KEY` empty in dev (an ephemeral key is generated);
 `ENV=prod` refuses to start without a random `SECRET_KEY` of ≥ 32 characters. Never commit `.env`.
+
+Auth settings: `ALLOW_SIGNUP` (default `true`; when `false` only the first user can sign up),
+`SESSION_LIFETIME_HOURS` (default 12), `PROXY_COUNT` (reverse proxies in front of the app; 0 in
+dev, 1 behind Caddy). Login/signup rate limits use Redis (`REDIS_URL`) and fall back to memory if
+it is down. Open http://127.0.0.1:5000, sign up; the first account owns a new org.
 
 ## Everyday commands
 
@@ -105,7 +113,10 @@ pyright and pytest versions come from `uv.lock`.
 - Coverage must stay **≥ 80%** (`--cov-fail-under=80` in `pyproject.toml`; CI enforces it).
 - No live network in tests: use fixtures under `tests/fixtures/` and fake providers.
 - Layout: `tests/unit/`, `tests/integration/` (DB, Celery; fixtures `db_engine`, `db_session`),
-  `tests/e2e/` (Playwright).
+  `tests/e2e/` (against the running stack, e.g. `make test-worker`; Playwright later).
+- Celery tasks in tests: `task.apply(kwargs=...)` runs them in-process; patch
+  `workers.runtime.session_factory` to share the test's connection
+  (`tests/integration/workers/test_tracked_task.py`).
 
 ## Working with AI agents
 
