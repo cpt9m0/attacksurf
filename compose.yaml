@@ -29,13 +29,15 @@ services:
       - "127.0.0.1:5000:5000"
 
   postgres:
-    image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+    image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
     environment:
       POSTGRES_USER: attacksurf
       POSTGRES_PASSWORD: attacksurf
       POSTGRES_DB: attacksurf
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # 18+ stores data in a major-version subdirectory of /var/lib/postgresql,
+      # so the volume must be mounted one level above PGDATA (docker-library/postgres#1259).
+      - pgdata:/var/lib/postgresql
       # Runs only when the volume is created: adds the `attacksurf_test` database for `make test`.
       - ./compose/postgres-init:/docker-entrypoint-initdb.d:ro
     ports:
