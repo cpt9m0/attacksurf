@@ -216,6 +216,9 @@ service images are pinned by digest and updated by Dependabot. The dev `compose.
 `postgres`, `redis`, the Celery workers `worker-passive` (`-Q passive -c 4`) and `worker-ai`
 (`-Q ai -c 2`) with `inspect ping` healthchecks, and `beat` (broker-connection healthcheck; no
 schedules until #27). Each queue has its own exchange and routing key.
+Dev `make up` builds images, waits for PostgreSQL/Redis, runs `make migrate`, then starts
+application services (ADR 0012). Migration failure stops startup; application processes never
+run migrations themselves. `/healthz` is liveness only and does not establish schema readiness.
 
 ## Decisions
 

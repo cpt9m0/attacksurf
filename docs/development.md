@@ -18,7 +18,10 @@ uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 
 ## Docker Compose stack
 
-`make up` builds the `dev` image and starts the stack, waiting until every service is healthy.
+`make up` builds the `dev` image, waits for PostgreSQL and Redis, applies Alembic migrations,
+then starts the application services and waits until every service is healthy. A failed build,
+dependency or migration stops the command before it starts the application services.
+Open http://127.0.0.1:5000/signup to create an account (no default credentials).
 
 | Service | Host port (localhost only) | Notes |
 |---|---|---|
@@ -30,8 +33,8 @@ uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 
 Inside compose, `DATABASE_URL` / `REDIS_URL` point at the service names; your `.env` supplies the
 rest. Targets: `make up | down | logs | ps | build | shell | test | test-worker | check | migrate |
-revision`. `make test-worker` (after `make up` + `make migrate`) enqueues a real job and waits for
-a worker to complete it; CI's compose job runs the same test
+revision`. `make test-worker` (after `make up`) checks signup against the existing schema
+(account writes roll back), then checks real worker jobs; CI's compose job runs the same suite
 (`make` lists them). `make down` keeps the database; `docker compose down -v` wipes it.
 
 PostgreSQL 18 stores data in a major-version subdirectory of `/var/lib/postgresql` (mounted as
@@ -81,7 +84,15 @@ socket world-writable (`chmod 666`), and do not add automatic `sudo` to the Make
 | New migration from model changes | `make revision id=0002 m="add assets"` (then review it, see the `db-migration` skill) |
 | Current revision / history | `uv run alembic current` / `uv run alembic history` |
 
-The app never migrates on startup. Migrations live in `src/attacksurf/infra/db/migrations/`.
+The app process never migrates on startup. The dev `make up` command runs `make migrate` before
+starting application services (ADR 0012); direct `docker compose up` bypasses this orchestration
+and still requires `make migrate`. Re-running migrations is safe. Migrations live in
+`src/attacksurf/infra/db/migrations/`. Outside the dev Makefile (including production), apply
+migrations explicitly before serving requests.
+
+If signup fails with a missing `users` table on an already-running stack, run `make migrate`,
+then retry signup: the failed attempt did not create an account. `/healthz` checks process
+liveness only, not whether the schema has been migrated.
 
 **DB tests** (`tests/integration/`) need PostgreSQL via `TEST_DATABASE_URL`; the database name
 must end in `_test` because its schema is wiped at the start of the run. Without it they are

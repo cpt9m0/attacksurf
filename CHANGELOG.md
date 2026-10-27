@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Fixed
+- Run database migrations as part of dev `make up`, before starting application services,
+  preventing signup from returning HTTP 500 on a fresh database.
 - Document the Docker socket permission fix for Linux sessions with stale group membership,
   including safe setup steps and the security implications of Docker access.
 - Auth hardening from review: atomic first-user signup, login password length bound, login

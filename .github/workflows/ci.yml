@@ -90,16 +90,16 @@ jobs:
         run: docker build --target prod -t attacksurf:prod .
       - name: Prod image runs as non-root
         run: test "$(docker run --rm --entrypoint id attacksurf:prod -u)" = "10001"
-      - name: Start dev stack and wait until healthy
-        run: docker compose up -d --build --wait --wait-timeout 180
+      - name: Build, migrate and start dev stack (make up)
+        run: make up
       - name: Smoke test /healthz
         run: curl -fsS http://127.0.0.1:5000/healthz
-      - name: Migrations apply on a fresh database (make migrate)
-        run: docker compose run --rm web alembic upgrade head
-      - name: A real worker completes an enqueued job (make test-worker)
+      - name: Signup and real workers work after make up (make test-worker)
         run: |
           docker compose run --rm -v ./tests:/app/tests -e RUN_WORKER_TESTS=1 \
             web pytest -m worker --no-cov -p no:cacheprovider tests/e2e
+      - name: Explicit migrations remain safe to repeat (make migrate)
+        run: make migrate
       - name: Show logs on failure
         if: failure()
         run: docker compose logs
