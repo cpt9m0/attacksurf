@@ -61,8 +61,11 @@ uv run lint-imports                      # layer rules only
 ```
 
 Git hooks run ruff + gitleaks on commit, check the commit message, and run pyright + pytest on
-push. CI (`.github/workflows/ci.yml`) runs the same checks plus a compose smoke test and the
-PR-title check. New service or env var? Update `compose.yaml` and `.env.example` too.
+push. The pytest hook resolves `TEST_DATABASE_URL` itself (shell, then `.env`, then a `_test`
+name derived from `.env`'s `DATABASE_URL`, then the local default) and stops if that database is
+unreachable, so it never passes by skipping DB tests. CI (`.github/workflows/ci.yml`) runs the
+same checks plus a compose smoke test and the PR-title check. New service or env var? Update
+`compose.yaml` and `.env.example` too.
 **Never bypass hooks (`--no-verify`) or weaken CI to get green**: fix the cause.
 
 **Definition of done for any change:** ruff check, ruff format, pyright and pytest all pass
