@@ -10,6 +10,7 @@ from uuid import UUID
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
+from itsdangerous import timed
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from attacksurf.app import create_app
@@ -23,12 +24,33 @@ from tests.helpers import PROD_SECRET_KEY, make_settings
 from tests.unit.web.conftest import LoginAs, make_session_user
 
 _CSRF = re.compile(r'name="csrf_token" value="([^"]+)"')
+_HX_HEADERS = re.compile(r"<body hx-headers='([^']+)'>")
 
 
 def csrf_token(client: FlaskClient, path: str = "/login") -> str:
     match = _CSRF.search(client.get(path).get_data(as_text=True))
     assert match
     return match.group(1)
+
+
+def assert_csrf_valid(client: FlaskClient, token: str) -> None:
+    """Assert the app *accepts* `token` as an HTMX header, i.e. it is a working CSRF token.
+
+    Goes through the real request path instead of calling `validate_csrf` directly: a POST with
+    the token in `X-CSRFToken` must succeed. That is the property the shell's header provides,
+    and it needs no session plumbing of its own. The caller must have registered
+    `add_csrf_probe_route` before the first request (routes can't be added afterwards).
+    """
+    response = client.post(
+        "/_test/csrf_probe", headers={"HX-Request": "true", "X-CSRFToken": token}
+    )
+
+    assert response.status_code == 200, "the shell's CSRF header token was rejected"
+
+
+def add_csrf_probe_route(app: Flask) -> None:
+    """A pass-through POST target for `assert_csrf_valid`; must run before any request."""
+    app.add_url_rule("/_test/csrf_probe", "csrf_probe", view_func=lambda: "ok", methods=["POST"])
 
 
 @pytest.fixture
@@ -202,13 +224,81 @@ def test_login_without_csrf_token_is_rejected(client: FlaskClient, fake_authenti
 # CSRF for HTMX
 
 
-def test_shell_sends_csrf_token_header_for_htmx(auth_client: FlaskClient) -> None:
+def test_shell_sends_csrf_token_header_for_htmx(app: Flask, auth_client: FlaskClient) -> None:
+    """The shell's HTMX header carries a token that actually validates for this session.
+
+    Comparing it to a token from a *second* GET was flaky: Flask-WTF signs with a timestamp, so
+    two requests either side of a second boundary yield different (both valid) strings. Validate
+    the header token instead — the property that matters — with one request only.
+    """
+    add_csrf_probe_route(app)
     html = auth_client.get("/").get_data(as_text=True)
 
-    match = re.search(r"<body hx-headers='([^']+)'>", html)
+    match = _HX_HEADERS.search(html)
     assert match
     header = json.loads(match.group(1))["X-CSRFToken"]
-    assert header == csrf_token(auth_client, "/")
+    assert_csrf_valid(auth_client, header)
+
+
+def test_csrf_token_strings_are_not_stable_across_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Why the old test was flaky: signing stamps the time, so strings legitimately differ.
+
+    Both stamped values verify — the two tokens are equally valid, only their text differs.
+    """
+
+    clock = {"now": 1_000_000.9}
+    monkeypatch.setattr(timed.TimestampSigner, "get_timestamp", lambda self: int(clock["now"]))
+    signer = timed.TimestampSigner("secret")
+
+    before = signer.sign(b"same-session-token")
+    clock["now"] = 1_000_001.0  # one second later: the boundary the old test straddled
+    after = signer.sign(b"same-session-token")
+
+    assert before != after
+    assert signer.unsign(before) == b"same-session-token"
+    assert signer.unsign(after) == b"same-session-token"
+
+
+def test_shell_csrf_header_rejects_a_corrupted_token(app: Flask, auth_client: FlaskClient) -> None:
+    add_csrf_probe_route(app)
+    html = auth_client.get("/").get_data(as_text=True)
+    match = _HX_HEADERS.search(html)
+    assert match
+    header = json.loads(match.group(1))["X-CSRFToken"]
+
+    corrupt = f"{header[:-1]}{'A' if header[-1] != 'A' else 'B'}"
+    with pytest.raises(AssertionError, match="rejected"):
+        assert_csrf_valid(auth_client, corrupt)
+
+
+def test_shell_csrf_tokens_from_two_responses_both_validate(
+    app: Flask, auth_client: FlaskClient
+) -> None:
+    """Two GETs may hand out different tokens; each must be accepted, which is what matters.
+
+    Covers the case the old cross-request equality assertion got wrong: it compared the strings
+    rather than validating either, so it failed whenever the two requests straddled a second.
+    """
+    add_csrf_probe_route(app)
+    tokens = []
+    for _ in range(2):
+        match = _HX_HEADERS.search(auth_client.get("/").get_data(as_text=True))
+        assert match
+        tokens.append(json.loads(match.group(1))["X-CSRFToken"])
+
+    for token in tokens:
+        assert_csrf_valid(auth_client, token)
+
+
+def test_anonymous_page_carries_a_valid_csrf_header(app: Flask, client: FlaskClient) -> None:
+    """The login shell uses the shared layout too, so its header token must validate as well."""
+    add_csrf_probe_route(app)
+    match = _HX_HEADERS.search(client.get("/login").get_data(as_text=True))
+
+    assert match
+    assert_csrf_valid(client, json.loads(match.group(1))["X-CSRFToken"])
 
 
 def test_htmx_post_needs_csrf_header(app: Flask, auth_client: FlaskClient) -> None:
