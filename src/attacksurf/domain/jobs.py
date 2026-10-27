@@ -1,5 +1,6 @@
 """Background jobs: how services enqueue work, and which failures are worth retrying."""
 
+from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
@@ -23,4 +24,19 @@ class TransientJobError(JobError):
 class TaskQueue(Protocol):
     def enqueue(self, task_name: str, *, org_id: UUID, job_id: UUID) -> str:
         """Send the task for an already committed `Job`; returns the queue's task id."""
+        ...
+
+
+@dataclass(frozen=True)
+class JobTask:
+    task_name: str
+    org_id: UUID
+    job_id: UUID
+
+
+class PipelineQueue(Protocol):
+    def enqueue_workflow(
+        self, header: tuple[JobTask, ...], tail: tuple[JobTask, ...], error: JobTask
+    ) -> None:
+        """Publish a parallel group followed by a chain, after all job rows commit."""
         ...

@@ -98,9 +98,46 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 - **Scanners are plugins** (`@register_scanner`) returning normalized pydantic `ScanOutput`.
   A scan **profile** (e.g. `dns_passive`) selects the scanners to run.
 - A failing scanner fails only its job, not the scan.
+- Implemented framework (ADR 0011): `domain/scanners.py` defines pydantic `ScanOutput`,
+  `AssetRef(type, value)`, relations, raw rule findings/evidence, `ScanContext` and the `Scanner`
+  protocol. Plugins declare `name`, `asset_types`, `queue`, `requires_verification` and
+  `timeout_seconds` (0 < timeout <= 240 s), and return `run(ctx, asset) -> ScanOutput`.
+- `scanners/registry.py` supplies `@register_scanner`; import plugin modules explicitly at
+  startup. `scanners/profiles.py` selects discovery/check plugins by name. `dns_passive` is
+  intentionally empty until DNS plugins land; empty/unknown profiles are rejected. Profiles
+  cannot route to the reserved `active`/`analysis` queues before those workers are implemented.
+- `services.scans.start_scan` validates a tenant-owned, active domain root, audits and commits
+  the scan/kickoff job, then enqueues `passive.discover`. Two waves use Celery chords:
+  discovery on the root, then checks on the active root and its known direct children, filtered
+  by each plugin's supported asset types. Continuations use immutable signatures and tracked
+  jobs: `checks`, then `persist → diff → triage → finalize`. Batch rows commit before messages.
+- Each scanner task normalizes/persists before its chord receipt: discovery assets are ready
+  for fan-out, and Redis sees only IDs/`None`, not scan evidence. The `persist` stage is a
+  barrier. `services.scan_results.persist_scan_output` composes asset/relation upserts, rule
+  catalog rendering, fingerprint upserts, and evidence inserts; it does not commit. The caller
+  commits data and the scanner's completed `Job` together. Per-scan deterministic evidence IDs
+  prevent duplicates on redelivery; sightings use monotonic first/last timestamps/scan IDs.
+- References may name only the input asset or assets in that output. Scanners cannot set org
+  IDs, database IDs, finding status, or ownership. Output is capped at 2 MiB; each evidence
+  JSON object is capped at 64 KiB (UTF-8), with collection limits too. Oversize output fails
+  the check rather than silently truncating evidence.
+- Scanner execution uses a bounded daemon thread, with no DB transaction held during I/O.
+  Budget exhaustion discards the result; ordinary errors and exhausted retries fail the job
+  but release the chord. Guard denial skips it. Unexpected pipeline errors fail the scan and
+  cancel queued work. Cancellation/terminal scan status is checked again before persistence.
+  Threads cannot be killed: safe network adapters need their own deadlines, four unfinished
+  threads exhaust that child's capacity, and prefork children recycle after 100 tasks.
+- `diff` (#20) and `triage` (#25) are no-op seams for now; no finding lifecycle transitions or
+  stats are inferred. Finalization completes only after scanner/barrier work is terminal;
+  scanner failures do not make the whole scan fail. Identifier-only `FindingCreated` and
+  `ScanCompleted` events publish after commit through `infra.events.InProcessDispatcher`;
+  handler errors are isolated. `FindingFixed` is reserved for #20. Delivery is best-effort.
 - **ScopeGuard** runs before every scanner: it validates the target, blocks private/metadata IP
   ranges, and requires verified ownership for active checks. Scanners only reach the network
   through the guarded HTTP client / DNS resolver.
+- Until #12 implements that guard/client, `workers.runtime.scanner_gate()` denies all scanners;
+  no production checks are enabled. Fixture-only plugins and an injected gate exercise the
+  full pipeline in tests without outbound traffic.
 
 ## AI layer
 
@@ -128,6 +165,10 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 - Enqueue through the `domain.jobs.TaskQueue` port (`infra.queue.CeleryTaskQueue`, sent by
   name; `web.queue.get_task_queue()` in web). `services.jobs.create_job` commits the `Job` row
   first, then enqueues; a broker error marks the job `failed`.
+- Pipeline batches use `services.jobs.enqueue_workflow` (commit then publish) and the
+  `domain.jobs.PipelineQueue` port, implemented by the same adapter with Celery `chain`/`chord`.
+  `PipelineTask` enables results for chord synchronization and sanitizes exceptions/retries
+  before Redis can store them. Ordinary isolated scanner failures return `None` receipts.
 - Tasks (`workers/tasks/`, registered in `workers.app.TASK_MODULES`) use
   `base=workers.base.TrackedTask` and take `org_id` + `job_id` keyword arguments (ADR 0010).
   It records the lifecycle on the `Job` (`queued → running → completed / failed`, back to

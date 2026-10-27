@@ -6,10 +6,12 @@ A task's name prefix is its queue: `passive.ping` runs on the `passive` queue.
 from typing import Any
 from uuid import UUID
 
-from celery import Celery
+from celery import Celery, chain, chord
+from celery.canvas import Signature
 from kombu import Exchange, Queue
 
 from attacksurf.config import Settings
+from attacksurf.domain.jobs import JobTask
 
 QUEUES = ("passive", "ai")
 RESERVED_QUEUES = ("active", "analysis")  # no workers yet: active checks, sandboxed analysis
@@ -55,6 +57,8 @@ def celery_config(settings: Settings) -> dict[str, Any]:
         "task_acks_late": True,
         "task_reject_on_worker_lost": True,
         "worker_prefetch_multiplier": 1,
+        # Reclaim any abandoned scanner threads; a timed-out Python thread cannot be killed.
+        "worker_max_tasks_per_child": 100,
         # The `Job` row is the source of truth; tasks that feed a chord turn results back on.
         "task_ignore_result": True,
         "result_expires": 24 * 3600,
@@ -78,3 +82,21 @@ class CeleryTaskQueue:
             queue=queue_for(task_name),
         )
         return result.id
+
+    def enqueue_workflow(
+        self, header: tuple[JobTask, ...], tail: tuple[JobTask, ...], error: JobTask
+    ) -> None:
+        body = chain(*(self._signature(task) for task in tail))
+        body.link_error(self._signature(error))
+        if header:
+            chord([self._signature(task) for task in header], body, app=self._app).apply_async()
+        else:
+            body.apply_async()
+
+    def _signature(self, task: JobTask) -> Signature:
+        return self._app.signature(
+            task.task_name,
+            kwargs={"org_id": str(task.org_id), "job_id": str(task.job_id)},
+            immutable=True,
+            queue=queue_for(task.task_name),
+        )

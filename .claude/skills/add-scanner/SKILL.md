@@ -32,7 +32,20 @@ Read `docs/architecture.md` (scan pipeline section) first.
    - Return `ScanOutput` (discovered assets, relations, raw findings with evidence).
    - Evidence must be what a human needs to confirm the issue: raw records, response snippets
      (size-capped). No secrets.
-3. **Profile:** add the scanner to the relevant scan profile(s).
+   - Contracts live in `domain/scanners.py`: `ScanOutput(assets, relations, findings)` uses
+     tuples; `AssetRef(type, value)` is normalized and carries no DB ID. Relations/findings
+     reference only the input or assets explicitly returned in that output. Findings use
+     catalog `rule_id`, `location`, `confidence`, optional severity/remediation context, evidence.
+   - Output <= 2 MiB, individual evidence JSON <= 64 KiB UTF-8; oversize output fails the job.
+     Timeout must be > 0 and <= 240 seconds; threads cannot be killed, so guarded I/O adapters
+     must enforce their own deadlines. No DB access from scanner threads, including on timeout.
+   - Register via `scanners.registry.register_scanner` and import the module explicitly at
+     worker startup. Production execution is denied until #12 wires ScopeGuard; do not add a
+     permissive default gate. `active`/`analysis` workers/profiles are not enabled yet.
+3. **Profile:** add the scanner name to `scanners/profiles.py` (`ScanProfile.discover` for root
+   discovery, `checks` for per-asset work). The persistence barrier commits inside each scanner
+   job before its chord receipt; plugins must not persist themselves. Test doubles belong only
+   in `tests/scanner_fixtures.py`, never the production registry/profile.
 4. **Fixtures:** record realistic responses into `tests/fixtures/<target>/<name>/`. No live
    network in tests.
 5. **Tests:** `tests/unit/scanners/<target>/test_<name>.py`:

@@ -11,6 +11,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   audit write fails, absolute session lifetime enforced server-side
 
 ### Added
+- Scanner plugin framework and scan pipeline (ADR 0011): validated `ScanOutput`, explicit
+  registry/profiles, tenant-scoped start/finalize services, Celery discovery/check chords and
+  continuation chain, atomic fingerprint/evidence persistence, bounded scanner budgets and
+  isolated errors, and post-commit domain events. Diff/AI stages are seams for #20/#25;
+  production execution stays denied until ScopeGuard (#12). No network-enabled checks yet.
 - Celery workers (ADR 0003): `passive` / `ai` queues routed by task-name prefix, `TrackedTask`
   base recording each task's lifecycle on its `Job` (attempts, retries with backoff for
   `TransientJobError`, time limits, redelivery-safe), `services.jobs.create_job` (commit, then

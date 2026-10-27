@@ -47,6 +47,7 @@ def test_celery_is_configured_for_reliable_json_tasks() -> None:
     assert (conf.task_serializer, conf.accept_content) == ("json", ["json"])
     assert (conf.task_acks_late, conf.task_reject_on_worker_lost) == (True, True)
     assert conf.worker_prefetch_multiplier == 1
+    assert conf.worker_max_tasks_per_child == 100
     assert conf.task_create_missing_queues is False
     assert conf.worker_hijack_root_logger is False
     assert {q.name for q in conf.task_queues} == set(QUEUES + RESERVED_QUEUES)

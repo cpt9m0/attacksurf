@@ -76,7 +76,9 @@ sync" rule below is satisfied**. Do not claim done without running them.
 2. **Thin routes, thin tasks:** routes and Celery tasks parse input, call one service, render or
    return. Business logic lives in `services/`. Tasks: `@app.task(base=TrackedTask,
    name="<queue>.<task>")` taking `org_id` + `job_id` kwargs; enqueue via `services.jobs.create_job`
-   (commits, then sends through the `TaskQueue` port); raise `TransientJobError` to retry
+   (commits, then sends through the `TaskQueue` port); pipeline batches use
+   `services.jobs.enqueue_workflow` + `PipelineQueue` (also commit before publish).
+   Raise `TransientJobError` to retry
    (ADR 0010). Only `JobError` messages are stored/shown, so keep them free of secrets/evidence.
 3. **Never run scans or LLM calls inside a web request.** Enqueue a Celery task, return a job ID,
    poll with HTMX.
@@ -84,7 +86,9 @@ sync" rule below is satisfied**. Do not claim done without running them.
    scoped by it via `infra/db/tenancy` (`scoped()`, `get_scoped()`). No cross-org reads, ever.
    Each new endpoint gets a tenant-isolation test.
 5. **Scanners are plugins** (`@register_scanner`) that return normalized pydantic output. They
-   never write to the DB directly; the pipeline persists.
+   never write to the DB directly; the pipeline persists. Contracts: `domain/scanners.py`;
+   references use `(type, value)`, not row IDs. Scanner tasks persist data + completed job
+   atomically before returning a chord receipt; never return evidence through Redis (ADR 0011).
 6. **All outbound network traffic from scanners goes through `infra/scope_guard` + the safe HTTP
    client.** No raw `requests`/`httpx`/sockets in scanners. Active (non-passive) checks require
    verified ownership.
