@@ -4,6 +4,7 @@ import math
 import re
 
 from attacksurf.domain.scanners import Scanner, ScanProfile
+from attacksurf.domain.scope import HttpPermission
 
 MAX_TIMEOUT_SECONDS = 240
 
@@ -26,6 +27,10 @@ class ScannerRegistry:
             or not 0 < scanner.timeout_seconds <= MAX_TIMEOUT_SECONDS
         ):
             raise ValueError("scanner timeout must be between 0 and 240 seconds")
+        # Target HTTP is an active check, so it always needs ownership proof. Reject the
+        # inconsistent metadata at registration: the gate would refuse every run anyway.
+        if scanner.grant.http is HttpPermission.TARGET and not scanner.requires_verification:
+            raise ValueError("a target HTTP grant requires requires_verification")
         self._scanners[scanner.name] = scanner
         return scanner
 
@@ -40,8 +45,11 @@ class ScannerRegistry:
             if len(names) != len(set(names)):
                 raise ValueError("duplicate scanner in profile stage")
             for name in names:
+                # `get` also enforces the full plugin contract (grant, asset types, timeout).
                 if self.get(name).queue != "passive":
                     raise ValueError("only passive scanner workers are available")
+        if profile.max_discovered_assets is not None and profile.max_discovered_assets < 1:
+            raise ValueError("max_discovered_assets must be positive")
 
 
 registry = ScannerRegistry()

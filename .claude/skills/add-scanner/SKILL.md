@@ -9,11 +9,12 @@ Read `docs/architecture.md` (scan pipeline section) first.
 
 ## Rules of the road
 - A scanner **detects and returns normalized output**. It never touches the DB, never calls an
-  LLM, and never makes network calls except through `infra/scope_guard` + the safe HTTP client /
-  DNS resolver wrappers.
+  LLM, and never imports a network library (`requests`, `httpx`, sockets, `urllib.request`,
+  dnspython resolvers — a test enforces this). I/O goes through `ctx.runtime.dns` /
+  `ctx.runtime.http`, which ScopeGuard already validated and bounded (ADR 0013).
 - Passive vs active: if the check sends anything to the target beyond normal public lookups
   (zone transfer, port scan, probing payloads), it is **active** and must declare
-  `requires_verification = True`.
+  `requires_verification = True` and `ScannerGrant(http=HttpPermission.TARGET)`.
 - Never exploit, brute force, or claim resources (e.g. takeover checks only *detect*).
 
 ## Steps
@@ -28,7 +29,10 @@ Read `docs/architecture.md` (scan pipeline section) first.
      anything that changes between scans (TTLs, record order, timestamps).
 2. **Plugin:** `src/attacksurf/scanners/<target>/<name>.py`
    - Implement the `Scanner` protocol, decorate with `@register_scanner`.
-   - Set `asset_types`, `queue` (`passive` / `active` / `analysis`), `requires_verification`, timeout.
+   - Set `asset_types`, `queue` (`passive` / `active` / `analysis`), `requires_verification`,
+     timeout and `grant` (`ScannerGrant`: `http=NONE` for DNS-only, `SERVICES` + `http_hosts`
+     for public data services such as `crt.sh`, each needing one `dns_lookups`; `TARGET` only
+     for verified active checks). Ideas beyond the grant are denied at runtime.
    - Return `ScanOutput` (discovered assets, relations, raw findings with evidence).
    - Evidence must be what a human needs to confirm the issue: raw records, response snippets
      (size-capped). No secrets.
@@ -40,12 +44,14 @@ Read `docs/architecture.md` (scan pipeline section) first.
      Timeout must be > 0 and <= 240 seconds; threads cannot be killed, so guarded I/O adapters
      must enforce their own deadlines. No DB access from scanner threads, including on timeout.
    - Register via `scanners.registry.register_scanner` and import the module explicitly at
-     worker startup. Production execution is denied until #12 wires ScopeGuard; do not add a
-     permissive default gate. `active`/`analysis` workers/profiles are not enabled yet.
+     worker startup. The production gate (`workers.runtime.scanner_gate()`) validates and
+     authorizes every run; never bypass it or widen a grant to make a check work.
+     `active`/`analysis` workers/profiles are not enabled yet (and #14 gates active checks).
 3. **Profile:** add the scanner name to `scanners/profiles.py` (`ScanProfile.discover` for root
-   discovery, `checks` for per-asset work). The persistence barrier commits inside each scanner
-   job before its chord receipt; plugins must not persist themselves. Test doubles belong only
-   in `tests/scanner_fixtures.py`, never the production registry/profile.
+   discovery, `checks` for per-asset work; `max_discovered_assets` caps what a root can gain).
+   The persistence barrier commits inside each scanner job before its chord receipt; plugins
+   must not persist themselves. Test doubles belong only in `tests/scanner_fixtures.py`, never
+   the production registry/profile.
 4. **Fixtures:** record realistic responses into `tests/fixtures/<target>/<name>/`. No live
    network in tests.
 5. **Tests:** `tests/unit/scanners/<target>/test_<name>.py`:

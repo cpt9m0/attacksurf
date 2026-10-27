@@ -1,6 +1,7 @@
 """The scanner boundary: validated data, never ORM objects or tenant-selected IDs."""
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Protocol, Self
 from uuid import UUID
@@ -10,7 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from attacksurf.domain.assets import AssetError, AssetType, RelationKind, normalize_asset_value
 from attacksurf.domain.findings import MAX_LOCATION_LENGTH, Confidence, EvidenceKind, Severity
 from attacksurf.domain.jobs import JobError
+from attacksurf.domain.net import ScannerRuntime
 from attacksurf.domain.rules import is_valid_rule_id
+from attacksurf.domain.scope import HttpPermission, ScopeError
 
 MAX_EVIDENCE_BYTES = 64 * 1024
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
@@ -86,12 +89,36 @@ class ScanOutput(OutputModel):
         return self
 
 
+_HOSTNAME = re.compile(r"(?=.{1,253}$)([a-z0-9_-]{1,63}\.)*[a-z0-9-]{1,63}")
+
+
+@dataclass(frozen=True)
+class ScannerGrant:
+    """What a plugin declared it may reach; the gate enforces it on every request."""
+
+    http: HttpPermission = HttpPermission.NONE
+    http_hosts: frozenset[str] = frozenset()  # public data services the scanner may query
+    dns_lookups: int = 0  # cap on resolver calls per run
+
+    def __post_init__(self) -> None:
+        if self.http is HttpPermission.SERVICES and not self.http_hosts:
+            raise ValueError("a services grant needs at least one http host")
+        if self.http is not HttpPermission.SERVICES and self.http_hosts:
+            raise ValueError("http hosts are only meaningful for services")
+        if self.dns_lookups < 0:
+            raise ValueError("negative dns budget")
+        for host in self.http_hosts:
+            if not _HOSTNAME.fullmatch(host) or "." not in host:
+                raise ValueError("invalid http host")
+
+
 @dataclass(frozen=True)
 class ScanContext:
     org_id: UUID
     scan_id: UUID
     root_asset: AssetRef
     profile: str
+    runtime: ScannerRuntime | None = None  # set by the worker after the gate approves the run
 
 
 @dataclass(frozen=True)
@@ -99,6 +126,8 @@ class ScanProfile:
     name: str
     discover: tuple[str, ...] = ()
     checks: tuple[str, ...] = ()
+    # Profile-level cap shared by every scanner in it, e.g. discovered assets per root.
+    max_discovered_assets: int | None = None
 
 
 class Scanner(Protocol):
@@ -107,16 +136,24 @@ class Scanner(Protocol):
     queue: str
     requires_verification: bool
     timeout_seconds: float
+    # Declared, enforced network budget: anything a plugin does beyond this is denied by the
+    # gate. Immutable (frozensets) so one instance can't widen it after registration.
+    grant: ScannerGrant
 
     def run(self, ctx: ScanContext, asset: AssetRef) -> ScanOutput: ...
 
 
 class ScannerGate(Protocol):
-    def check(self, ctx: ScanContext, asset: AssetRef, scanner: Scanner) -> None:
-        """Raise ScannerError on denial. Replaced by ScopeGuard in #12."""
+    def check(self, ctx: ScanContext, asset: AssetRef, scanner: Scanner) -> ScannerRuntime:
+        """Validate/authorize the run and return its adapters. Raises `ScopeError` on denial."""
         ...
 
 
-class ClosedGate:
-    def check(self, ctx: ScanContext, asset: AssetRef, scanner: Scanner) -> None:
-        raise ScannerError("Scanner execution requires ScopeGuard (#12).")
+class UnconfiguredGate:
+    """Tests and unconfigured processes: fail closed until a real gate is wired."""
+
+    def check(self, ctx: ScanContext, asset: AssetRef, scanner: Scanner) -> ScannerRuntime:
+        raise ScopeError("Scanner execution is disabled: no network gate is configured. (#12)")
+
+
+ClosedGate = UnconfiguredGate  # older name kept for callers/tests written before #12

@@ -1,6 +1,7 @@
 """One scanner attempt: no database transaction is held during plugin execution."""
 
 from collections.abc import Mapping
+from dataclasses import replace
 from uuid import UUID
 
 import structlog
@@ -11,8 +12,15 @@ from attacksurf.domain.assets import AssetError
 from attacksurf.domain.events import EventDispatcher
 from attacksurf.domain.jobs import TransientJobError
 from attacksurf.domain.rules import RULES, Rule
-from attacksurf.domain.scanners import AssetRef, ScanContext, ScannerError, ScannerGate
+from attacksurf.domain.scanners import (
+    AssetRef,
+    ScanContext,
+    ScannerError,
+    ScannerGate,
+    ScanProfile,
+)
 from attacksurf.domain.scans import JobStatus
+from attacksurf.domain.scope import ScopeError, ScopePolicyError
 from attacksurf.infra.db.models import Asset, Job
 from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.infra.scanner_runner import run_scanner
@@ -32,6 +40,7 @@ def run_check(
     events: EventDispatcher,
     retry_allowed: bool,
     catalog: Mapping[str, Rule] = RULES,
+    profiles: Mapping[str, ScanProfile] | None = None,
 ) -> None:
     job, scan = load_job_scan(session, org_id, job_id)
     if scan.status in TERMINAL:
@@ -44,14 +53,16 @@ def run_check(
         return
     scanner = registry.get(job.scanner or "")
     asset_id = asset.id
+    profile = profiles.get(scan.profile) if profiles else None
     target = AssetRef(type=asset.type, value=asset.value)
     ctx = ScanContext(org_id, scan.id, AssetRef(type=root.type, value=root.value), scan.profile)
     session.rollback()  # release locks/connection before untrusted or slow I/O
     try:
-        gate.check(ctx, target, scanner)
-    except ScannerError as exc:
-        jobs.mark_job_skipped(session, org_id, job_id, jobs.describe_error(exc))
+        runtime = gate.check(ctx, target, scanner)
+    except (ScopeError, ScopePolicyError) as exc:
+        _gate_denied(session, org_id, job_id, exc)
         return
+    ctx = replace(ctx, runtime=runtime)
     try:
         output = run_scanner(scanner, ctx, target)
     except TransientJobError:
@@ -62,6 +73,10 @@ def run_check(
     except Exception as exc:
         _failed(session, org_id, job_id, exc)
         return
+    finally:
+        # Closed only after the thread's budget elapsed: a timed-out thread may still use it,
+        # and the client refuses new requests on a closed pool.
+        runtime.close()
     # Lock again: cancellation or another delivery may have won while the scanner ran.
     job, scan = load_job_scan(session, org_id, job_id)
     job = session.scalars(
@@ -73,7 +88,12 @@ def run_check(
         return
     try:
         created = persist_scan_output(
-            session, scan, asset_id=asset_id, output=output, catalog=catalog
+            session,
+            scan,
+            asset_id=asset_id,
+            output=output,
+            catalog=catalog,
+            discovered_limit=profile.max_discovered_assets if profile else None,
         )
     except (AssetError, ValueError, LookupError) as exc:
         session.rollback()
@@ -85,6 +105,14 @@ def run_check(
         session.commit()  # data + terminal job state are atomic on redelivery
         for event in created:
             events.publish(event)
+
+
+def _gate_denied(session: Session, org_id: UUID, job_id: UUID, exc: Exception) -> None:
+    """Record the gate's verdict: a policy bug fails its job, a denial only skips it (ADR 0013)."""
+    if isinstance(exc, ScopePolicyError):
+        _failed(session, org_id, job_id, exc)
+    else:
+        jobs.mark_job_skipped(session, org_id, job_id, jobs.describe_error(exc))
 
 
 def _failed(session: Session, org_id: UUID, job_id: UUID, exc: BaseException) -> None:
