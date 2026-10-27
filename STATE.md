@@ -2,38 +2,33 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-10-27 · **Branch:** `11-scanner-pipeline` · **Issue:** #11
+**Updated:** 2026-10-27 · **Branch:** `fix/docker-group-session` · **Issue:** none (Docker access fix)
 
 ## Status
-#11 implementation complete; CI and review must pass before merge.
+Docker access diagnosed, stack healthy; documentation fix prepared for a draft PR pending CI.
 
 ## Last task
-- Added validated scanner contracts, registry/profiles, discovery/check Celery chords and
-  continuation stages, tenant-scoped scan services, atomic fingerprint/evidence persistence,
-  bounded scanner execution, sanitized failures and best-effort post-commit events (ADR 0011).
-- No schema/UI changes. Production execution is denied pending ScopeGuard (#12); fake plugins
-  and the permissive fixture-only gate live in tests. `dns_passive` has no real scanners yet.
-- `diff`/`triage` remain no-op seams (#20/#25); no lifecycle transitions or stats are inferred.
-- Full suites: 513 passed on Python 3.12/3.13, coverage 98.09%; the two worker tests pass separately.
-  Ruff, pyright, import-linter, pre-commit and changed-file secret scanning pass.
-- Updated architecture/security/development docs, README, changelog, AGENTS and scanner skill.
+- Confirmed `ubuntu` is already configured in the `docker` group, but the current login
+  session lacks it. No socket permissions, group memberships or Makefile behavior changed.
+- Ran `sg docker -c 'make up'`: all six services are healthy; `/healthz` returns `ok`.
+- Added safe Linux Docker permission troubleshooting to `docs/development.md`, linked it
+  from `README.md`, and updated `CHANGELOG.md`. No app/UI/schema/agent convention changes.
+- Ruff check/format, pyright and pre-commit pass; DB-backed pytest: 513 passed,
+  2 opt-in worker tests skipped, coverage 98.09%. No behavior changed, so no new tests needed.
 
 ## Next step
-Review/merge the #11 PR from `11-scanner-pipeline` after CI passes. Then implement #12:
-replace `workers.runtime.scanner_gate()` with ScopeGuard and add safe network adapters.
+Review the draft PR for this branch and wait for CI before marking it ready. In the user's
+terminal, run `newgrp docker` or reconnect over SSH before using plain `make up`.
+Then continue the roadmap with #12
+(ScopeGuard/safe clients); #11 is merged in main via #54.
 
 ## Open threads
-- #53 tracks an existing clock-boundary CSRF test flake; the unchanged suite passes on rerun.
-- #20 owns finding fixed/regressed/suppression semantics, per-scan observations and stats;
-  `FindingFixed` is defined but not emitted until actual fixed transitions exist.
-- #21 owns the stale-job sweeper, concurrent scan limit and cancellation UI/API. Publication
-  and event delivery are not exactly-once; see ADR 0011 for thread/publication limitations.
+- #53 tracks an existing clock-boundary CSRF test flake.
+- #20 owns finding lifecycle/diffs; #21 owns stale-job sweeping/cancellation; #25 owns triage.
 - `.env.example` still needs auth settings (ALLOW_SIGNUP, SESSION_LIFETIME_HOURS, PROXY_COUNT).
 
 ## Notes for the next agent
-- Test Postgres/Redis containers: `attacksurf-issue11-pg` / `attacksurf-issue11-redis` (stopped).
-  Start with `sudo docker start attacksurf-issue11-pg attacksurf-issue11-redis`.
+- Existing agent/tmux shells retain stale groups: prefix Docker commands with `sg docker -c`
+  or restart the session. Docker group access is root-equivalent; never `chmod 666` the socket.
+- Dev Compose stack is running; the existing issue11 Postgres container also runs on port 5433.
 - DB tests: `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@localhost:5433/attacksurf_test uv run pytest`.
-- Scanner outputs never go through Redis. Threads never access DB; timed-out threads cannot be
-  killed, so four unfinished threads exhaust a child until it recycles (100 tasks).
-- All fake-worker tests remain in the existing `make test-worker` / CI e2e path; no workflow edits.

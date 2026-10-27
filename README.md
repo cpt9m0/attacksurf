@@ -72,6 +72,9 @@ make migrate   # create/upgrade the database schema
 make logs      # follow logs; `make` lists all targets; `make down` to stop
 ```
 
+On Linux, a Docker socket `permission denied` error usually needs a login/group refresh;
+see [Docker permissions](docs/development.md#docker-permissions-on-linux) before changing permissions.
+
 **Without Docker:** just the web app.
 
 ```bash
