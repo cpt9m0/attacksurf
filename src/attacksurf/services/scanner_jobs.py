@@ -20,7 +20,7 @@ from attacksurf.domain.scanners import (
     ScanProfile,
 )
 from attacksurf.domain.scans import JobStatus
-from attacksurf.domain.scope import ScopeError
+from attacksurf.domain.scope import ScopeError, ScopePolicyError
 from attacksurf.infra.db.models import Asset, Job
 from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.infra.scanner_runner import run_scanner
@@ -59,9 +59,8 @@ def run_check(
     session.rollback()  # release locks/connection before untrusted or slow I/O
     try:
         runtime = gate.check(ctx, target, scanner)
-    except ScopeError as exc:
-        # A denial is a recorded outcome (skipped job), not a failure of the scan.
-        jobs.mark_job_skipped(session, org_id, job_id, jobs.describe_error(exc))
+    except (ScopeError, ScopePolicyError) as exc:
+        _gate_denied(session, org_id, job_id, exc)
         return
     ctx = replace(ctx, runtime=runtime)
     try:
@@ -106,6 +105,14 @@ def run_check(
         session.commit()  # data + terminal job state are atomic on redelivery
         for event in created:
             events.publish(event)
+
+
+def _gate_denied(session: Session, org_id: UUID, job_id: UUID, exc: Exception) -> None:
+    """Record the gate's verdict: a policy bug fails its job, a denial only skips it (ADR 0013)."""
+    if isinstance(exc, ScopePolicyError):
+        _failed(session, org_id, job_id, exc)
+    else:
+        jobs.mark_job_skipped(session, org_id, job_id, jobs.describe_error(exc))
 
 
 def _failed(session: Session, org_id: UUID, job_id: UUID, exc: BaseException) -> None:

@@ -96,13 +96,23 @@ def test_request_dials_the_resolved_address_but_keeps_the_host_header(server_url
 
 def test_redirects_are_followed_only_when_the_policy_allows_the_target(server_url: str) -> None:
     port = server_url.rsplit(":", 1)[1]
-    client, _ = client_for(server_url, redirect_allowed=lambda url: "/landed" in url)
+    # The hook governs the first request too, not just redirects: allow the entry point here.
+    client, _ = client_for(
+        server_url, redirect_allowed=lambda url: "/redirect" in url or "/landed" in url
+    )
     body = client.get(f"http://public.example:{port}/redirect", limit=100)
     assert body.content == b"path=/landed"
 
-    strict, _ = client_for(server_url)
+    strict, _ = client_for(server_url, redirect_allowed=lambda url: "/redirect" in url)
     with pytest.raises(ScopeError, match="out of scope"):
         strict.get(f"http://public.example:{port}/redirect", limit=100)
+
+    # A hook that refuses the first URL sends nothing at all.
+    unlisted, _ = client_for(server_url, redirect_allowed=lambda url: False)
+    before = list(Handler.hits)
+    with pytest.raises(ScopeError, match="out of scope"):
+        unlisted.get(f"http://public.example:{port}/redirect", limit=100)
+    assert Handler.hits == before
 
 
 def test_redirect_loops_are_bounded(server_url: str) -> None:

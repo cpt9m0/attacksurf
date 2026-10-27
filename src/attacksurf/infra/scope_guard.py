@@ -24,10 +24,10 @@ from attacksurf.domain.scope import (
     hostname_allowed,
 )
 from attacksurf.infra import public_suffix
+from attacksurf.infra.http import bounded_limit
 
 MAX_REDIRECTS = 4
 MAX_DNS_LOOKUPS = 20
-MAX_HTTP_BYTES = 1024 * 1024
 
 
 class OwnershipChecker(Protocol):
@@ -156,21 +156,21 @@ class _GuardedHttp:
 
     def get(self, url: str, *, limit: int) -> HttpBody:
         self.require_allowed(url)
-        return self._inner.get(url, limit=_bounded_limit(limit))
+        return self._inner.get(url, limit=bounded_limit(limit))
 
     def require_allowed(self, url: str) -> None:
         if not self.host_allowed(url):
             raise ScopePolicyError("The scanner may not contact this host.")
 
     def client_for(self, resolver: DnsResolver) -> SafeHttpClient:
-        """A pinned client whose redirects come back to this allowlist at every hop."""
+        """A pinned client whose redirects come back to this allowlist at every hop.
+
+        The allowlist is the client's policy hook, which `SafeHttpClient.get()` now consults
+        before the first request too, so handing the inner client to a run is not a bypass.
+        """
         return self._inner.with_redirect_policy(
             resolver, redirect_allowed=self.host_allowed, max_redirects=MAX_REDIRECTS
         )
-
-
-def _bounded_limit(limit: int) -> int:
-    return max(1, min(limit, MAX_HTTP_BYTES))
 
 
 def request_host(url: str) -> str:

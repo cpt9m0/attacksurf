@@ -30,9 +30,11 @@ data services (CT logs, RDAP) before ownership verification exists (#14).
 - **Pinning without DNS rebinding**: the safe HTTP client resolves the host through the guarded
   resolver (every answer must be public), picks one address, and dials *that address* through an
   `httpcore` backend while keeping the original `Host` header, SNI and certificate checks. The
-  redirect policy is the gate's allowlist, re-evaluated on every hop; timeouts, a redirect cap
-  and a streaming size cap bound each request. Environment proxies are never used; TLS
-  verification cannot be disabled through the client.
+  gate's allowlist is the client's policy hook and is consulted *before the first request* and
+  at every redirect hop, so the run-scoped client handed to scanners is as strict as the
+  wrapper; timeouts, a redirect cap and a streaming size cap (`MAX_BODY_BYTES`, applied inside
+  the client whatever `limit` a plugin passes) bound each request. Environment proxies are never
+  used; TLS verification cannot be disabled through the client.
 - **Passive checks only reach public data services**, through the same client (DNSSEC-less
   StubResolver, no search domains). No scanner contacts an arbitrary target.
 - Denials are `ScopeError`s and are recorded on the `Job` as `skipped` with a message; policy

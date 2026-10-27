@@ -146,3 +146,35 @@ def test_findings_survive_rescans_and_out_of_order_results(
     )
     assert finding.last_seen == second_scan.started_at
     assert len(db_session.scalars(scoped(Evidence, first_scan.org_id)).all()) == 2
+
+
+def test_discovered_limit_counts_against_the_scan_root_for_subdomain_checks(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    """A check on a discovered name must not get a fresh allowance of its own."""
+    scan = make_scan(db_session)
+    persist_scan_output(
+        db_session,
+        scan,
+        scan.root_asset_id,
+        ScanOutput(assets=(AssetRef(type=AssetType.SUBDOMAIN, value="a.acme.example"),)),
+        catalog=catalog,
+        discovered_limit=1,
+    )
+    subdomain = db_session.scalars(
+        scoped(Asset, scan.org_id).where(Asset.value == "a.acme.example")
+    ).one()
+
+    created = persist_scan_output(
+        db_session,
+        scan,
+        subdomain.id,
+        ScanOutput(assets=(AssetRef(type=AssetType.SUBDOMAIN, value="b.acme.example"),)),
+        catalog=catalog,
+        discovered_limit=1,
+    )
+
+    assert created == []
+    assert not db_session.scalars(
+        scoped(Asset, scan.org_id).where(Asset.value == "b.acme.example")
+    ).all()

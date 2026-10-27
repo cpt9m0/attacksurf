@@ -51,7 +51,9 @@ def persist_scan_output(
     _validate_references(output, declared, catalog)
     admitted: set[tuple[AssetType, str]] | None = None
     if discovered_limit is not None:
-        keep = _admit(session, scan.org_id, asset, output, limit=discovered_limit)
+        keep = _admit(
+            session, scan.org_id, scan.root_asset_id, asset, output, limit=discovered_limit
+        )
         admitted = {(ref.type, ref.value) for ref in keep}
         output = output.model_copy(update={"assets": keep})
     seen = scan.started_at or scan.created_at
@@ -155,13 +157,23 @@ def _usable(
 
 
 def _admit(
-    session: Session, org_id: UUID, input_asset: Asset, output: ScanOutput, *, limit: int
+    session: Session,
+    org_id: UUID,
+    root_id: UUID,
+    input_asset: Asset,
+    output: ScanOutput,
+    *,
+    limit: int,
 ) -> tuple[AssetRef, ...]:
     """Limit what one run adds under the root; exposed assets stay within it too.
 
     The cap is on the root's discovered assets in total (existing rows + new ones), so a large
     zone can never be crawled in chunks across runs. The input asset doesn't count. Scanners
     should stop at their own limit so the cap only has to drop an occasional overflow.
+
+    `root_id` is where rows are actually written (`parent_id=scan.root_asset_id`), so it is also
+    what the count must use: a check on a discovered subdomain would otherwise see zero children
+    and hand out a fresh allowance for every subdomain.
     """
     candidates = tuple(
         ref
@@ -172,9 +184,7 @@ def _admit(
         return ()
     current = int(
         session.scalar(
-            scoped(Asset, org_id)
-            .where(Asset.parent_id == input_asset.id)
-            .with_only_columns(func.count())
+            scoped(Asset, org_id).where(Asset.parent_id == root_id).with_only_columns(func.count())
         )
         or 0
     )
@@ -182,7 +192,7 @@ def _admit(
         (row.type, row.value)
         for row in session.scalars(
             scoped(Asset, org_id).where(
-                Asset.parent_id == input_asset.id,
+                Asset.parent_id == root_id,
                 tuple_(Asset.type, Asset.value).in_([(ref.type, ref.value) for ref in candidates]),
             )
         )

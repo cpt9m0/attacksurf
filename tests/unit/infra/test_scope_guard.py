@@ -14,7 +14,7 @@ from attacksurf.domain.scanners import (
     UnconfiguredGate,
 )
 from attacksurf.domain.scope import HttpPermission, PublicSuffix, ScopeError, ScopePolicyError
-from attacksurf.infra.http import SafeHttpClient
+from attacksurf.infra.http import MAX_BODY_BYTES, SafeHttpClient
 from attacksurf.infra.scope_guard import (
     MAX_DNS_LOOKUPS,
     ScopeGuard,
@@ -62,7 +62,12 @@ class StubHttp:
 
 
 class _RunHttp(StubHttp):
-    """What a run gets: the redirect hook is enforced before every request."""
+    """What a run gets from `with_redirect_policy`, mirroring the real client exactly.
+
+    The real `SafeHttpClient` consults its policy hook before the first request and every hop,
+    so this fake must too: a permissive fake would hide a guard bypass (see
+    `test_run_client_enforces_the_allowlist_before_the_first_request`).
+    """
 
     def __init__(self, inner: StubHttp, redirect_allowed: object) -> None:
         super().__init__()
@@ -72,7 +77,7 @@ class _RunHttp(StubHttp):
     def get(self, url: str, *, limit: int) -> HttpBody:
         assert callable(self._allowed)
         if not self._allowed(url):
-            raise ScopePolicyError("Redirect target is out of scope.")
+            raise ScopeError("The target is out of scope.")
         self._inner.requests.append((url, limit))
         return self._inner.response
 
@@ -240,7 +245,7 @@ class StaticAnswers:
 def test_dns_only_grant_denies_http_entirely() -> None:
     scope, _ = make_guard()
     runtime = scope.check(context(), target(), scanner())
-    with pytest.raises(ScopePolicyError):
+    with pytest.raises(ScopeError):
         runtime.http.get("https://acme.com/", limit=10)
 
 
@@ -254,7 +259,7 @@ def test_services_only_grant_cannot_reach_the_scanned_target() -> None:
         )
     )
     runtime = scope.check(context(), target(), busy)
-    with pytest.raises(ScopePolicyError):
+    with pytest.raises(ScopeError):
         runtime.http.get("https://acme.com/", limit=10)
     runtime.http.get("https://api.crt.example.org/?q=acme.com", limit=10)
     assert http.requests == [("https://api.crt.example.org/?q=acme.com", 10)]
@@ -267,7 +272,7 @@ def test_target_grant_allows_only_the_scanned_host() -> None:
     )
     runtime = scope.check(context(), target(), active)
     runtime.http.get("https://acme.com/robots.txt", limit=10)
-    with pytest.raises(ScopePolicyError):
+    with pytest.raises(ScopeError):
         runtime.http.get("https://other.example.com/", limit=10)
 
 
@@ -304,8 +309,80 @@ def test_guarded_http_bounds_the_response_limit() -> None:
     )
     guarded.get("https://api.crt.example.org/", limit=10**9)
     guarded.get("https://api.crt.example.org/", limit=0)
-    assert inner.requests[0][1] == 1024 * 1024
+    assert inner.requests[0][1] == MAX_BODY_BYTES
     assert inner.requests[1][1] == 1
+
+
+class RecordingSafeHttp(SafeHttpClient):
+    """A real `SafeHttpClient` whose transport is replaced: proves what would hit the wire."""
+
+    def __init__(self, resolver: object, **kwargs: object) -> None:
+        super().__init__(resolver, **kwargs)  # type: ignore[arg-type]
+        self.sent: list[tuple[str, int]] = []
+
+    def with_redirect_policy(
+        self, resolver: object, *, redirect_allowed: object, max_redirects: int
+    ) -> "RecordingSafeHttp":
+        clone = RecordingSafeHttp(
+            resolver,
+            redirect_allowed=redirect_allowed,  # type: ignore[arg-type]
+            max_redirects=max_redirects,
+            timeout_seconds=self._timeout,
+            tls=self._tls,
+        )
+        clone.sent = self.sent
+        return clone
+
+    def _request(self, url: str, *, limit: int) -> HttpBody:
+        self.sent.append((url, limit))
+        return HttpBody(200, b"[]")
+
+
+def make_runtime(
+    *, grant: ScannerGrant, verified: bool = False
+) -> tuple[ScannerRuntime, RecordingSafeHttp]:
+    answers = StaticAnswers({"acme.com": ("93.184.216.34",), "crt.example.org": ("93.184.216.34",)})
+    http = RecordingSafeHttp(answers)
+    scope = ScopeGuard(
+        dns=answers, http=http, ownership=UnverifiedOwnership(), classify=ClassifiedAsPublicSuffix()
+    )
+    if verified:
+        verify_all(scope)
+    busy = scanner(
+        grant=grant,
+        asset_types=frozenset({AssetType.DOMAIN, AssetType.SUBDOMAIN}),
+        requires_verification=verified,
+    )
+    return scope.check(context(), target(), busy), http
+
+
+def test_run_client_enforces_the_allowlist_before_the_first_request() -> None:
+    """Regression: `client_for()` hands over the inner client, which must not skip the policy."""
+    runtime, http = make_runtime(
+        grant=ScannerGrant(
+            http=HttpPermission.SERVICES, http_hosts=frozenset({"crt.example.org"}), dns_lookups=5
+        )
+    )
+    with pytest.raises(ScopeError):
+        runtime.http.get("https://evil.example.net/", limit=10)
+    assert http.sent == []  # nothing left the process
+
+
+def test_run_client_with_a_dns_only_grant_sends_no_http_request() -> None:
+    runtime, http = make_runtime(grant=ScannerGrant())
+    with pytest.raises(ScopeError):
+        runtime.http.get("https://acme.com/", limit=10)
+    assert http.sent == []
+
+
+def test_run_client_bounds_a_scanner_supplied_limit() -> None:
+    runtime, http = make_runtime(
+        grant=ScannerGrant(
+            http=HttpPermission.SERVICES, http_hosts=frozenset({"crt.example.org"}), dns_lookups=5
+        )
+    )
+    runtime.http.get("https://crt.example.org/", limit=10**9)
+    assert http.sent == [("https://crt.example.org/", MAX_BODY_BYTES)]
 
 
 @pytest.mark.parametrize(

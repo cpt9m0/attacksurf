@@ -20,7 +20,15 @@ from attacksurf.domain.scope import AddressError, ScopeError
 
 REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
 MAX_REDIRECTS = 4
+# Hard ceiling on a response body, independent of what a scanner asks for: plugins must not be
+# able to make a worker buffer an unbounded body by passing a huge `limit`.
+MAX_BODY_BYTES = 1024 * 1024
 REDIRECT_ERRORS = (httpx.InvalidURL, ValueError, ScopeError)
+
+
+def bounded_limit(limit: int) -> int:
+    """Clamp a scanner-supplied body limit; every request goes through this."""
+    return max(1, min(limit, MAX_BODY_BYTES))
 
 
 class AddressResolver(Protocol):
@@ -81,7 +89,9 @@ class SafeHttpClient:
         tls: ssl.SSLContext | None = None,
     ) -> None:
         self._resolver = resolver
-        self._redirect_allowed = redirect_allowed or (lambda url: False)
+        # `None` means no allowlist was installed (a bare transport client); an installed hook
+        # is consulted before the first request as well as at every redirect.
+        self._redirect_allowed = redirect_allowed
         self._max_redirects = min(max_redirects, MAX_REDIRECTS)
         self._timeout = timeout_seconds
         self._tls = tls or ssl.create_default_context()
@@ -106,17 +116,20 @@ class SafeHttpClient:
         )
 
     def get(self, url: str, *, limit: int) -> HttpBody:
+        """GET `url`; an installed policy hook is consulted before this request, not just hops."""
+        cap = bounded_limit(limit)
         for _hop in range(self._max_redirects + 1):
-            body = self._request(url, limit=limit)
+            # The hook is the gate's allowlist: checking it before every hop, including the
+            # first, means a run-scoped client can never reach a host the guard refuses.
+            if self._redirect_allowed is not None and not self._redirect_allowed(url):
+                raise ScopeError("The target is out of scope.")
+            body = self._request(url, limit=cap)
             if body.status_code not in REDIRECT_CODES:
                 return body
             try:
-                next_url = str(httpx.URL(url).join(body.headers.get("location", "")))
+                url = str(httpx.URL(url).join(body.headers.get("location", "")))
             except REDIRECT_ERRORS:
                 raise ScopeError("Redirect target is invalid.") from None
-            if not self._redirect_allowed(next_url):
-                raise ScopeError("Redirect target is out of scope.")
-            url = next_url
         raise ScopeError("Too many redirects.")
 
     def close(self) -> None:
