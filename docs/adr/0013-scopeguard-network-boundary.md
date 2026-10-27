@@ -37,8 +37,9 @@ data services (CT logs, RDAP) before ownership verification exists (#14).
   wrapper; timeouts, a redirect cap and a streaming size cap (`MAX_BODY_BYTES`, applied inside
   the client to the *decoded* body, so a gzip bomb can't expand past it) bound each request.
   Environment proxies are never used; TLS verification cannot be disabled through the client.
-  Every path out of the decoder clamps to the requested limit, and concatenated gzip members
-  are all decoded under one cumulative budget.
+  Every path out of the decoder clamps to the requested limit, honors the `eof` flag so an
+  incomplete stream is reported as truncated, and decodes concatenated gzip members under one
+  cumulative budget.
 - **Passive checks only reach public data services**, through the same client (DNSSEC-less
   StubResolver, no search domains). No scanner contacts an arbitrary target.
 - Denials are `ScopeError`s and are recorded on the `Job` as `skipped` with a message; policy

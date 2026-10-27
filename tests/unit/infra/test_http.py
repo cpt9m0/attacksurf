@@ -3,6 +3,7 @@
 import gzip
 import ssl
 import threading
+import zlib
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import ClassVar
@@ -165,36 +166,90 @@ def test_encoded_bodies_are_decoded(server_url: str) -> None:
     assert "content-encoding" not in {key.lower() for key in body.headers}
 
 
+# One row per behaviour the decoder must get right. Every entry here is either a review
+# regression or a protocol case that a naive implementation gets wrong; add rows, not branches.
+_DECODE_CASES: list[tuple[str, bytes, str | None, int, bytes, bool]] = [
+    # name, wire body, Content-Encoding, limit, expected decoded body, expected truncated
+    ("plain body", b"abc", None, 100, b"abc", False),
+    ("identity encoding", b"abc", "identity", 100, b"abc", False),
+    ("plain body cut at the limit", b"x" * 500, None, 100, b"x" * 100, True),
+    ("plain body exactly at the limit", b"abcde", None, 5, b"abcde", False),
+    ("gzip", gzip.compress(b"hello"), "gzip", 100, b"hello", False),
+    ("x-gzip alias", gzip.compress(b"hello"), "x-gzip", 100, b"hello", False),
+    ("deflate", zlib.compress(b"hello"), "deflate", 100, b"hello", False),
+    ("encoding case and padding", gzip.compress(b"hi"), " GZIP ", 100, b"hi", False),
+    # Bombs: the *decoded* size is what must not exceed the limit.
+    (
+        "gzip bomb",
+        gzip.compress(b"\x00" * (8 * 1024 * 1024)),
+        "gzip",
+        10_000,
+        b"\x00" * 10_000,
+        True,
+    ),
+    (
+        "deflate bomb",
+        zlib.compress(b"\x00" * (1024 * 1024)),
+        "deflate",
+        5_000,
+        b"\x00" * 5_000,
+        True,
+    ),
+    # Concatenated members (RFC 1952 §2.2) must all be decoded under one cumulative budget.
+    (
+        "concatenated gzip members",
+        gzip.compress(b"first") + gzip.compress(b"second"),
+        "gzip",
+        100,
+        b"firstsecond",
+        False,
+    ),
+    (
+        "three gzip members",
+        gzip.compress(b"a") + gzip.compress(b"b") + gzip.compress(b"c"),
+        "gzip",
+        100,
+        b"abc",
+        False,
+    ),
+    (
+        "concatenated members share one cap",
+        gzip.compress(b"x" * 50) + gzip.compress(b"y" * 50),
+        "gzip",
+        60,
+        b"x" * 50 + b"y" * 10,
+        True,
+    ),
+    # Incomplete streams: `zlib` returns partial output without raising, so only `eof` tells.
+    ("gzip cut before its footer", gzip.compress(b"hello")[:-12], "gzip", 100, b"he", True),
+    ("gzip cut mid-footer", gzip.compress(b"hello")[:-2], "gzip", 100, b"hello", True),
+    (
+        "gzip missing its final block",
+        gzip.compress(b"a" * 50_000)[:40],
+        "gzip",
+        10_000,
+        b"a" * 10_000,
+        True,
+    ),
+    ("deflate cut short", zlib.compress(b"hello")[:-2], "deflate", 100, b"hello", True),
+    # Bodies we cannot decode: raw bytes, clamped and flagged.
+    ("corrupt gzip", b"not gzip" * 250_000, "gzip", 10_000, b"not gzip" * 1250, True),
+    ("unknown encoding", b"x" * 2_000_000, "br", 10_000, b"x" * 10_000, True),
+]
+
+
 @pytest.mark.parametrize(
-    ("content", "encoding"),
-    [
-        (b"not gzip" * 250_000, "gzip"),  # declares gzip, isn't
-        (b"x" * 2_000_000, "br"),  # an encoding we never decode
-        (gzip.compress(b"a" * 50_000)[:40], "gzip"),  # valid but cut mid-stream
-    ],
+    ("content", "encoding", "limit", "expected", "truncated"),
+    [case[1:] for case in _DECODE_CASES],
+    ids=[case[0] for case in _DECODE_CASES],
 )
-def test_raw_body_fallbacks_are_clamped_to_the_limit(content: bytes, encoding: str) -> None:
-    """Regression: a fallback returned the whole wire buffer, which may exceed the limit."""
-    decoded, truncated = _decoded(content, encoding, 10_000)
-    assert len(decoded) <= 10_000
-    assert truncated is True
-
-
-def test_concatenated_gzip_members_are_all_decoded() -> None:
-    """Regression: only the first member was returned, silently truncating the body."""
-    packed = gzip.compress(b"first") + gzip.compress(b"second")
-    assert _decoded(packed, "gzip", 100) == (b"firstsecond", False)
-
-
-def test_concatenated_gzip_members_share_one_output_cap() -> None:
-    packed = gzip.compress(b"x" * 50) + gzip.compress(b"y" * 50)
-    decoded, truncated = _decoded(packed, "gzip", 60)
-    assert len(decoded) == 60
-    assert truncated is True
-
-
-def test_bodies_exactly_at_the_limit_are_not_truncated() -> None:
-    assert _decoded(b"abcde", None, 5) == (b"abcde", False)
+def test_decoded(
+    content: bytes, encoding: str | None, limit: int, expected: bytes, truncated: bool
+) -> None:
+    decoded, was_truncated = _decoded(content, encoding, limit)
+    assert decoded == expected
+    assert len(decoded) <= limit
+    assert was_truncated is truncated
 
 
 def test_decompression_bombs_are_capped_at_the_requested_limit(server_url: str) -> None:

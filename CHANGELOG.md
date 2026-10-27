@@ -20,8 +20,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   neither overlapping scans nor checks on discovered subdomains can exceed it; and a
   `ScopePolicyError` from the gate fails only its job instead of the whole scan (ADR 0013).
 - Response decoding clamps every fallback to the requested limit (a corrupt or unknown
-  `Content-Encoding` no longer returns the oversized wire buffer) and decodes all concatenated
-  gzip members instead of silently returning only the first.
+  `Content-Encoding` no longer returns the oversized wire buffer), decodes all concatenated
+  gzip members, and reports a stream that ends before its final block as truncated instead of
+  returning partial content silently.
 
 ### Added
 - ScopeGuard and the scanner network boundary (ADR 0013): target validation against the bundled

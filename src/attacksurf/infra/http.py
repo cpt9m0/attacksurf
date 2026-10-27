@@ -304,9 +304,13 @@ def _decoded(content: bytes, encoding: str | None, limit: int) -> tuple[bytes, b
     """Decode `content`, capping the *decoded* output: a compression bomb must not reach memory.
 
     Only the (already capped) wire bytes are decompressed, in bounded steps, and decoding stops
-    as soon as `limit` bytes are produced, so the ceiling holds for the expanded body too. An
-    unknown or corrupt encoding is reported as truncation rather than raised: scanners see the
-    raw bytes (still clamped to `limit`) and no internal error detail.
+    as soon as `limit` bytes are produced, so the ceiling holds for the expanded body too.
+
+    Anything that leaves the body incomplete is reported through `truncated` rather than raised,
+    so scanners see the bytes we have and no internal detail: an unknown encoding, a corrupt
+    stream, or a stream that simply ends before its final block (which `zlib` does *not* treat
+    as an error — `decompress()`/`flush()` return partial output, and only `eof` tells us the
+    footer was never reached).
     """
     name = (encoding or "").strip().lower()
     if name in {"", "identity"}:
@@ -314,23 +318,37 @@ def _decoded(content: bytes, encoding: str | None, limit: int) -> tuple[bytes, b
     if name not in ENCODINGS:
         return _clamped(content, limit, truncated=True)
     # 16 + MAX_WBITS accepts a gzip header; deflate is zlib-wrapped per RFC 9110.
-    wbits = 16 + zlib.MAX_WBITS if "gzip" in name else zlib.MAX_WBITS
-    out = bytearray()
+    gzip_encoded = "gzip" in name
     try:
-        remaining = content
-        while True:
-            decoder = zlib.decompressobj(wbits)
-            for start in range(0, len(remaining), _DECODE_STEP):
-                out += decoder.decompress(remaining[start : start + _DECODE_STEP], limit - len(out))
-                if len(out) >= limit:
-                    return bytes(out[:limit]), True
-            out += decoder.flush(limit - len(out))
-            # A gzip body may be several concatenated members (RFC 1952 §2.2): decode them all
-            # under the same cumulative budget instead of silently dropping everything after the
-            # first. `unused_data` beyond the first member is only defined for gzip.
-            remaining = decoder.unused_data
-            if len(out) >= limit or not remaining or "gzip" not in name:
-                break
+        out, complete = _inflate(
+            content, 16 + zlib.MAX_WBITS if gzip_encoded else zlib.MAX_WBITS, limit, gzip_encoded
+        )
     except zlib.error:
         return _clamped(content, limit, truncated=True)
-    return _clamped(bytes(out), limit, truncated=False)
+    return _clamped(out, limit, truncated=not complete)
+
+
+def _inflate(content: bytes, wbits: int, limit: int, gzip_encoded: bool) -> tuple[bytes, bool]:
+    """Decompress every (concatenated) member into one budget; `complete` means fully decoded."""
+    out = bytearray()
+    remaining = content
+    while True:
+        decoder = zlib.decompressobj(wbits)
+        for start in range(0, len(remaining), _DECODE_STEP):
+            out += decoder.decompress(remaining[start : start + _DECODE_STEP], limit - len(out))
+            if len(out) >= limit:
+                return bytes(out[:limit]), False
+            if decoder.eof:
+                break  # this member is complete; `unused_data` holds the next one
+        out += decoder.flush(limit - len(out))
+        if len(out) >= limit:
+            return bytes(out[:limit]), False
+        # `eof` is the only proof the final block and footer arrived: a stream cut short
+        # decodes to partial output without raising, so it must count as truncated.
+        if not decoder.eof:
+            return bytes(out), False
+        # A gzip body may be several concatenated members (RFC 1952 §2.2): decode them all
+        # under the same cumulative budget instead of silently dropping the rest.
+        remaining = decoder.unused_data
+        if not remaining or not gzip_encoded:
+            return bytes(out), True
