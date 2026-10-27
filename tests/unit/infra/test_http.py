@@ -15,6 +15,7 @@ from attacksurf.domain.scope import AddressError, ScopeError
 from attacksurf.infra.http import (
     MAX_REDIRECTS,
     SafeHttpClient,
+    _decoded,
     _target,
     connection_address,
 )
@@ -162,6 +163,38 @@ def test_encoded_bodies_are_decoded(server_url: str) -> None:
     assert body.content == b"decoded body"
     assert body.truncated is False
     assert "content-encoding" not in {key.lower() for key in body.headers}
+
+
+@pytest.mark.parametrize(
+    ("content", "encoding"),
+    [
+        (b"not gzip" * 250_000, "gzip"),  # declares gzip, isn't
+        (b"x" * 2_000_000, "br"),  # an encoding we never decode
+        (gzip.compress(b"a" * 50_000)[:40], "gzip"),  # valid but cut mid-stream
+    ],
+)
+def test_raw_body_fallbacks_are_clamped_to_the_limit(content: bytes, encoding: str) -> None:
+    """Regression: a fallback returned the whole wire buffer, which may exceed the limit."""
+    decoded, truncated = _decoded(content, encoding, 10_000)
+    assert len(decoded) <= 10_000
+    assert truncated is True
+
+
+def test_concatenated_gzip_members_are_all_decoded() -> None:
+    """Regression: only the first member was returned, silently truncating the body."""
+    packed = gzip.compress(b"first") + gzip.compress(b"second")
+    assert _decoded(packed, "gzip", 100) == (b"firstsecond", False)
+
+
+def test_concatenated_gzip_members_share_one_output_cap() -> None:
+    packed = gzip.compress(b"x" * 50) + gzip.compress(b"y" * 50)
+    decoded, truncated = _decoded(packed, "gzip", 60)
+    assert len(decoded) == 60
+    assert truncated is True
+
+
+def test_bodies_exactly_at_the_limit_are_not_truncated() -> None:
+    assert _decoded(b"abcde", None, 5) == (b"abcde", False)
 
 
 def test_decompression_bombs_are_capped_at_the_requested_limit(server_url: str) -> None:

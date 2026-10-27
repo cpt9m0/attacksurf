@@ -290,30 +290,47 @@ MAX_EXPANSION = 20  # most compressed bytes we are willing to read for a given d
 _DECODE_STEP = 64 * 1024
 
 
+def _clamped(content: bytes, limit: int, *, truncated: bool) -> tuple[bytes, bool]:
+    """The only way out of `_decoded`: no path may return more than `limit` bytes.
+
+    The raw-body fallbacks see the wire buffer, which is allowed to exceed `limit` (an encoded
+    body needs headroom), so clamping here keeps the ceiling true for every outcome.
+    """
+    capped = content[:limit]
+    return capped, truncated or len(capped) < len(content)
+
+
 def _decoded(content: bytes, encoding: str | None, limit: int) -> tuple[bytes, bool]:
     """Decode `content`, capping the *decoded* output: a compression bomb must not reach memory.
 
     Only the (already capped) wire bytes are decompressed, in bounded steps, and decoding stops
     as soon as `limit` bytes are produced, so the ceiling holds for the expanded body too. An
     unknown or corrupt encoding is reported as truncation rather than raised: scanners see the
-    raw bytes and no internal error detail.
+    raw bytes (still clamped to `limit`) and no internal error detail.
     """
     name = (encoding or "").strip().lower()
     if name in {"", "identity"}:
-        return content, False
+        return _clamped(content, limit, truncated=False)
     if name not in ENCODINGS:
-        return content, True
-    # 16 + MAX_WBITS auto-detects gzip/zlib headers; deflate is zlib-wrapped per RFC 9110.
+        return _clamped(content, limit, truncated=True)
+    # 16 + MAX_WBITS accepts a gzip header; deflate is zlib-wrapped per RFC 9110.
     wbits = 16 + zlib.MAX_WBITS if "gzip" in name else zlib.MAX_WBITS
-    decoder = zlib.decompressobj(wbits)
     out = bytearray()
     try:
-        for start in range(0, len(content), _DECODE_STEP):
-            produced = decoder.decompress(content[start : start + _DECODE_STEP], limit - len(out))
-            out += produced
-            if len(out) >= limit:
-                return bytes(out[:limit]), True
-        out += decoder.flush(limit - len(out))
+        remaining = content
+        while True:
+            decoder = zlib.decompressobj(wbits)
+            for start in range(0, len(remaining), _DECODE_STEP):
+                out += decoder.decompress(remaining[start : start + _DECODE_STEP], limit - len(out))
+                if len(out) >= limit:
+                    return bytes(out[:limit]), True
+            out += decoder.flush(limit - len(out))
+            # A gzip body may be several concatenated members (RFC 1952 §2.2): decode them all
+            # under the same cumulative budget instead of silently dropping everything after the
+            # first. `unused_data` beyond the first member is only defined for gzip.
+            remaining = decoder.unused_data
+            if len(out) >= limit or not remaining or "gzip" not in name:
+                break
     except zlib.error:
-        return content, True
-    return (bytes(out[:limit]), True) if len(out) > limit else (bytes(out), False)
+        return _clamped(content, limit, truncated=True)
+    return _clamped(bytes(out), limit, truncated=False)

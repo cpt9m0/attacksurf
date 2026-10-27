@@ -5,28 +5,22 @@
 **Updated:** 2026-10-27 · **Branch:** `12-scopeguard-safe-clients` · **PR/Issue:** #58 / #12
 
 ## Status
-PR #58 open; second round of Codex findings addressed, awaiting re-review and CI on the new head.
+PR #58 open; third round of Codex findings addressed, awaiting re-review and CI on the new head.
 
 ## Last task
-Round 2 of Codex review on `4db6396` — four more findings, all reproduced first, all fixed:
-- **P1** `infra/scope_guard.py` + `scanners/registry.py`: nothing tied `HttpPermission.TARGET` to
-  `requires_verification`, so a plugin declaring target HTTP with the flag `False` skipped the
-  ownership check entirely (`is_verified` was never called) and got a client for the scanned
-  host. The gate now requires ownership for any TARGET grant regardless of the flag, and the
-  registry rejects the inconsistent metadata at registration.
-- **P2** `infra/http.py`: `_read_capped` capped *wire* bytes, then `httpx.Response(content=...)`
-  decompressed unbounded (8,175 bytes of gzip -> 8 MiB). The client now decodes gzip/deflate
-  itself via incremental `zlib` with the cap on decoded output, drops `Content-Encoding`, and
-  only allows the `MAX_EXPANSION` wire headroom for encoded responses.
-- **P2** `infra/http.py`: `_target` parsed `parts.path` alone, so `//api/v1` was read as an
-  authority and sent as `/v1`. It now uses the full URL's `raw_path`.
-- **P2** `services/scan_results.py`: overlapping scans of one root could each read the same
-  count and admit the full allowance (`start_scan` allows overlap; each holds only its own
-  `Scan` lock). `_admit` now takes `FOR NO KEY UPDATE` on the root before counting.
-- Round 1 (previous commit): grant enforcement before the first request, body ceiling inside the
-  client, root-scoped admission count, `ScopePolicyError` failing only its job.
-- Each regression test was confirmed failing on the pre-fix code. ADR 0013, `docs/security.md`,
-  CHANGELOG and STATE updated.
+Round 3 on `d11ee95` — two more P2s, both in the round-2 decoder, both reproduced first:
+- `_decoded`'s raw-body fallbacks (corrupt gzip, unknown encoding, `zlib.error`) returned the
+  whole retained wire buffer, which may be `min(limit*20, 2 MiB)`: `_decoded(b'not gzip'*250_000,
+  'gzip', 1 MiB)` returned 2,000,000 bytes. All returns now go through `_clamped()`, which slices
+  to `limit` and flags truncation, so no path can exceed the ceiling.
+- Concatenated gzip members were silently dropped after the first (`decoder.unused_data` was
+  ignored): `gzip.compress(b'first') + gzip.compress(b'second')` returned only `b'first'`. The
+  decoder now loops over members under one cumulative output budget.
+- 4 new tests, each confirmed red first. ADR 0013 and CHANGELOG updated.
+
+Rounds 1 and 2 (earlier commits on this branch): grant enforcement before the first request and
+inside the client, TARGET HTTP requiring ownership, root-scoped admission count under a row lock,
+`ScopePolicyError` failing only its job, decoded-body ceiling, `//` path preservation.
 
 ## Next step
 Push and re-trigger Codex (`gh pr comment 58 -b "@codex review"`); confirm CI green on the new
@@ -34,8 +28,10 @@ head, then merge. Next issue per epic #31: #13 (assets UI) or #14 (verification)
 
 ## Open threads
 - Active checks and target HTTP stay denied until #14 plugs a real `OwnershipChecker` into
-  `workers.runtime.scanner_gate()`. The TARGET/verification invariant is now enforced in two
-  places (gate + registry) should #14 change the rules.
+  `workers.runtime.scanner_gate()`. The TARGET/verification invariant is enforced in two places
+  (gate + registry) should #14 change the rules.
+- The decoder grows with each review round; if round 4 lands here again, consider moving
+  response decoding into its own module with a table of tests instead of patching it further.
 - `make test-worker` / e2e Compose tests were not rerun for this branch.
 - `.env.example` still needs auth settings (ALLOW_SIGNUP, SESSION_LIFETIME_HOURS, PROXY_COUNT).
 
