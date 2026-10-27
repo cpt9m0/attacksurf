@@ -22,9 +22,8 @@ Implementation complete on the branch, committed; no PR opened yet.
   `scanners/`.
 
 ## Next step
-Open a draft PR for this branch (`Closes #12`, title `feat(security): add ScopeGuard and
-guarded network clients`), then implement #13 (assets UI) or #14 — check epic #31 for what is
-unblocked.
+PR #58 (ready for review, all CI checks green) — merge when reviewed, then take #13 (assets UI)
+or #14 (verification) per epic #31.
 
 ## Open threads
 - Active checks and target HTTP stay denied until #14 plugs a real `OwnershipChecker` into
