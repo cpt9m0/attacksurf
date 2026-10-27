@@ -67,10 +67,11 @@ Codebase scanning (secrets, SAST, vulnerable dependencies) · Binary analysis
 git clone https://github.com/cpt9m0/attacksurf.git
 cd attacksurf
 cp .env.example .env
-make up        # = docker compose up -d --build --wait  →  http://127.0.0.1:5000/healthz
-make migrate   # create/upgrade the database schema
+make up        # build, migrate, start  →  http://127.0.0.1:5000
 make logs      # follow logs; `make` lists all targets; `make down` to stop
 ```
+
+Open the app and sign up with your email and a password; there are no default credentials.
 
 On Linux, a Docker socket `permission denied` error usually needs a login/group refresh;
 see [Docker permissions](docs/development.md#docker-permissions-on-linux) before changing permissions.

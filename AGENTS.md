@@ -48,7 +48,7 @@ pre-commit hook and in CI).
 ```bash
 uv sync                                  # install (never pip install)
 cp .env.example .env                     # local config (all settings: src/attacksurf/config.py)
-make up / make down / make test          # Docker Compose dev stack (web, postgres, redis); `make` lists all
+make up / make down / make test          # dev Compose stack; up builds + migrates before starting apps
 make migrate                             # alembic upgrade head (in compose); new migration: make revision id=0002 m="..."
 uv add <pkg> / uv add --dev <pkg>        # add deps (never edit lockfile by hand)
 uv run flask --app attacksurf run --debug

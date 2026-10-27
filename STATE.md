@@ -2,33 +2,39 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-10-27 · **Branch:** `fix/docker-group-session` · **Issue:** none (Docker access fix)
+**Updated:** 2026-10-27 · **Branch:** `56-fix-signup-database-startup` · **Issue:** #56 (signup 500)
 
 ## Status
-Docker access diagnosed, stack healthy; documentation fix prepared for a draft PR pending CI.
+Signup fixed on the running stack; branch verified locally and prepared for PR review.
 
 ## Last task
-- Confirmed `ubuntu` is already configured in the `docker` group, but the current login
-  session lacks it. No socket permissions, group memberships or Makefile behavior changed.
-- Ran `sg docker -c 'make up'`: all six services are healthy; `/healthz` returns `ok`.
-- Added safe Linux Docker permission troubleshooting to `docs/development.md`, linked it
-  from `README.md`, and updated `CHANGELOG.md`. No app/UI/schema/agent convention changes.
-- Ruff check/format, pyright and pre-commit pass; DB-backed pytest: 513 passed,
-  2 opt-in worker tests skipped, coverage 98.09%. No behavior changed, so no new tests needed.
+- Signup 500 came from an unmigrated database: no `users` table. The failed signup saved no
+  account. Applied existing migrations through `0004`.
+- `make up` now builds, waits for PostgreSQL/Redis, runs `make migrate`, then starts apps.
+  Added four host-side orchestration regression tests (confirmed failing before the fix),
+  and an opt-in signup smoke test using the stack's existing schema with rolled-back writes.
+- CI now exercises `make up`, signup/worker checks, then migration repeatability. Updated
+  README, changelog, development/architecture docs, ADRs 0008/0012, and AGENTS.md.
+- Ruff check/format, pyright and pre-commit pass. DB-backed pytest: 517 passed, 3 opt-in
+  tests skipped, 98.09% coverage; all 3 opt-in Compose tests pass separately. Repeated
+  `make migrate` succeeds. No schema, UI, auth policy or secret changes.
+- Tracking issue #56; branch renamed to match it. All checks rerun before PR publication.
 
 ## Next step
-Review the draft PR for this branch and wait for CI before marking it ready. In the user's
-terminal, run `newgrp docker` or reconnect over SSH before using plain `make up`.
-Then continue the roadmap with #12
-(ScopeGuard/safe clients); #11 is merged in main via #54.
+Review the PR for this branch (`gh pr view`); require all CI checks green before merging.
+The next unblocked roadmap item is #12 (ScopeGuard/safe clients).
 
 ## Open threads
-- #53 tracks an existing clock-boundary CSRF test flake.
-- #20 owns finding lifecycle/diffs; #21 owns stale-job sweeping/cancellation; #25 owns triage.
-- `.env.example` still needs auth settings (ALLOW_SIGNUP, SESSION_LIFETIME_HOURS, PROXY_COUNT).
+- Roadmap: #12 (ScopeGuard/safe clients) is next; #11 is merged via #54.
+- #53 tracks a clock-boundary CSRF test flake; #20 finding lifecycle/diffs, #21 stale jobs,
+  #25 triage. `.env.example` still needs auth settings (ALLOW_SIGNUP, SESSION_LIFETIME_HOURS,
+  PROXY_COUNT).
 
 ## Notes for the next agent
-- Existing agent/tmux shells retain stale groups: prefix Docker commands with `sg docker -c`
-  or restart the session. Docker group access is root-equivalent; never `chmod 666` the socket.
-- Dev Compose stack is running; the existing issue11 Postgres container also runs on port 5433.
-- DB tests: `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@localhost:5433/attacksurf_test uv run pytest`.
+- Stale shell groups: use `sg docker -c 'make up'` or reconnect. Never chmod the Docker socket.
+- Tailnet-only HTTPS Serve proxies to localhost:5000; disable with
+  `sudo tailscale serve --https=443 off`. No public Funnel. All six dev services are healthy.
+- Existing CLIProxyAPI management UI on tailnet port 8317 returns HTTP 200; its systemd unit
+  is running with unchanged configuration.
+- DB tests use the separate issue11 Postgres container on 5433:
+  `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@localhost:5433/attacksurf_test uv run pytest`.

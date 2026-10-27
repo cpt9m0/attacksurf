@@ -1,6 +1,6 @@
 # 0008. Plain SQLAlchemy 2.0 + Alembic, UUIDv7 keys
 
-- Status: accepted; worker sessions superseded by 0010
+- Status: accepted; worker sessions superseded by 0010, dev migration orchestration by 0012
 - Date: 2026-10-08
 
 ## Context
@@ -24,5 +24,6 @@ well in Postgres.
 
 ## Consequences
 - A few lines of glue we own instead of two extensions.
-- Migrations don't run on startup: `make migrate` (or `alembic upgrade head`) is an explicit step.
+- App processes don't migrate on startup. Dev `make up` orchestrates `make migrate` (ADR 0012);
+  other deployments run `make migrate` (or `alembic upgrade head`) explicitly.
 - Tests need a Postgres (`TEST_DATABASE_URL`); CI provides one, `make test` uses compose's.
