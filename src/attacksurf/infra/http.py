@@ -8,6 +8,7 @@ rebinds between our lookup and the connect can't redirect the socket somewhere e
 
 import ipaddress
 import ssl
+import zlib
 from collections.abc import Callable
 from typing import Any, Protocol
 from urllib.parse import SplitResult, urlsplit
@@ -176,12 +177,22 @@ class SafeHttpClient:
         try:
             core_response = pool.handle_request(core_request)
             try:
-                content, truncated = _read_capped(core_response, limit)
+                encoding = _header(core_response.headers, b"content-encoding")
+                # A plain body is read up to `limit`; an encoded one may need more wire bytes
+                # than its decoded size, but never unlimited (decompression expands, not shrinks).
+                wire_cap = (
+                    min(limit * MAX_EXPANSION, MAX_ENCODED_BYTES)
+                    if _is_encoded(encoding)
+                    else limit
+                )
+                raw, truncated = _read_capped(core_response, wire_cap)
+                content, decoded_truncated = _decoded(raw, encoding, limit)
             finally:
                 core_response.close()
+            headers = _headers_without_encoding(core_response.headers)
             response = httpx.Response(
                 core_response.status,
-                headers=core_response.headers,
+                headers=headers,
                 content=content,
                 request=request,
             )
@@ -194,7 +205,12 @@ class SafeHttpClient:
         except OSError:  # TLS verification and socket errors: their messages stay internal
             self._drop_pool()
             raise ScopeError("The request failed.") from None
-        return HttpBody(response.status_code, response.content, truncated, response.headers)
+        return HttpBody(
+            response.status_code,
+            response.content,
+            truncated or decoded_truncated,
+            response.headers,
+        )
 
     def _pool_for(self, host: str, address: str) -> httpcore.ConnectionPool:
         if self._pool is not None and self._pinned_to == (host, address):
@@ -219,10 +235,39 @@ def _encoded_host(host: str) -> bytes:
         return httpx.URL(f"http://{host}/").raw_host or b""
 
 
+ENCODINGS = frozenset({"gzip", "x-gzip", "deflate"})
+
+
+def _is_encoded(encoding: str | None) -> bool:
+    """Whether `encoding` is one we decode (anything else is passed through untouched)."""
+    return (encoding or "").strip().lower() in ENCODINGS
+
+
+def _header(headers: list[tuple[bytes, bytes]], name: bytes) -> str | None:
+    """First value of `name` (case-insensitive) in httpcore's raw header list."""
+    for key, value in headers:
+        if key.lower() == name:
+            return value.decode("latin-1")
+    return None
+
+
+def _headers_without_encoding(headers: list[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
+    """Drop `Content-Encoding`/`Content-Length`: the body was decoded and capped as `content`."""
+    return [
+        (name, value)
+        for name, value in headers
+        if name.lower() not in {b"content-encoding", b"content-length"}
+    ]
+
+
 def _target(parts: SplitResult) -> bytes:
-    """Origin-form request target; httpx percent-encodes what the wire can't carry."""
-    path = parts.path or "/"
-    return httpx.URL(path + (f"?{parts.query}" if parts.query else "")).raw_path
+    """Origin-form request target; httpx percent-encodes what the wire can't carry.
+
+    Built from the *whole* URL, not from `parts.path`: a path starting with `//` makes
+    `httpx.URL` read the first segment as an authority and drop it (`//api` -> `/api`),
+    silently querying a different endpoint.
+    """
+    return httpx.URL(parts.geturl()).raw_path
 
 
 def _read_capped(response: httpcore.Response, limit: int) -> tuple[bytes, bool]:
@@ -238,3 +283,37 @@ def _read_capped(response: httpcore.Response, limit: int) -> tuple[bytes, bool]:
         if len(chunk) > remaining:
             return b"".join(chunks), True
     return b"".join(chunks), False
+
+
+MAX_ENCODED_BYTES = MAX_BODY_BYTES * 2  # compressed wire bytes we are willing to retain
+MAX_EXPANSION = 20  # most compressed bytes we are willing to read for a given decoded limit
+_DECODE_STEP = 64 * 1024
+
+
+def _decoded(content: bytes, encoding: str | None, limit: int) -> tuple[bytes, bool]:
+    """Decode `content`, capping the *decoded* output: a compression bomb must not reach memory.
+
+    Only the (already capped) wire bytes are decompressed, in bounded steps, and decoding stops
+    as soon as `limit` bytes are produced, so the ceiling holds for the expanded body too. An
+    unknown or corrupt encoding is reported as truncation rather than raised: scanners see the
+    raw bytes and no internal error detail.
+    """
+    name = (encoding or "").strip().lower()
+    if name in {"", "identity"}:
+        return content, False
+    if name not in ENCODINGS:
+        return content, True
+    # 16 + MAX_WBITS auto-detects gzip/zlib headers; deflate is zlib-wrapped per RFC 9110.
+    wbits = 16 + zlib.MAX_WBITS if "gzip" in name else zlib.MAX_WBITS
+    decoder = zlib.decompressobj(wbits)
+    out = bytearray()
+    try:
+        for start in range(0, len(content), _DECODE_STEP):
+            produced = decoder.decompress(content[start : start + _DECODE_STEP], limit - len(out))
+            out += produced
+            if len(out) >= limit:
+                return bytes(out[:limit]), True
+        out += decoder.flush(limit - len(out))
+    except zlib.error:
+        return content, True
+    return (bytes(out[:limit]), True) if len(out) > limit else (bytes(out), False)

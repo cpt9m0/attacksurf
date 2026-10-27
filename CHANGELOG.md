@@ -14,10 +14,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   gate before CSRF (anonymous writes get 401/redirect), logout clears the session even if the
   audit write fails, absolute session lifetime enforced server-side
 - Review follow-ups on the ScopeGuard PR: the run-scoped HTTP client now enforces the grant
-  policy before its first request (not only on redirects) and applies the body-size ceiling
-  whatever limit a plugin passes; the discovered-asset cap counts against the scan root so a
-  check on a discovered subdomain cannot claim a fresh allowance; a `ScopePolicyError` from the
-  gate fails only its job instead of the whole scan (ADR 0013).
+  policy before its first request (not only on redirects) and applies the body-size ceiling to
+  the decoded body whatever limit a plugin passes; a `TARGET` HTTP grant always requires
+  verified ownership; the discovered-asset cap counts against the scan root under a row lock, so
+  neither overlapping scans nor checks on discovered subdomains can exceed it; and a
+  `ScopePolicyError` from the gate fails only its job instead of the whole scan (ADR 0013).
 
 ### Added
 - ScopeGuard and the scanner network boundary (ADR 0013): target validation against the bundled

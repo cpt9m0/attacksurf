@@ -17,8 +17,10 @@ their security data. Both make it a target. These rules apply to all code.
 |---|---|
 | SSRF via user targets, redirects, custom LLM `base_url` | ScopeGuard (ADR 0013) validates every scanner target: public Suffix only (bundled PSL, no fetch), no single-label or internal names (`localhost`, `.local`, `.corp`, `.internal`, …), no IP literals. Resolved answers must all be public (RFC1918, loopback, link-local incl. `169.254.169.254`, CGNAT, multicast, reserved, ULA, IPv6 mapped/6to4/NAT64 equivalents). The safe HTTP client pins the validated address, keeps `Host`/SNI, re-checks the scanner's grant
 before the first request and every redirect hop, ignores env proxies, and caps time and body
-size (a plugin-supplied limit cannot raise the ceiling). Scanners may only contact declared
-public data services; active checks (target HTTP) require ownership (#14) |
+size — the ceiling applies to the *decoded* body, so a compressed response can't expand past it,
+and a plugin-supplied limit cannot raise it. A `TARGET` HTTP grant always requires verified
+ownership, whatever the plugin declares. Scanners may only contact declared public data
+services; active checks (target HTTP) require ownership (#14) |
 | Cross-tenant data access | `org_id` on every tenant row, scoped queries, an isolation test per endpoint; links between tenant rows (asset parent and relations, scans, jobs, findings, evidence) use composite foreign keys `(id, org_id)`, so the database itself rejects a link to another org's row; Postgres RLS later |
 | XSS from scan data (TXT records, HTML, banners) | Jinja autoescape, never `|safe` on scan data; CSP `default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'` (no `unsafe-inline`/`unsafe-eval`; Alpine CSP build; a test rejects inline script/style/handlers in rendered pages) |
 | CSRF | Flask-WTF `CSRFProtect` on every POST/PUT/PATCH/DELETE: hidden `csrf_token` in forms, `X-CSRFToken` header for HTMX via `<body hx-headers>`; `SameSite=Lax` session cookie; logout is POST-only |
@@ -46,8 +48,9 @@ checks, and the plugin receives only DNS/HTTP adapters bounded by its frozen `Sc
 (allowlisted public data services, or the target after verification; a DNS budget). Declared
 services are re-checked and resolved before the run starts; every DNS answer and HTTP host
 (each request, including every redirect hop) is validated again when used. A scan profile's
-`max_discovered_assets` caps what one root can add, counting against the scan root so a check on
-a discovered subdomain cannot claim a fresh allowance; a policy error fails only its job.
+`max_discovered_assets` caps what one root can add, counting against the scan root under a row
+lock so overlapping scans can't each claim the full allowance and a check on a discovered
+subdomain cannot claim a fresh one; a policy error fails only its job.
 
 Active/analysis queues remain reserved and cannot be selected in a scan profile; active checks
 stay denied until ownership verification ships (#14).

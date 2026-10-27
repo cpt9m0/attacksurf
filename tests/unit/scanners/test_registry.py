@@ -62,6 +62,27 @@ def test_registry_rejects_invalid_metadata(field: str, value: object) -> None:
         ScannerRegistry().register(Invalid)
 
 
+def test_registration_rejects_target_http_without_verification() -> None:
+    """Target HTTP is an active check: the plugin must declare that it needs ownership proof."""
+
+    class UnverifiedTarget(EmptyScanner):
+        name = "test.unverified_target"
+        requires_verification = False
+        grant = ScannerGrant(http=HttpPermission.TARGET, dns_lookups=1)
+
+    with pytest.raises(ValueError, match="requires_verification"):
+        ScannerRegistry().register(UnverifiedTarget)
+
+
+def test_registration_accepts_target_http_when_verification_is_declared() -> None:
+    class VerifiedTarget(EmptyScanner):
+        name = "test.verified_target"
+        requires_verification = True
+        grant = ScannerGrant(http=HttpPermission.TARGET, dns_lookups=1)
+
+    assert ScannerRegistry().register(VerifiedTarget) is VerifiedTarget
+
+
 def test_profiles_reject_duplicate_scanners_and_unconsumed_queues() -> None:
     registry = ScannerRegistry()
     registry.register(EmptyScanner)

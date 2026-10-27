@@ -1,16 +1,23 @@
 """Safe HTTP client: pinned addresses, redirects, size and time limits (no internet needed)."""
 
+import gzip
 import ssl
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import ClassVar
+from urllib.parse import urlsplit
 
 import pytest
 
 from attacksurf.domain.net import DnsError
 from attacksurf.domain.scope import AddressError, ScopeError
-from attacksurf.infra.http import MAX_REDIRECTS, SafeHttpClient, connection_address
+from attacksurf.infra.http import (
+    MAX_REDIRECTS,
+    SafeHttpClient,
+    _target,
+    connection_address,
+)
 
 
 class StaticResolver:
@@ -46,6 +53,23 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/slow":
             threading.Event().wait(2)
+            return
+        if self.path == "/bomb":
+            # ~8 MiB of zeros behind ~8 KiB of gzip: the classic decompression bomb.
+            packed = gzip.compress(b"\x00" * (8 * 1024 * 1024))
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(packed)))
+            self.send_header("Content-Encoding", "gzip")
+            self.end_headers()
+            self.wfile.write(packed)
+            return
+        if self.path == "/gzipped":
+            packed = gzip.compress(b"decoded body")
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(packed)))
+            self.send_header("Content-Encoding", "gzip")
+            self.end_headers()
+            self.wfile.write(packed)
             return
         body = f"path={self.path}".encode()
         self.send_response(200)
@@ -129,6 +153,34 @@ def test_response_bodies_are_cut_at_the_limit(server_url: str) -> None:
     body = client.get(f"http://public.example:{port}/big", limit=500)
     assert body.truncated is True
     assert body.content == b"x" * 500
+
+
+def test_encoded_bodies_are_decoded(server_url: str) -> None:
+    port = server_url.rsplit(":", 1)[1]
+    client, _ = client_for(server_url)
+    body = client.get(f"http://public.example:{port}/gzipped", limit=100)
+    assert body.content == b"decoded body"
+    assert body.truncated is False
+    assert "content-encoding" not in {key.lower() for key in body.headers}
+
+
+def test_decompression_bombs_are_capped_at_the_requested_limit(server_url: str) -> None:
+    """Regression: the cap applied to *wire* bytes only, so gzip expanded past it in memory."""
+    port = server_url.rsplit(":", 1)[1]
+    client, _ = client_for(server_url)
+    body = client.get(f"http://public.example:{port}/bomb", limit=10_000)
+    assert len(body.content) == 10_000
+    assert body.truncated is True
+
+
+def test_request_targets_keep_leading_double_slashes() -> None:
+    """Regression: `//api/v1` was parsed as an authority and sent as `/v1`.
+
+    Checked against `_target` rather than through the test server: `BaseHTTPRequestHandler`
+    collapses a leading `//` in `self.path` before a handler sees it.
+    """
+    target = _target(urlsplit("https://example.com//api/v1?q=a"))
+    assert target == b"//api/v1?q=a"
 
 
 def test_timeouts_raise_a_safe_error(server_url: str) -> None:

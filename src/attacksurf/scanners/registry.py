@@ -4,6 +4,7 @@ import math
 import re
 
 from attacksurf.domain.scanners import Scanner, ScanProfile
+from attacksurf.domain.scope import HttpPermission
 
 MAX_TIMEOUT_SECONDS = 240
 
@@ -26,6 +27,10 @@ class ScannerRegistry:
             or not 0 < scanner.timeout_seconds <= MAX_TIMEOUT_SECONDS
         ):
             raise ValueError("scanner timeout must be between 0 and 240 seconds")
+        # Target HTTP is an active check, so it always needs ownership proof. Reject the
+        # inconsistent metadata at registration: the gate would refuse every run anyway.
+        if scanner.grant.http is HttpPermission.TARGET and not scanner.requires_verification:
+            raise ValueError("a target HTTP grant requires requires_verification")
         self._scanners[scanner.name] = scanner
         return scanner
 

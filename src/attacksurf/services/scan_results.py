@@ -174,7 +174,15 @@ def _admit(
     `root_id` is where rows are actually written (`parent_id=scan.root_asset_id`), so it is also
     what the count must use: a check on a discovered subdomain would otherwise see zero children
     and hand out a fresh allowance for every subdomain.
+
+    The root row is locked `FOR NO KEY UPDATE` before counting, so overlapping scans of the same
+    root (each locked only on its own `Scan`) can't both read the same count and each admit the
+    full allowance. Key-share locks taken by `record_asset` for the child inserts don't conflict,
+    so this serializes admissions without blocking them.
     """
+    session.scalars(
+        scoped(Asset, org_id).where(Asset.id == root_id).with_for_update(key_share=False)
+    ).one()
     candidates = tuple(
         ref
         for ref in output.assets

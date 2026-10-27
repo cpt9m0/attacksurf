@@ -68,9 +68,12 @@ class ScopeGuard(ScannerGate):
     def check(self, ctx: ScanContext, asset: AssetRef, scanner: Scanner) -> ScannerRuntime:
         """Validate and authorize one run. Raises `ScopeError`, and the job is then skipped."""
         self._check_target(asset, scanner)
-        if scanner.requires_verification and not self._ownership.is_verified(ctx.org_id, asset):
-            raise ScopeError("Active checks need a verified asset.")
         grant = scanner.grant
+        # Target HTTP *is* the active check: the grant decides, not the plugin's own flag, so a
+        # scanner can't reach the scanned host by declaring `requires_verification=False` (#14).
+        needs_ownership = scanner.requires_verification or grant.http is HttpPermission.TARGET
+        if needs_ownership and not self._ownership.is_verified(ctx.org_id, asset):
+            raise ScopeError("Active checks need a verified asset.")
         self._check_services(grant)
         guarded_dns = _GuardedDns(self._dns, max_lookups=grant.dns_lookups)
         http = _GuardedHttp(

@@ -160,6 +160,16 @@ def test_active_checks_are_denied_until_ownership_is_verified() -> None:
     assert UnverifiedOwnership().is_verified(uuid4(), target()) is False
 
 
+def test_target_http_requires_verification_even_if_the_plugin_flag_is_false() -> None:
+    """Regression: a TARGET grant is an active check, whatever `requires_verification` says."""
+    active = scanner(
+        requires_verification=False,  # inconsistent metadata the gate must not trust
+        grant=ScannerGrant(http=HttpPermission.TARGET, dns_lookups=1),
+    )
+    with pytest.raises(ScopeError, match="verified"):
+        make_guard()[0].check(context(), target(), active)
+
+
 def test_scanner_must_support_the_asset_type() -> None:
     ip_scanner = scanner(asset_types=frozenset({AssetType.IP}))
     with pytest.raises(ScopePolicyError, match="asset type"):

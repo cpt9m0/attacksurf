@@ -26,15 +26,17 @@ data services (CT logs, RDAP) before ownership verification exists (#14).
   hands the plugin only `dns`/`http` adapters that re-check every call. A scanner can therefore
   query CT logs but never the scanned host unless it is an active check on a verified asset.
 - **Ownership is an interface** (`OwnershipChecker`), unverified until #14; active checks stay
-  denied. No verification model or migration here.
+  denied. A `TARGET` HTTP grant is an active check: the gate requires ownership for it whatever
+  the plugin's `requires_verification` flag says, and the registry rejects that combination at
+  registration. No verification model or migration here.
 - **Pinning without DNS rebinding**: the safe HTTP client resolves the host through the guarded
   resolver (every answer must be public), picks one address, and dials *that address* through an
   `httpcore` backend while keeping the original `Host` header, SNI and certificate checks. The
   gate's allowlist is the client's policy hook and is consulted *before the first request* and
   at every redirect hop, so the run-scoped client handed to scanners is as strict as the
   wrapper; timeouts, a redirect cap and a streaming size cap (`MAX_BODY_BYTES`, applied inside
-  the client whatever `limit` a plugin passes) bound each request. Environment proxies are never
-  used; TLS verification cannot be disabled through the client.
+  the client to the *decoded* body, so a gzip bomb can't expand past it) bound each request.
+  Environment proxies are never used; TLS verification cannot be disabled through the client.
 - **Passive checks only reach public data services**, through the same client (DNSSEC-less
   StubResolver, no search domains). No scanner contacts an arbitrary target.
 - Denials are `ScopeError`s and are recorded on the `Job` as `skipped` with a message; policy
