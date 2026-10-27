@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - [uv](https://docs.astral.sh/uv/) (manages Python 3.12+ and dependencies)
-- Docker + Docker Compose (from issue #3 onward)
+- Docker + Docker Compose, with access to the Docker daemon (see [Docker permissions](#docker-permissions-on-linux))
 - Node.js (only for the `npx`-based MCP servers used by AI agents)
 - `jq` (used by the Claude Code formatting hook)
 
@@ -37,6 +37,41 @@ a worker to complete it; CI's compose job runs the same test
 PostgreSQL 18 stores data in a major-version subdirectory of `/var/lib/postgresql` (mounted as
 `pgdata`), so a `pgdata` volume created by PostgreSQL 16 cannot be reused: run
 `docker compose down -v` once to start a fresh one (dev data only; restore from a dump if needed).
+
+### Docker permissions on Linux
+
+If `make up` reports `permission denied` connecting to `/var/run/docker.sock`, the current
+shell cannot access the Docker daemon. This is a host login/permissions issue, not a Compose
+configuration error. Compare the current session's groups with the configured membership:
+
+```bash
+id -nG
+getent group docker
+```
+
+If your username appears in the `docker` group entry but `id -nG` does not list `docker`,
+refresh your login session: disconnect and reconnect over SSH, or open a subshell with:
+
+```bash
+newgrp docker
+docker info
+make up
+```
+
+For a single command without opening an interactive shell, use `sg docker -c 'make up'`.
+Existing shells (including terminal multiplexers and agent sessions) retain their old groups
+until restarted; adding the user again will not refresh them.
+
+If your user is not a member, an administrator can grant access on a trusted development host:
+
+```bash
+sudo usermod -aG docker "$USER"
+```
+
+Then reconnect or run `newgrp docker` as above. **The `docker` group grants root-equivalent
+access**; only add trusted users. For environments where that is inappropriate, configure
+[rootless Docker](https://docs.docker.com/engine/security/rootless/) instead. Never make the
+socket world-writable (`chmod 666`), and do not add automatic `sudo` to the Makefile.
 
 ## Database and migrations
 

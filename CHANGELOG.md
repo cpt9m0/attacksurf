@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Fixed
+- Document the Docker socket permission fix for Linux sessions with stale group membership,
+  including safe setup steps and the security implications of Docker access.
 - Auth hardening from review: atomic first-user signup, login password length bound, login
   gate before CSRF (anonymous writes get 401/redirect), logout clears the session even if the
   audit write fails, absolute session lifetime enforced server-side
