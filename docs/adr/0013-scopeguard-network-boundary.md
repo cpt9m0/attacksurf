@@ -39,7 +39,7 @@ data services (CT logs, RDAP) before ownership verification exists (#14).
   Environment proxies are never used; TLS verification cannot be disabled through the client.
   Every path out of the decoder clamps to the requested limit, honors the `eof` flag so an
   incomplete stream is reported as truncated, and decodes concatenated gzip members under one
-  cumulative budget.
+  cumulative budget, carrying both the unconsumed tail and the unread slices across members.
 - **Passive checks only reach public data services**, through the same client (DNSSEC-less
   StubResolver, no search domains). No scanner contacts an arbitrary target.
 - Denials are `ScopeError`s and are recorded on the `Job` as `skipped` with a message; policy

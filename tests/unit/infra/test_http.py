@@ -1,6 +1,7 @@
 """Safe HTTP client: pinned addresses, redirects, size and time limits (no internet needed)."""
 
 import gzip
+import hashlib
 import ssl
 import threading
 import zlib
@@ -168,6 +169,15 @@ def test_encoded_bodies_are_decoded(server_url: str) -> None:
 
 # One row per behaviour the decoder must get right. Every entry here is either a review
 # regression or a protocol case that a naive implementation gets wrong; add rows, not branches.
+# Literal rather than `_DECODE_STEP`: a test that imported the constant could not fail when the
+# slicing logic it describes regresses.
+SLICE_BOUNDARY = 64 * 1024 + 2  # one gzip member that ends just past a decode slice
+# Deterministic but incompressible: the bug only shows when a member's wire bytes exceed one
+# decode slice, which repeated literals never do.
+_INCOMPRESSIBLE = b"".join(
+    hashlib.sha256(i.to_bytes(4, "big")).digest() for i in range(3200)
+)  # 102_400 bytes
+
 _DECODE_CASES: list[tuple[str, bytes, str | None, int, bytes, bool]] = [
     # name, wire body, Content-Encoding, limit, expected decoded body, expected truncated
     ("plain body", b"abc", None, 100, b"abc", False),
@@ -219,6 +229,30 @@ _DECODE_CASES: list[tuple[str, bytes, str | None, int, bytes, bool]] = [
         60,
         b"x" * 50 + b"y" * 10,
         True,
+    ),
+    (
+        "small member then a large incompressible one",
+        gzip.compress(b"small") + gzip.compress(_INCOMPRESSIBLE),
+        "gzip",
+        200_000,
+        b"small" + _INCOMPRESSIBLE,
+        False,
+    ),
+    (
+        "member ending on a slice boundary",
+        gzip.compress(b"a" * (SLICE_BOUNDARY - 8)) + gzip.compress(_INCOMPRESSIBLE),
+        "gzip",
+        200_000,
+        b"a" * (SLICE_BOUNDARY - 8) + _INCOMPRESSIBLE,
+        False,
+    ),
+    (
+        "many members spanning several slices",
+        b"".join(gzip.compress(bytes([i % 256]) * 100) for i in range(800)),
+        "gzip",
+        200_000,
+        b"".join(bytes([i % 256]) * 100 for i in range(800)),
+        False,
     ),
     # Incomplete streams: `zlib` returns partial output without raising, so only `eof` tells.
     ("gzip cut before its footer", gzip.compress(b"hello")[:-12], "gzip", 100, b"he", True),

@@ -329,17 +329,23 @@ def _decoded(content: bytes, encoding: str | None, limit: int) -> tuple[bytes, b
 
 
 def _inflate(content: bytes, wbits: int, limit: int, gzip_encoded: bool) -> tuple[bytes, bool]:
-    """Decompress every (concatenated) member into one budget; `complete` means fully decoded."""
+    """Decompress every (concatenated) member into one budget; `complete` means fully decoded.
+
+    The body is fed to each member one slice at a time, and the buffer carries both halves of
+    the stream's state: the bytes the decoder did not consume, and the slices it has not seen
+    yet. Advancing from `unused_data` alone would drop the unread slices after a member ends
+    mid-body (RFC 1952 §2.2 allows a small member followed by a large one), silently truncating
+    the body; rebuilding the buffer from both keeps every byte accounted for.
+    """
     out = bytearray()
-    remaining = content
+    pending = content  # bytes not yet given to the current member
     while True:
         decoder = zlib.decompressobj(wbits)
-        for start in range(0, len(remaining), _DECODE_STEP):
-            out += decoder.decompress(remaining[start : start + _DECODE_STEP], limit - len(out))
+        while pending and not decoder.eof:
+            chunk, pending = pending[:_DECODE_STEP], pending[_DECODE_STEP:]
+            out += decoder.decompress(chunk, limit - len(out))
             if len(out) >= limit:
                 return bytes(out[:limit]), False
-            if decoder.eof:
-                break  # this member is complete; `unused_data` holds the next one
         out += decoder.flush(limit - len(out))
         if len(out) >= limit:
             return bytes(out[:limit]), False
@@ -347,8 +353,7 @@ def _inflate(content: bytes, wbits: int, limit: int, gzip_encoded: bool) -> tupl
         # decodes to partial output without raising, so it must count as truncated.
         if not decoder.eof:
             return bytes(out), False
-        # A gzip body may be several concatenated members (RFC 1952 §2.2): decode them all
-        # under the same cumulative budget instead of silently dropping the rest.
-        remaining = decoder.unused_data
-        if not remaining or not gzip_encoded:
+        # Keep what the member did not consume *and* the slices it never saw.
+        pending = decoder.unused_data + pending
+        if not pending or not gzip_encoded:
             return bytes(out), True

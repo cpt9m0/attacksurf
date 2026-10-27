@@ -21,8 +21,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   `ScopePolicyError` from the gate fails only its job instead of the whole scan (ADR 0013).
 - Response decoding clamps every fallback to the requested limit (a corrupt or unknown
   `Content-Encoding` no longer returns the oversized wire buffer), decodes all concatenated
-  gzip members, and reports a stream that ends before its final block as truncated instead of
-  returning partial content silently.
+  gzip members — carrying unread bytes across members instead of dropping them — and reports a
+  stream that ends before its final block as truncated instead of returning partial content
+  silently.
 
 ### Added
 - ScopeGuard and the scanner network boundary (ADR 0013): target validation against the bundled
