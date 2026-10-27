@@ -96,7 +96,7 @@ Flask + HTMX web app, Celery workers, PostgreSQL, Redis. Each check is a small p
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Foundation: tooling, DB, auth, UI shell | 🚧 in progress |
-| 2 | Scan engine: plugins, pipeline, ScopeGuard | planned |
+| 2 | Scan engine: plugins, pipeline, ScopeGuard | plugin/pipeline framework built; ScopeGuard next |
 | 3 | DNS module | planned |
 | 4 | AI triage and summaries | planned |
 | 5 | Scheduling, alerts, deployment → **v0.1.0** | planned |

@@ -121,6 +121,13 @@ pyright and pytest versions come from `uv.lock`.
 - Celery tasks in tests: `task.apply(kwargs=...)` runs them in-process; patch
   `workers.runtime.session_factory` to share the test's connection
   (`tests/integration/workers/test_tracked_task.py`).
+- Pipeline fixtures live in `tests/scanner_fixtures.py`; eager integration tests patch the
+  registry, rule catalog and gate, and use an in-memory result backend. `send_task` does not
+  honor Celery eager mode: the kickoff is recorded with `FakeQueue` and applied explicitly.
+- `tests/e2e/test_pipeline.py` starts a real prefork test worker against Redis/Postgres with
+  an isolated broker/result key prefix. It exercises Redis chords with fake, no-network
+  plugins and a failing check; production workers never load those plugins. `make test-worker`
+  runs both this test and the original Compose worker ping (CI uses the same command).
 
 ## Working with AI agents
 

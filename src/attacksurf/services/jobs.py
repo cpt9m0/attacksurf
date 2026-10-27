@@ -1,6 +1,7 @@
 """Job lifecycle: create + enqueue, and the state changes `workers.base.TrackedTask` records.
 
-Each function is one use case and commits. Timestamps come from the database clock, so
+Lifecycle use cases commit; `record_job` is the no-commit building block for pipeline batches.
+Timestamps come from the database clock, so
 `finished_at >= started_at` holds even when a retry runs on a worker with a skewed clock.
 """
 
@@ -10,7 +11,7 @@ import structlog
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from attacksurf.domain.jobs import JobError, JobNotFound, TaskQueue
+from attacksurf.domain.jobs import JobError, JobNotFound, JobTask, PipelineQueue, TaskQueue
 from attacksurf.domain.scans import JobStatus
 from attacksurf.infra.db.models import Job
 from attacksurf.infra.db.tenancy import scoped
@@ -56,6 +57,46 @@ def create_job(
     return job
 
 
+def record_job(
+    session: Session,
+    *,
+    org_id: UUID,
+    scan_id: UUID,
+    stage: str,
+    scanner: str | None = None,
+    asset_id: UUID | None = None,
+) -> Job:
+    """Building block for a pipeline batch: add a row without committing or publishing."""
+    job = Job(
+        org_id=org_id,
+        scan_id=scan_id,
+        stage=stage,
+        scanner=scanner,
+        asset_id=asset_id,
+        status=JobStatus.QUEUED,
+    )
+    session.add(job)
+    session.flush()
+    return job
+
+
+def enqueue_workflow(
+    session: Session,
+    queue: PipelineQueue,
+    header: tuple[JobTask, ...],
+    tail: tuple[JobTask, ...],
+    error: JobTask,
+) -> None:
+    """Commit every row before publishing; fail the batch if broker publication fails."""
+    session.commit()
+    try:
+        queue.enqueue_workflow(header, tail, error)
+    except Exception as exc:
+        for task in (*header, *tail):
+            mark_job_failed(session, task.org_id, task.job_id, exc)
+        raise
+
+
 def mark_job_running(
     session: Session,
     org_id: UUID,
@@ -92,6 +133,10 @@ def mark_job_running(
 
 def mark_job_completed(session: Session, org_id: UUID, job_id: UUID) -> None:
     _finish(session, org_id, job_id, JobStatus.COMPLETED, error=None)
+
+
+def mark_job_skipped(session: Session, org_id: UUID, job_id: UUID, reason: str) -> None:
+    _finish(session, org_id, job_id, JobStatus.SKIPPED, error=reason[:MAX_ERROR_LENGTH])
 
 
 def mark_job_failed(session: Session, org_id: UUID, job_id: UUID, exc: BaseException) -> None:

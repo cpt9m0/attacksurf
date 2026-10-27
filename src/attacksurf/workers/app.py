@@ -10,7 +10,7 @@ from attacksurf.infra.logging import configure_logging
 from attacksurf.infra.queue import celery_config
 from attacksurf.workers import runtime
 
-TASK_MODULES = ("attacksurf.workers.tasks.system",)
+TASK_MODULES = ("attacksurf.workers.tasks.system", "attacksurf.workers.tasks.pipeline")
 
 app = Celery("attacksurf", include=list(TASK_MODULES))
 # Read settings on first use, not at import: importing tasks (tests, tooling) must not depend on

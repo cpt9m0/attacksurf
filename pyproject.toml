@@ -45,6 +45,7 @@ dependencies = [
     "gunicorn>=26.2.0",
     "idna>=3.20",
     "psycopg[binary]>=3.3.6",
+    "pydantic>=2.12",
     "pydantic-settings>=2.15.0",
     "sqlalchemy>=2.1.4",
     "structlog>=26.1.0",

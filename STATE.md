@@ -2,61 +2,38 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-10-26 · **Branch:** `main` · **Issue:** #11 (scanner plugin framework)
+**Updated:** 2026-10-27 · **Branch:** `11-scanner-pipeline` · **Issue:** #11
 
 ## Status
-#1–#10 merged (#49); `main` is green. Postgres/Redis/Python/uv dependency bumps merged
-(#41–#43, #50). Next up: #11.
+#11 implementation complete; CI and review must pass before merge.
 
 ## Last task
-- Merged Dependabot PRs #42, #43, #50 (PostgreSQL 18, Redis 8, `python:3.13-slim` digest) and
-  #41 (setup-uv 10.3.0)
-- PostgreSQL 18 keeps data in a major-version subdirectory, so `pgdata` now mounts
-  `/var/lib/postgresql`; the old `/var/lib/postgresql/data` mount made the container exit.
-  Upgrade note in `docs/development.md`
-- Verified on the merged combination: fresh PG18 volume + full migration chain, `/healthz`,
-  real-worker e2e test, prod image as uid 10001; Redis 8 exercised as the Celery broker
-- #51 moves the CI test job onto the same PostgreSQL 18 image
+- Added validated scanner contracts, registry/profiles, discovery/check Celery chords and
+  continuation stages, tenant-scoped scan services, atomic fingerprint/evidence persistence,
+  bounded scanner execution, sanitized failures and best-effort post-commit events (ADR 0011).
+- No schema/UI changes. Production execution is denied pending ScopeGuard (#12); fake plugins
+  and the permissive fixture-only gate live in tests. `dns_passive` has no real scanners yet.
+- `diff`/`triage` remain no-op seams (#20/#25); no lifecycle transitions or stats are inferred.
+- Full suites: 513 passed on Python 3.12/3.13, coverage 98.09%; the two worker tests pass separately.
+  Ruff, pyright, import-linter, pre-commit and changed-file secret scanning pass.
+- Updated architecture/security/development docs, README, changelog, AGENTS and scanner skill.
 
 ## Next step
-Implement #11 (scanner plugin framework): `ScanOutput`, registry/profiles, pipeline chain/chord,
-persistence of assets/findings by fingerprint, fake scanner.
+Review/merge the #11 PR from `11-scanner-pipeline` after CI passes. Then implement #12:
+replace `workers.runtime.scanner_gate()` with ScopeGuard and add safe network adapters.
 
 ## Open threads
-- #51: CI `test` jobs still use `postgres:16`; needs a `workflow`-scoped token to push
-- `.env.example` needs `ALLOW_SIGNUP=true`, `SESSION_LIFETIME_HOURS=12`, `PROXY_COUNT=0`
-  (prod behind Caddy: `PROXY_COUNT=1`)
-- Later issues own: upserting findings by fingerprint + evidence size cap (#11), a sweeper for
-  jobs left `running` or `queued` without a message (#21), status transitions/regressions/
-  `Scan.stats` (#20), one active scan per root + severity ordering (#21/#22); marking assets gone
-  sets `is_active=False` and `deactivated_at` together
-- Optional (user): ruleset on `main` requiring PRs + checks `lint`, `test (3.12)`, `test (3.13)`,
-  `secrets`, `compose`, `pr-title`
-- #32: GitHub Sponsors / Ko-fi accounts not set up yet (Ko-fi username assumed `cpt9m0`)
-- Repo settings for the user: description, topics, Discussions, Sponsorships,
-  private vulnerability reporting, social preview
-- `DESIGN.md` visual values are placeholders in `static/css/tokens.css` (`TODO(DESIGN.md)`):
-  replace via Claude Design; no template changes needed
-- context7 MCP blocked by the proxy (403); brave-search needs `BRAVE_API_KEY`; playwright MCP
-  wants Google Chrome (absent): use Python Playwright with
-  `executable_path=/opt/pw-browsers/chromium-1194/chrome-linux/chrome`
+- #53 tracks an existing clock-boundary CSRF test flake; the unchanged suite passes on rerun.
+- #20 owns finding fixed/regressed/suppression semantics, per-scan observations and stats;
+  `FindingFixed` is defined but not emitted until actual fixed transitions exist.
+- #21 owns the stale-job sweeper, concurrent scan limit and cancellation UI/API. Publication
+  and event delivery are not exactly-once; see ADR 0011 for thread/publication limitations.
+- `.env.example` still needs auth settings (ALLOW_SIGNUP, SESSION_LIFETIME_HOURS, PROXY_COUNT).
 
 ## Notes for the next agent
-- Repo: default branch `main`, squash-merge only (PR title = commit subject), head branches
-  auto-deleted; commits here use the repo-local `Claude <noreply@anthropic.com>` identity
-- The GitHub token in this sandbox has `repo`/`gist`/`read:org` only: it cannot push or merge
-  anything touching `.github/workflows/` (needs `workflow` scope) — do those from the UI
-  (`gh auth refresh -s workflow` fixes it)
-- Local stack is PostgreSQL 18 + Redis 8; a `pgdata` volume from the 16 images must be recreated
-  (`docker compose down -v`). Here Docker needs `sudo docker` (user is not in the `docker` group)
-- Docker Hub may rate-limit (429): use `mirror.gcr.io/library/<image>`; GHCR blobs are
-  proxy-blocked; image builds need the proxy CA (never commit that)
-- Test Postgres outside compose: `docker start testpg` (`mirror.gcr.io/library/postgres:16`,
-  127.0.0.1:5433, db `attacksurf_test`)
-- New migration: point `DATABASE_URL` at a scratch DB, `alembic upgrade head`, then
-  `alembic revision --autogenerate --rev-id 000N`; remove the duplicate enum CHECKs it emits
-  (`create_constraint=False` + the convention-named `ck_*`)
-- Tests: `tests.helpers.make_settings(...)` ignores `.env` and OS env; env-loading tests use
-  `settings_from_env()` + `clean_env` fixture
-- `flask --app attacksurf` works (`create_app` lazily re-exported from `__init__.py`)
-- First `pre-commit` run downloads hook envs (gitleaks builds with Go): takes a minute
+- Test Postgres/Redis containers: `attacksurf-issue11-pg` / `attacksurf-issue11-redis` (stopped).
+  Start with `sudo docker start attacksurf-issue11-pg attacksurf-issue11-redis`.
+- DB tests: `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@localhost:5433/attacksurf_test uv run pytest`.
+- Scanner outputs never go through Redis. Threads never access DB; timed-out threads cannot be
+  killed, so four unfinished threads exhaust a child until it recycles (100 tasks).
+- All fake-worker tests remain in the existing `make test-worker` / CI e2e path; no workflow edits.

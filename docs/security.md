@@ -35,6 +35,25 @@ their security data. Both make it a target. These rules apply to all code.
 | Job errors and worker logs | `Job.error` and worker logs keep the exception type and stack frames; messages only for our own `JobError`s (third-party messages can embed tokens, authenticated URLs or response bodies); Celery's tracer logger is silenced in workers |
 | Supply chain | locked deps (`uv.lock`), only releases at least two weeks old (transitive ones pinned via `[tool.uv] constraint-dependencies`), `pip-audit` in CI, pinned MCP server versions, minimal dependencies |
 
+## Scanner execution boundary
+
+The plugin/pipeline framework is implemented, but no network-enabled plugins ship yet.
+`workers.runtime.scanner_gate()` fails closed until ScopeGuard/safe clients land in #12;
+the allow gate and fake plugins used in tests are never imported by production workers.
+Active/analysis queues remain reserved and cannot be selected in a scan profile.
+
+Plugins receive immutable context/value objects, never sessions or ORM rows. Threads cannot
+write results: services validate normalized `ScanOutput` again, select tenant-scoped assets,
+and commit data together with terminal job state. Output is limited to 2 MiB and individual
+evidence objects to 64 KiB of JSON UTF-8; invalid/oversize results fail the check. No scan
+output/evidence is carried through Celery results; exceptions are sanitized before Redis sees
+them, including retry failures. Evidence itself must not contain credentials or tokens.
+
+A scanner budget timeout **does not kill its Python thread**. Late results are discarded;
+unfinished work is capped at four threads per child, and prefork children recycle after 100
+tasks. Future network adapters must enforce their own timeouts and response-size caps. This
+is error isolation, not a sandbox for executing user-supplied scanner code.
+
 ## Accounts
 
 Signup is open by default (`ALLOW_SIGNUP=true`). With `ALLOW_SIGNUP=false` only the first user

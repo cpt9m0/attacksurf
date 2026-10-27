@@ -3,6 +3,10 @@
 from enum import StrEnum
 
 
+class ScanError(ValueError):
+    """Invalid scan request, safe for the web layer to display."""
+
+
 class ScanStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
