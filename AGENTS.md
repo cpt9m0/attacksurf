@@ -33,7 +33,7 @@ src/attacksurf/   application code (src layout, import name `attacksurf`)
   scanners/       scanner plugins grouped by target type (dns/, ip/, web/, code/, binary/)
   ai/             providers/, prompts/ (versioned templates), triage, summaries
   infra/          logging (structlog + request IDs), db, queue (Celery), storage, scope_guard,
-                  http client, crypto
+                  dns, public_suffix, safe http client, crypto
   workers/        Celery task entrypoints (thin, call services)
 tests/            pytest; mirrors src/attacksurf/ structure (unit/, integration/, e2e/)
 docs/             architecture, ADRs, development, security, conventions
@@ -89,9 +89,11 @@ sync" rule below is satisfied**. Do not claim done without running them.
    never write to the DB directly; the pipeline persists. Contracts: `domain/scanners.py`;
    references use `(type, value)`, not row IDs. Scanner tasks persist data + completed job
    atomically before returning a chord receipt; never return evidence through Redis (ADR 0011).
-6. **All outbound network traffic from scanners goes through `infra/scope_guard` + the safe HTTP
-   client.** No raw `requests`/`httpx`/sockets in scanners. Active (non-passive) checks require
-   verified ownership.
+6. **All outbound network traffic from scanners goes through ScopeGuard and its adapters**
+   (`infra/scope_guard.py`; ADR 0013). Scanners use `ctx.runtime.dns` / `ctx.runtime.http` only,
+   never raw `requests`/`httpx`/sockets/dnspython (a test enforces it), and declare a
+   `ScannerGrant` (public data services, or the target for verified active checks). Active
+   checks require verified ownership.
 7. **LLMs judge, scanners detect.** AI never invents findings, never auto-closes them, and only
    sees normalized findings. All LLM output is schema-validated (pydantic).
 8. **Scan-derived content is untrusted:** escape in templates (never `|safe` on it), and wrap it as

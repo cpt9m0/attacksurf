@@ -83,6 +83,7 @@ def scan(self: PipelineTask, *, org_id: str, job_id: str) -> None:
             events=dispatcher,
             catalog=RULES,
             retry_allowed=self.request.retries < (self.max_retries or 0),
+            profiles=PROFILES,
         )
 
 

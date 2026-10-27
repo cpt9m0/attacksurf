@@ -40,8 +40,11 @@ class ScannerRegistry:
             if len(names) != len(set(names)):
                 raise ValueError("duplicate scanner in profile stage")
             for name in names:
+                # `get` also enforces the full plugin contract (grant, asset types, timeout).
                 if self.get(name).queue != "passive":
                     raise ValueError("only passive scanner workers are available")
+        if profile.max_discovered_assets is not None and profile.max_discovered_assets < 1:
+            raise ValueError("max_discovered_assets must be positive")
 
 
 registry = ScannerRegistry()

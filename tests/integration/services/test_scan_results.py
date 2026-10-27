@@ -8,7 +8,7 @@ from attacksurf.domain.findings import FindingStatus, Severity
 from attacksurf.domain.rules import Rule
 from attacksurf.domain.scanners import AssetRef, RawEvidence, RawFinding, ScanOutput
 from attacksurf.domain.scans import ScanStatus, ScanTrigger
-from attacksurf.infra.db.models import Evidence, Finding, Scan
+from attacksurf.infra.db.models import Asset, Evidence, Finding, Scan
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services.scan_results import persist_scan_output
 from tests.integration.factories import make_scan
@@ -64,6 +64,51 @@ def test_persist_rejects_references_not_in_the_output_or_input(
     )
     with pytest.raises(ValueError, match="reference"):
         persist_scan_output(db_session, scan, scan.root_asset_id, output, catalog=catalog)
+
+
+def test_discovered_limit_drops_overflow_and_their_findings(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    output = ScanOutput(
+        assets=(
+            AssetRef(type=AssetType.SUBDOMAIN, value="a.acme.example"),
+            AssetRef(type=AssetType.SUBDOMAIN, value="b.acme.example"),
+        ),
+        findings=(
+            RawFinding(
+                rule_id=RULE.id, asset=AssetRef(type=AssetType.SUBDOMAIN, value="b.acme.example")
+            ),
+        ),
+    )
+
+    created = persist_scan_output(
+        db_session, scan, scan.root_asset_id, output, catalog=catalog, discovered_limit=1
+    )
+
+    assert created == []
+    assert [row.value for row in db_session.scalars(scoped(Asset, scan.org_id)).all()][1:] == [
+        "a.acme.example"
+    ]
+    assert db_session.scalars(scoped(Finding, scan.org_id)).all() == []
+
+
+def test_discovered_limit_still_rejects_names_the_plugin_never_reported(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    output = ScanOutput(
+        findings=(
+            RawFinding(
+                rule_id=RULE.id,
+                asset=AssetRef(type=AssetType.SUBDOMAIN, value="ghost.acme.example"),
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="reference"):
+        persist_scan_output(
+            db_session, scan, scan.root_asset_id, output, catalog=catalog, discovered_limit=0
+        )
 
 
 @pytest.mark.parametrize("hours", [0, 1])

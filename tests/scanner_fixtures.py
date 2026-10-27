@@ -2,6 +2,7 @@
 
 from attacksurf.domain.assets import AssetType, RelationKind
 from attacksurf.domain.findings import Severity
+from attacksurf.domain.net import HttpBody, ScannerRuntime
 from attacksurf.domain.rules import Rule
 from attacksurf.domain.scanners import (
     AssetRef,
@@ -10,7 +11,7 @@ from attacksurf.domain.scanners import (
     RawFinding,
     ScanContext,
     Scanner,
-    ScannerError,
+    ScannerGrant,
     ScanOutput,
     ScanProfile,
 )
@@ -20,11 +21,38 @@ RULE = Rule(
     "test.fixture.issue", "Fixture issue", "Fixture description", Severity.LOW, "Fix $domain"
 )
 
+NO_NETWORK = ScannerGrant()
+
 
 class FixtureGate:
-    def check(self, ctx: ScanContext, asset: AssetRef, scanner: Scanner) -> None:
-        if not scanner.name.startswith("fixture.") or scanner.requires_verification:
-            raise ScannerError("Not a fixture scanner.")
+    """Scope-only gate for pipeline tests: fixture scanners get stub adapters."""
+
+    def __init__(self, redirect_allowed: bool = False) -> None:
+        self.checked: list[tuple[ScanContext, AssetRef, Scanner]] = []
+        self.redirect_allowed = redirect_allowed
+
+    def check(self, ctx: ScanContext, asset: AssetRef, scanner: Scanner) -> ScannerRuntime:
+        self.checked.append((ctx, asset, scanner))
+        return ScannerRuntime(StubDns(), StubHttp(self.redirect_allowed))
+
+
+class StubDns:
+    def resolve_ipv4(self, host: str) -> tuple[str, ...]:
+        return ("93.184.216.34",)
+
+    def resolve_name(self, host: str) -> tuple[str, ...]:
+        return ("93.184.216.34",)
+
+
+class StubHttp:
+    def __init__(self, redirect_allowed: bool = False) -> None:
+        self.redirect_allowed = redirect_allowed
+
+    def get(self, url: str, *, limit: int) -> HttpBody:
+        return HttpBody(status_code=200, content=b"[]")
+
+    def close(self) -> None:
+        pass
 
 
 class FakeScanner:
@@ -33,6 +61,7 @@ class FakeScanner:
     queue = "passive"
     requires_verification = False
     timeout_seconds = 1.0
+    grant = NO_NETWORK
 
     def run(self, ctx: ScanContext, asset: AssetRef) -> ScanOutput:
         child = AssetRef(type=AssetType.SUBDOMAIN, value=f"www.{asset.value}")
@@ -78,10 +107,49 @@ def fixture_registry() -> ScannerRegistry:
     return registry
 
 
+class AssetCountScanner:
+    """Discovery plugin that returns three subdomains, to exercise the per-root cap."""
+
+    name = "fixture.names"
+    asset_types = frozenset({AssetType.DOMAIN})
+    queue = "passive"
+    requires_verification = False
+    timeout_seconds = 1.0
+    grant = NO_NETWORK
+
+    def run(self, ctx: ScanContext, asset: AssetRef) -> ScanOutput:
+        return ScanOutput(
+            assets=(
+                AssetRef(type=AssetType.SUBDOMAIN, value=f"h0.{asset.value}"),
+                AssetRef(type=AssetType.SUBDOMAIN, value=f"h1.{asset.value}"),
+                AssetRef(type=AssetType.SUBDOMAIN, value=f"h2.{asset.value}"),
+            ),
+            relations=(
+                # h2 is dropped by the cap: its relation must be skipped, not guessed.
+                DiscoveredRelation(
+                    from_asset=AssetRef(type=AssetType.SUBDOMAIN, value=f"h2.{asset.value}"),
+                    to_asset=asset,
+                    kind=RelationKind.SUBDOMAIN_OF,
+                ),
+            ),
+        )
+
+
+def capped_registry() -> ScannerRegistry:
+    registry = fixture_registry()
+    registry.register(CappedDiscovery)
+    return registry
+
+
+class CappedDiscovery(AssetCountScanner):
+    name = "fixture.many"
+
+
 PROFILES = {
     "fixture": ScanProfile(
         name="fixture",
         discover=(FakeScanner.name,),
         checks=(FakeCheck.name, FailingCheck.name),
-    )
+    ),
+    "capped": ScanProfile(name="capped", discover=("fixture.many",), max_discovered_assets=2),
 }

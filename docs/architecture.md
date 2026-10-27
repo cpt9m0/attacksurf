@@ -98,10 +98,11 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 - **Scanners are plugins** (`@register_scanner`) returning normalized pydantic `ScanOutput`.
   A scan **profile** (e.g. `dns_passive`) selects the scanners to run.
 - A failing scanner fails only its job, not the scan.
-- Implemented framework (ADR 0011): `domain/scanners.py` defines pydantic `ScanOutput`,
-  `AssetRef(type, value)`, relations, raw rule findings/evidence, `ScanContext` and the `Scanner`
-  protocol. Plugins declare `name`, `asset_types`, `queue`, `requires_verification` and
-  `timeout_seconds` (0 < timeout <= 240 s), and return `run(ctx, asset) -> ScanOutput`.
+- Implemented framework (ADR 0011/0013): `domain/scanners.py` defines pydantic `ScanOutput`,
+  `AssetRef(type, value)`, relations, raw rule findings/evidence, `ScanContext`, the `Scanner`
+  protocol, the frozen `ScannerGrant` and `ScannerRuntime` (validated DNS/HTTP adapters). Plugins
+  declare `name`, `asset_types`, `queue`, `requires_verification`, `timeout_seconds`
+  (0 < timeout <= 240 s) and `grant`, and return `run(ctx, asset) -> ScanOutput`.
 - `scanners/registry.py` supplies `@register_scanner`; import plugin modules explicitly at
   startup. `scanners/profiles.py` selects discovery/check plugins by name. `dns_passive` is
   intentionally empty until DNS plugins land; empty/unknown profiles are rejected. Profiles
@@ -132,12 +133,17 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   scanner failures do not make the whole scan fail. Identifier-only `FindingCreated` and
   `ScanCompleted` events publish after commit through `infra.events.InProcessDispatcher`;
   handler errors are isolated. `FindingFixed` is reserved for #20. Delivery is best-effort.
-- **ScopeGuard** runs before every scanner: it validates the target, blocks private/metadata IP
-  ranges, and requires verified ownership for active checks. Scanners only reach the network
-  through the guarded HTTP client / DNS resolver.
-- Until #12 implements that guard/client, `workers.runtime.scanner_gate()` denies all scanners;
-  no production checks are enabled. Fixture-only plugins and an injected gate exercise the
-  full pipeline in tests without outbound traffic.
+- **ScopeGuard** runs before every scanner (`infra/scope_guard.py`, ADR 0013): it validates the
+  target (public domain under the bundled PSL; no internal/single-label names or IP literals;
+  resolved addresses must be public), requires verified ownership for active checks, and returns
+  run-scoped DNS/HTTP adapters bounded by the plugin's `ScannerGrant` (declared public data
+  services only, or the target after verification). `workers.runtime.scanner_gate()` wires it;
+  ownership is unverified until #14, so active checks stay denied.
+- Scanners only reach the network through those adapters: `infra/http.py` pins the validated
+  address (keeping `Host`/SNI), re-checks redirects against the grant, ignores env proxies and
+  caps time and body size; `infra/dns.py` uses the stub resolver without search domains. A test
+  fails if scanner modules import raw network libraries. Profiles may cap discovered assets per
+  root (`max_discovered_assets`), enforced at persistence.
 
 ## AI layer
 

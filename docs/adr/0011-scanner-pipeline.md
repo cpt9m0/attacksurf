@@ -17,7 +17,8 @@ diffing and AI triage belong to later issues (#12, #20, #25).
 - Register plugin classes explicitly with `@register_scanner`; profiles name discovery and
   check plugins. Currently only `passive` workers are supported. `requires_verification` names
   the active-check flag unambiguously. No real plugins ship here; the default gate denies all
-  execution until #12, and the fake plugins/gate live exclusively in tests.
+  execution until #12 (superseded in part by ADR 0013), and the fake plugins/gate live
+  exclusively in tests.
 - Use Redis-backed chords for discovery/check groups and immutable chains for continuation
   stages. Commit each batch of `Job` rows before publication via the `PipelineQueue` port;
   reuse rows under a scan lock on orchestration redelivery. Retain the existing `TaskQueue`
