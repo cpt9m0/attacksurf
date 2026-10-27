@@ -59,8 +59,8 @@ repos:
         stages: [pre-push]
       - id: pytest
         name: pytest
-        entry: uv run --frozen pytest -q
-        language: system
+        entry: .github/scripts/pytest-hook.sh
+        language: script
         pass_filenames: false
         always_run: true
         stages: [pre-push]

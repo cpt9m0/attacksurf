@@ -107,6 +107,13 @@ TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@localhost:5432/atta
 
 Each DB test runs in a transaction that is rolled back (fixture `db_session`).
 
+**Pre-push hook.** `uv run pre-commit install` installs a `pytest` hook that runs the full suite,
+DB tests included. It resolves `TEST_DATABASE_URL` in this order: your shell, then `.env`, then
+`.env`'s `DATABASE_URL` with the name suffixed `_test` (same host and credentials), then the
+local default above. It refuses to run against a database not named `*_test` and stops with one
+message if the database is unreachable — so it never "passes" by silently skipping DB tests.
+Nothing is needed on a fresh clone with `make up` running.
+
 ## Configuration
 
 All settings live in `src/attacksurf/config.py` and are read from environment variables or `.env`
