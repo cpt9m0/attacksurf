@@ -71,11 +71,22 @@ def test_boosted_htmx_request_gets_full_page(auth_client: FlaskClient) -> None:
     assert b'class="shell"' in response.data
 
 
+def test_history_restore_request_gets_full_page(auth_client: FlaskClient) -> None:
+    # On a history-cache miss (Back after hx-push-url) HTMX sends HX-Request too, then swaps the
+    # response into the whole <body>: a fragment there would drop the app shell.
+    response = auth_client.get(
+        "/assets", headers={"HX-Request": "true", "HX-History-Restore-Request": "true"}
+    )
+
+    assert b'class="shell"' in response.data
+
+
 def test_pages_vary_on_htmx_headers(auth_client: FlaskClient) -> None:
     vary = auth_client.get("/").headers["Vary"]
 
     assert "HX-Request" in vary
     assert "HX-Boosted" in vary
+    assert "HX-History-Restore-Request" in vary
 
 
 def test_htmx_fragment_includes_flash_messages(app: Flask, auth_client: FlaskClient) -> None:

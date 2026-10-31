@@ -45,9 +45,10 @@
   {%- endif %}
 </dl>
 
-{#- Tab links swap only #asset-tab (which holds the tab bar too, so aria-current stays right). #}
+{#- Tab links swap only #asset-tab (which holds the tab bar too, so aria-current stays right);
+    hx-sync makes a second click abort the first request instead of racing it. #}
 <div id="asset-tab">
-  <nav class="tabs" aria-label="Asset sections" hx-target="#asset-tab" hx-select="#asset-tab" hx-swap="outerHTML" hx-push-url="true">
+  <nav class="tabs" aria-label="Asset sections" hx-target="#asset-tab" hx-select="#asset-tab" hx-swap="outerHTML" hx-push-url="true" hx-sync="this:replace">
     {%- for key, label in tabs %}
     {%- set href = url_for('ui.asset_detail', asset_id=asset.id, tab=None if key == 'overview' else key) %}
     <a href="{{ href }}" hx-get="{{ href }}"{% if key == tab %} aria-current="page"{% endif %}>{{ label }}</a>

@@ -16,6 +16,8 @@ Closes #13) is open from `13-assets-ui`. When it merges, #13 is done.
   `form_field(autofocus=)`, `relative_time` (`web/formatting.py` filters), `data_table` call blocks.
 - CSS: `.content { min-width: 0 }` so wide tables scroll inside `.table-wrap`; new tokens
   `--color-backdrop`, `--field-min-width`, `--filter-min-width`, `--meta-column-min-width`.
+- Review fixes (Codex on #118): history restores get the full page (`web/rendering.py`), and
+  filter forms / tab bars use `hx-sync="this:replace"`; both reproduced and verified in Chromium.
 - Checked in real Chromium (light + dark): add/invalid add, search focus, filters, tabs, dialog
   (Escape/Cancel/confirm), archive; no console errors besides the intended 422.
 
@@ -37,6 +39,10 @@ small MVP bug that can go first if preferred.
 - DB-backed web tests: each request closes the shared `db_session` at teardown, detaching ORM rows;
   pass ids around and re-read (`tests/integration/web/test_assets_ui.py` helpers).
 - Unit tests in `tests/unit/web/test_ui.py` stub `asset_views` (no DB there).
+- HTMX keeps its history cache in **sessionStorage** (`htmx-history-cache`); clear it there to
+  force a server history restore when testing Back navigation.
+- When reproducing a client race in Playwright, run a control with the fix removed (e.g. strip the
+  attribute via JS); a repro that passes both ways proves nothing. See #118 review fixes.
 - HTMX `hx-push-url` changes use pushState: in Playwright wait with `expect(page).to_have_url()`,
   not `wait_for_url` (it waits for a load event that never comes).
 - Signup is rate limited to 5/hour per IP, also in dev; reuse accounts when testing by hand.

@@ -13,10 +13,12 @@
 </section>
 
 {#- Filters swap only #asset-results (hx-select), so the search box keeps focus while typing;
-    hx-push-url keeps the view shareable. Plain GET without JS. #}
+    hx-push-url keeps the view shareable. Plain GET without JS. The search box issues its own
+    requests; hx-sync (inherited, `this` = this form) aborts the older of the two, so a stale
+    response can't overwrite newer results. #}
 <form class="filters card card-body" method="get" action="{{ url_for('ui.assets') }}" role="search" aria-label="Filter assets"
       hx-get="{{ url_for('ui.assets') }}" hx-trigger="change, submit" hx-target="#asset-results"
-      hx-select="#asset-results" hx-swap="outerHTML" hx-push-url="true">
+      hx-select="#asset-results" hx-swap="outerHTML" hx-push-url="true" hx-sync="this:replace">
   <div class="field">
     <label for="f-q">Search</label>
     <input id="f-q" name="q" type="search" value="{{ flt.q or '' }}" autocomplete="off"

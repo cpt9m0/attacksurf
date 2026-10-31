@@ -113,14 +113,18 @@ Built in #6: `button`, `severity_badge` + `status_pill` (`badges.html`), `data_t
 
 - Partial responses: routes call `web.rendering.render_page()`; pages start with
   `{% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}`. HTMX requests get
-  the fragment, boosted requests and normal loads the full page (`Vary: HX-Request`).
+  the fragment; boosted requests, history restores (`HX-History-Restore-Request`: Back after
+  `hx-push-url` when HTMX's history cache misses, which HTMX sends with `HX-Request` and swaps
+  into the whole `<body>`) and normal loads get the full page (`Vary` on all three headers).
 - Long-running work: show job progress via polling (`hx-trigger="every 2s"`), stop when done.
 - Forms: inline validation errors; disable the submit button during request.
 - Destructive actions: confirm modal; never one-click delete.
 - Lists: filters update the URL query string (`hx-push-url`) so views are shareable. The
   filter form targets only the results region (`hx-target` + `hx-select="#…-results"`), so
   inputs keep focus while typing; search fires on `input changed delay:300ms`. Without JS it
-  is a plain GET form.
+  is a plain GET form. Put `hx-sync="this:replace"` on the form: the search box sends its own
+  requests and inherits it (`this` resolves to the form), so an older response can't overwrite
+  newer results. Same on tab bars.
 - Tabs on detail pages are links (`?tab=…`, `aria-current="page"`); the tab bar lives inside the
   swapped region so its state updates with the content.
 - Inline-validated forms swap themselves (`hx-target="this"`, 422 with the field error) and set

@@ -221,6 +221,26 @@ def test_filter_requests_return_the_results_region(alice: FlaskClient) -> None:
     assert "<html" not in html
 
 
+def test_filter_and_tab_requests_are_synchronized(alice: FlaskClient, db_session: Session) -> None:
+    # The search box and the form both issue requests into #asset-results (and tab links into
+    # #asset-tab): `this:replace` on the shared ancestor aborts the older one, so a slow stale
+    # response can't overwrite newer results. Descendants inherit it; `this` is the declarer.
+    _add(alice, "example.com")
+
+    listing = _html(alice, "/assets")
+    detail = _html(alice, f"/assets/{_root_id(db_session)}")
+
+    form = listing[
+        listing.index('<form class="filters') : listing.index(
+            "</form>", listing.index('<form class="filters')
+        )
+    ]
+    assert form.split(">", 1)[0].count('hx-sync="this:replace"') == 1
+    assert form.count("hx-sync") == 1  # the search input inherits it rather than overriding
+    tabs = detail[detail.index('<nav class="tabs"') :]
+    assert 'hx-sync="this:replace"' in tabs.split(">", 1)[0]
+
+
 def test_bad_filter_values_are_a_bad_request(alice: FlaskClient) -> None:
     assert alice.get("/assets?type=server").status_code == 400
 
