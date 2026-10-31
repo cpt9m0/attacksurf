@@ -54,8 +54,9 @@ own key) **triages, prioritizes, and explains** them in plain language with fix 
 - **Multi-user ready**: organizations and roles
 
 ### Coming next
-IP / VPS exposure (open ports, service CVEs) · Website scanning (admin panels, WordPress, XSS) ·
-Codebase scanning (secrets, SAST, vulnerable dependencies) · Binary analysis
+Website scanning (TLS, headers, exposed files, outdated software) ·
+Codebase scanning (secrets, SAST, vulnerable dependencies) · Binary and mobile app analysis ·
+IP / VPS exposure (open ports, service CVEs)
 
 ## Getting started
 
@@ -104,7 +105,7 @@ Flask + HTMX web app, Celery workers, PostgreSQL, Redis. Each check is a small p
 | 3 | DNS module | planned |
 | 4 | AI triage and summaries | planned |
 | 5 | Scheduling, alerts, deployment → **v0.1.0** | planned |
-| next | IP, web, code, binary scanning | ideas welcome |
+| next | Website ([#66](https://github.com/cpt9m0/attacksurf/issues/66)), codebase ([#67](https://github.com/cpt9m0/attacksurf/issues/67)), binary ([#68](https://github.com/cpt9m0/attacksurf/issues/68)), IP scanning | planned |
 
 Full plan: [epic #31](https://github.com/cpt9m0/attacksurf/issues/31).
 

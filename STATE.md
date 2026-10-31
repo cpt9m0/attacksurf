@@ -2,13 +2,21 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-10-27 · **Branch:** `main` · **Merged:** #61, #62 · **Next:** #13 or #14
+**Updated:** 2026-10-31 · **Branch:** `main` · **Merged:** #61, #62 · **Next:** #13 or #14
 
 ## Status
-`main` is green at `ffbf917`. Nothing in flight. #12 (ScopeGuard, PR #58), #59 (PR #61) and
-#53 (PR #62) are all merged and their issues closed.
+`main` is green at `ffbf917`. #12 (ScopeGuard, PR #58), #59 (PR #61) and #53 (PR #62) are all
+merged and their issues closed. The #65 labels/README PR may still be open.
 
 ## Last task
+Planned the post-MVP modules as GitHub issues (no code): epics #66 Website (#69–#82),
+#67 Codebase (#83–#100) and #68 Binary (#101–#111), each with its own AI triage/summary issues;
+#31 now links them. New labels `area:web`, `area:code`, `area:binary` (#65). Key decisions in
+the issues: website checks only touch verified hosts (ADR in #69); public git repos need an
+ownership-proof file (#89); code/binary analysis runs in a no-network sandbox (ADR in #83);
+code snippets reach LLMs only via org opt-in (ADR in #98). MVP work (#13–#30) comes first.
+
+## Previous task (still relevant)
 Two bug fixes raised while working on #58:
 - **#59 (PR #61)**: the pre-push hook ran bare `pytest`, so DB tests skipped without
   `TEST_DATABASE_URL`, coverage fell under the gate and every push failed. The hook now resolves
