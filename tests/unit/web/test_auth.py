@@ -10,7 +10,8 @@ from uuid import UUID
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
-from itsdangerous import timed
+from itsdangerous import URLSafeTimedSerializer, timed
+from itsdangerous.encoding import base64_decode
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from attacksurf.app import create_app
@@ -46,6 +47,16 @@ def assert_csrf_valid(client: FlaskClient, token: str) -> None:
     )
 
     assert response.status_code == 200, "the shell's CSRF header token was rejected"
+
+
+def corrupt_signature(token: str) -> str:
+    """`token` with its signature's first character changed, so it no longer verifies.
+
+    Not the last character: a 20-byte HMAC is 27 base64 characters, so the last one carries two
+    padding bits and swapping it can decode to the same signature (#119).
+    """
+    payload, _, signature = token.rpartition(".")
+    return f"{payload}.{'B' if signature[0] == 'A' else 'A'}{signature[1:]}"
 
 
 def add_csrf_probe_route(app: Flask) -> None:
@@ -268,7 +279,7 @@ def test_shell_csrf_header_rejects_a_corrupted_token(app: Flask, auth_client: Fl
     assert match
     header = json.loads(match.group(1))["X-CSRFToken"]
 
-    corrupt = f"{header[:-1]}{'A' if header[-1] != 'A' else 'B'}"
+    corrupt = corrupt_signature(header)
     with pytest.raises(AssertionError, match="rejected"):
         assert_csrf_valid(auth_client, corrupt)
 
@@ -600,3 +611,13 @@ def test_signup_with_signup_off_asks_service_for_first_user_only(
 
     assert response.status_code == 404
     assert register.call_args.kwargs["first_user_only"] is True
+
+
+def test_corrupt_signature_always_changes_the_decoded_signature() -> None:
+    # Regression for #119: the old helper left ~5% of tokens valid.
+    serializer = URLSafeTimedSerializer("key", salt="wtf-csrf-token")
+
+    for i in range(500):
+        token = serializer.dumps(f"token-{i}")
+        corrupt = corrupt_signature(token)
+        assert base64_decode(corrupt.rpartition(".")[2]) != base64_decode(token.rpartition(".")[2])

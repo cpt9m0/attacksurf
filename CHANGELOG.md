@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Fixed
+- Flaky CSRF test: corrupting a token's last base64 character can keep the signature valid
+  (padding bits), so the test now changes the first one (#119).
 - Run database migrations as part of dev `make up`, before starting application services,
   preventing signup from returning HTTP 500 on a fresh database.
 - Document the Docker socket permission fix for Linux sessions with stale group membership,
