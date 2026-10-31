@@ -3,7 +3,13 @@ from uuid import UUID
 
 import pytest
 
-from attacksurf.domain.findings import FINGERPRINT_LENGTH, finding_fingerprint
+from attacksurf.domain.findings import (
+    FINGERPRINT_LENGTH,
+    SEVERITY_RANK,
+    Severity,
+    finding_fingerprint,
+    severity_from_rank,
+)
 
 ORG = UUID("00000000-0000-7000-8000-000000000001")
 ASSET = UUID("00000000-0000-7000-8000-000000000002")
@@ -63,3 +69,20 @@ def test_fingerprint_handles_non_ascii_location() -> None:
     assert finding_fingerprint(ORG, ASSET, "dns.a.b", "bücher") != finding_fingerprint(
         ORG, ASSET, "dns.a.b", "bucher"
     )
+
+
+def test_severity_rank_orders_worst_highest_and_round_trips() -> None:
+    ranked = sorted(Severity, key=SEVERITY_RANK.__getitem__)
+
+    assert ranked == [
+        Severity.INFO,
+        Severity.LOW,
+        Severity.MEDIUM,
+        Severity.HIGH,
+        Severity.CRITICAL,
+    ]
+    assert all(severity_from_rank(SEVERITY_RANK[s]) is s for s in Severity)
+
+
+def test_severity_from_rank_keeps_none_for_no_findings() -> None:
+    assert severity_from_rank(None) is None

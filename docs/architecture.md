@@ -80,7 +80,7 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 | Entity | Purpose |
 |---|---|
 | `Org`, `User`, `Membership` | tenancy; every tenant row carries `org_id`. `User` is global (one login, many orgs); `Membership.role` is `owner`/`admin`/`member` (`domain.accounts.has_role`) |
-| `Asset` | polymorphic target: `domain`, `subdomain`, `ip`, `url`, `repo`, `binary`; one row per `(org_id, type, value)` with `value` normalized by `domain.assets.normalize_asset_value` (hostnames lowercase punycode via `idna`, canonical IPs, `http(s)` URLs without credentials/fragment/default port; repo/binary not yet); `source` user/discovered, `parent_id` = asset a discovered one was found under (set once at first sighting, so no cycles; user-added assets are roots; deleting a parent cascades to its discovered children), `first_seen`/`last_seen`, `is_active` + `deactivated_at` (only sightings after it reactivate), `tags`, `details` |
+| `Asset` | polymorphic target: `domain`, `subdomain`, `ip`, `url`, `repo`, `binary`; one row per `(org_id, type, value)` with `value` normalized by `domain.assets.normalize_asset_value` (hostnames lowercase punycode via `idna`, canonical IPs, `http(s)` URLs without credentials/fragment/default port; repo/binary not yet); `source` user/discovered, `parent_id` = asset a discovered one was found under (set once at first sighting, so no cycles; user-added assets are roots; deleting a parent cascades to its discovered children), `first_seen`/`last_seen`, `is_active` + `deactivated_at` (only sightings after it reactivate), `tags`, `details`. Roots come from `services.assets.add_root_domain` (any name `check_public_hostname` accepts, registrable or subdomain; re-adding an archived root restores it) and are removed only by `archive_root_domain` (root + its discovered children go inactive; findings and scans are kept) |
 | `AssetRelation` | graph edges: `subdomain_of`, `cname_to`, `resolves_to`, `serves`; unique per `(org_id, from, to, kind)`, no self-edges. `services.assets.record_asset` / `record_relation` upsert atomically (`INSERT … ON CONFLICT`): re-seen rows extend `last_seen`, never downgrade `source=user`, don't commit (the pipeline commits once), and raise `AssetNotFound` for a parent or endpoint that isn't the org's (locked `FOR KEY SHARE` so it can't vanish before the insert) |
 | `Verification` | proof of ownership (DNS TXT); gates active checks |
 | `Scan`, `Job` | one run of a profile (`dns_passive`, …) against a root asset (`queued/running/completed/failed/cancelled`, triggered by `user`/`schedule`, `stats`), and its jobs: a pipeline stage, or one scanner on one asset (`skipped` = not run, e.g. denied by ScopeGuard). Deleting the root asset deletes its scans and jobs; deleting another asset keeps the job with `asset_id` NULL |
@@ -201,6 +201,12 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
   pages, JSON errors under `/api/`, unexpected exceptions logged and shown as a 500 with the
   request ID.
 - Styling and components follow `DESIGN.md` (plain CSS + tokens, Jinja macros).
+- Read side: `services/asset_views.py` returns frozen dataclasses (`AssetRow`, `AssetDetail`,
+  `AssetPage`, …) so `web/` never handles ORM rows; `web/asset_params.py` parses list filters
+  (`type`, `root`, `tag`, `q`, `status`, `page`; 400 on bad values) for pages and API alike.
+- `/api/v1/assets` (session auth, writes need `X-CSRFToken`): `GET` list, `POST {"value"}` adds a
+  root domain (201 / 422 / 409), `GET /<id>` detail with relations, `GET /<id>/findings`,
+  `GET /<id>/scans`, `POST /<id>/archive` (admin). Errors are `{"error", "message"}`.
 
 ## Authentication (ADR 0009)
 

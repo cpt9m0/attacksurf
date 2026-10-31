@@ -1,13 +1,14 @@
-"""Recording assets and their relations (used by the scan pipeline and asset management).
+"""Assets and their relations: root-domain use cases and the pipeline's building blocks.
 
-These are building blocks: they don't commit; the use case that calls them commits once.
+`add_root_domain` / `archive_root_domain` are use cases and commit once. `record_asset` /
+`record_relation` are building blocks: they don't commit; the use case that calls them does.
 """
 
 from collections.abc import Collection
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import case, func, null
+from sqlalchemy import case, func, null, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -15,13 +16,96 @@ from attacksurf.domain.assets import (
     AssetNotFound,
     AssetSource,
     AssetType,
+    DomainAlreadyAdded,
     InvalidAssetValue,
     RelationKind,
     normalize_asset_value,
+    normalize_hostname,
 )
 from attacksurf.domain.ids import uuid7
+from attacksurf.domain.scope import ScopeError, check_public_hostname
+from attacksurf.infra import public_suffix
 from attacksurf.infra.db.models import Asset, AssetRelation
 from attacksurf.infra.db.tenancy import scoped
+from attacksurf.services.audit import audit
+
+
+def add_root_domain(session: Session, org_id: UUID, raw: str, *, actor_id: UUID | None) -> Asset:
+    """Register a domain the org owns as a scan root, and commit.
+
+    Accepts any name ScopeGuard would scan: registrable (`example.com`) or a subdomain the org
+    controls (`eng.example.com`). Re-adding an archived root restores it; what was discovered
+    under it stays inactive until a scan sees it again.
+    Raises `InvalidAssetValue` for names that can't be scanned and `DomainAlreadyAdded`.
+    """
+    name = _scannable_hostname(raw)
+    existing = session.scalars(
+        scoped(Asset, org_id).where(Asset.type == AssetType.DOMAIN, Asset.value == name)
+    ).one_or_none()
+    if existing is not None and existing.is_active and existing.source == AssetSource.USER:
+        raise DomainAlreadyAdded(f"{name} is already in your assets.")
+    restored = existing is not None and not existing.is_active
+    asset = record_asset(session, org_id, AssetType.DOMAIN, name, source=AssetSource.USER)
+    audit(
+        session,
+        org_id,
+        "asset.root_restored" if restored else "asset.root_added",
+        actor_id=actor_id,
+        target_type="asset",
+        target_id=str(asset.id),
+        details={"value": name},
+    )
+    session.commit()
+    return asset
+
+
+def archive_root_domain(
+    session: Session, org_id: UUID, asset_id: UUID, *, actor_id: UUID | None
+) -> Asset:
+    """Mark a root domain and everything discovered under it inactive, and commit.
+
+    Findings and scan history are kept; `start_scan` refuses inactive roots. Archiving an
+    archived root changes nothing. Raises `AssetNotFound` unless `asset_id` is one of the
+    org's root domains.
+    """
+    root = session.scalars(
+        scoped(Asset, org_id).where(Asset.id == asset_id).with_for_update()
+    ).one_or_none()
+    if root is None or root.type != AssetType.DOMAIN or root.parent_id is not None:
+        raise AssetNotFound("Asset not found.")
+    if not root.is_active:
+        return root
+    # Discovered assets are always direct children: the pipeline parents them to the scan root.
+    archived = session.scalars(
+        update(Asset)
+        .where(
+            Asset.org_id == org_id,
+            (Asset.id == root.id) | (Asset.parent_id == root.id),
+            Asset.is_active.is_(True),
+        )
+        .values(is_active=False, deactivated_at=datetime.now(UTC), updated_at=func.now())
+        .returning(Asset.id),
+        execution_options={"synchronize_session": "fetch"},
+    ).all()
+    audit(
+        session,
+        org_id,
+        "asset.root_archived",
+        actor_id=actor_id,
+        target_type="asset",
+        target_id=str(root.id),
+        details={"value": root.value, "children": len(archived) - 1},
+    )
+    session.commit()
+    return root
+
+
+def _scannable_hostname(raw: str) -> str:
+    name = normalize_hostname(raw)  # raises InvalidAssetValue with a specific message
+    try:
+        return check_public_hostname(name, public_suffix.classify(name))
+    except ScopeError as exc:
+        raise InvalidAssetValue(str(exc)) from None
 
 
 def record_asset(
