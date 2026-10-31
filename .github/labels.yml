@@ -15,6 +15,9 @@
 - { name: "area:workers", color: "fbca04", description: "Celery, scheduling, notifications" }
 - { name: "area:scanners", color: "fbca04", description: "Scanner framework and pipeline" }
 - { name: "area:dns", color: "fbca04", description: "DNS module" }
+- { name: "area:web", color: "fbca04", description: "Website/URL module (HTTP checks)" }
+- { name: "area:code", color: "fbca04", description: "Codebase module" }
+- { name: "area:binary", color: "fbca04", description: "Binary module (native + mobile)" }
 - { name: "area:ai", color: "fbca04", description: "LLM providers, triage, prompts" }
 - { name: "area:security", color: "fbca04", description: "ScopeGuard, SSRF, secrets, hardening" }
 # Priority

@@ -58,7 +58,7 @@ Every issue gets **one type** label, **at least one area**, and status labels as
 | Group | Labels |
 |---|---|
 | Type | `bug`, `enhancement`, `chore`, `docs`, `new-check`, `epic` |
-| Area | `area:infra`, `area:data`, `area:auth`, `area:ui`, `area:workers`, `area:scanners`, `area:dns`, `area:ai`, `area:security` |
+| Area | `area:infra`, `area:data`, `area:auth`, `area:ui`, `area:workers`, `area:scanners`, `area:dns`, `area:web`, `area:code`, `area:binary`, `area:ai`, `area:security` |
 | Priority | `priority:high`, `priority:low` (default = normal, no label) |
 | Status | `triage`, `blocked`, `needs-design`, `good first issue`, `help wanted` |
 | Milestone / other | `mvp`, `funding` |
