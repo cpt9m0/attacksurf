@@ -1,0 +1,19 @@
+{%- from "components/form.html" import csrf_field -%}
+
+{#- Confirm modal for destructive actions (DESIGN.md §6: never one-click delete). Native <dialog>
+    opened by the `confirmDialog` Alpine component (static/js/app.js): Escape and Cancel close it,
+    focus starts on Cancel. Confirming POSTs `action` with a CSRF token. -#}
+{% macro confirm_dialog(id, trigger_label, title, message, action, confirm_label) -%}
+<div class="confirm" x-data="confirmDialog">
+  <button type="button" class="btn btn-danger" aria-haspopup="dialog" @click="open">{{ trigger_label }}</button>
+  <dialog class="dialog" x-ref="dialog" aria-labelledby="{{ id }}-title" aria-describedby="{{ id }}-message">
+    <h2 id="{{ id }}-title">{{ title }}</h2>
+    <p id="{{ id }}-message">{{ message }}</p>
+    <form method="post" action="{{ action }}" class="dialog-actions">
+      {{ csrf_field() }}
+      <button type="button" class="btn btn-secondary" autofocus @click="close">Cancel</button>
+      <button type="submit" class="btn btn-danger">{{ confirm_label }}</button>
+    </form>
+  </dialog>
+</div>
+{%- endmacro %}

@@ -26,6 +26,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   silently.
 
 ### Added
+- Assets pages (#13): add a root domain from `/assets` (inline HTMX validation errors), browse
+  assets with filters (type, root, tag, search, status) kept in the URL, and open an asset's
+  detail page with its relations, findings and scan history tabs. Admins archive a root domain
+  through a confirm dialog. New components: `confirm_dialog`, `select_field`, `relative_time`;
+  `data_table` takes a call block for rich cells.
 - Root domains and asset browsing, service + JSON side (#13): `add_root_domain` validates names
   with the ScopeGuard rules (registrable or subdomain; no IPs, internal or bare-suffix names),
   `archive_root_domain` deactivates a root and everything discovered under it (admin only),

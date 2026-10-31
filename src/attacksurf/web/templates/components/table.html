@@ -1,6 +1,8 @@
 {%- from "components/empty_state.html" import empty_state -%}
 
-{#- columns: [(key, label)], rows: [mapping]. Cells are autoescaped: scan data is untrusted. -#}
+{#- columns: [(key, label)], rows: [mapping or object]. Cells are autoescaped: scan data is untrusted.
+    Rich cells (links, badges, <code>): use a call block, `{% call(row, key) data_table(...) %}`;
+    it renders every cell, still autoescaped. -#}
 {% macro data_table(columns, rows, caption, empty_title="Nothing here yet", empty_message="") -%}
 {%- if rows %}
 <div class="table-wrap">
@@ -11,7 +13,7 @@
     </thead>
     <tbody>
       {%- for row in rows %}
-      <tr>{% for key, label in columns %}<td>{{ row[key] }}</td>{% endfor %}</tr>
+      <tr>{% for key, label in columns %}<td>{% if caller %}{{ caller(row, key) }}{% else %}{{ row[key] }}{% endif %}</td>{% endfor %}</tr>
       {%- endfor %}
     </tbody>
   </table>

@@ -1,0 +1,10 @@
+{#- Swapped in place by HTMX: re-rendered with `add_error` (422) on invalid input. Without JS it
+    posts normally and the whole assets page comes back. -#}
+{%- from "components/form.html" import csrf_field, form_field -%}
+<form id="add-domain" class="form form-inline" method="post" action="{{ url_for('ui.add_domain') }}"
+      hx-post="{{ url_for('ui.add_domain') }}" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="find button">
+  {{ csrf_field() }}
+  {{ form_field("value", "Domain", value=add_value, error=add_error, autocomplete="off", autofocus=add_error is not none,
+                hint="A domain you own, like example.com, or a subdomain like eng.example.com.") }}
+  <button type="submit" class="btn btn-primary">Add domain</button>
+</form>

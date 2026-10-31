@@ -1,5 +1,11 @@
+import re
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
 import pytest
 from flask import Flask, flash, render_template_string
+
+import attacksurf.web
 
 
 def render(app: Flask, source: str, **context: object) -> str:
@@ -119,3 +125,81 @@ def test_flash_messages_render_with_safe_category(app: Flask) -> None:
     assert 'role="status"' in html
     assert 'class="flash flash-success">Saved' in html
     assert 'class="flash flash-info">Odd' in html
+
+
+def test_data_table_call_block_renders_rich_cells_still_escaped(app: Flask) -> None:
+    html = render(
+        app,
+        '{% from "components/table.html" import data_table %}'
+        '{% call(row, key) data_table([("host", "Host"), ("n", "N")], rows, "Hosts") %}'
+        '{% if key == "host" %}<code>{{ row.host }}</code>{% else %}{{ row.n }}{% endif %}'
+        "{% endcall %}",
+        rows=[{"host": "<b>x</b>", "n": 3}],
+    )
+
+    assert "<td><code>&lt;b&gt;x&lt;/b&gt;</code></td><td>3</td>" in html
+
+
+def test_select_field_marks_the_selected_option(app: Flask) -> None:
+    html = render(
+        app,
+        '{% from "components/form.html" import select_field %}'
+        '{{ select_field("type", "Type", [("", "All"), ("ip", "IP")], "ip") }}',
+    )
+
+    assert '<label for="f-type">Type</label>' in html
+    assert '<option value="">All</option>' in html
+    assert '<option value="ip" selected>IP</option>' in html
+
+
+def test_form_field_autofocus_is_opt_in(app: Flask) -> None:
+    source = (
+        '{% from "components/form.html" import form_field %}{{ form_field("v", "V", autofocus=f) }}'
+    )
+
+    assert " autofocus" in render(app, source, f=True)
+    assert " autofocus" not in render(app, source, f=False)
+
+
+def test_confirm_dialog_uses_registered_alpine_component_and_csrf(app: Flask) -> None:
+    html = render(
+        app,
+        '{% from "components/confirm.html" import confirm_dialog %}'
+        '{{ confirm_dialog("arch", "Archive", "Archive <x>?", "Gone.", "/a/1/archive", "Do it") }}',
+    )
+
+    assert 'x-data="confirmDialog"' in html
+    assert '@click="open"' in html
+    assert '@click="close"' in html
+    assert 'aria-labelledby="arch-title"' in html
+    assert "Archive &lt;x&gt;?" in html
+    assert '<form method="post" action="/a/1/archive"' in html
+    assert 'name="csrf_token"' in html
+    assert not re.search(r"\son[a-z]+\s*=|\sstyle\s*=|<script", html)
+
+
+def test_confirm_dialog_component_is_registered_in_app_js() -> None:
+    # Alpine's CSP build only runs components registered in app.js.
+    js = (Path(attacksurf.web.__file__).parent / "static" / "js" / "app.js").read_text()
+
+    assert 'Alpine.data("confirmDialog"' in js
+
+
+def test_relative_time_shows_exact_utc_on_hover(app: Flask) -> None:
+    value = datetime.now(UTC) - timedelta(days=3, minutes=1)
+    html = render(
+        app, '{% from "components/time.html" import relative_time %}{{ relative_time(v) }}', v=value
+    )
+
+    assert f'<time datetime="{value.isoformat()}"' in html
+    assert f'title="{value:%Y-%m-%d %H:%M} UTC"' in html
+    assert ">3 days ago</time>" in html
+
+
+def test_relative_time_without_a_value_renders_a_dash(app: Flask) -> None:
+    html = render(
+        app, '{% from "components/time.html" import relative_time %}{{ relative_time(none) }}'
+    )
+
+    assert "—" in html
+    assert "<time" not in html

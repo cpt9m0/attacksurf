@@ -70,10 +70,14 @@
   --icon-size-lg: 2.5rem;
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 6%);
   --shadow-md: 0 4px 12px rgb(0 0 0 / 10%);
+  --color-backdrop: rgb(15 18 24 / 45%); /* behind modal dialogs */
 
   --content-max-width: 72rem;
   --nav-width: 13rem;
   --auth-card-width: 26rem;
+  --field-min-width: 18rem; /* inline forms: a field wraps below this */
+  --filter-min-width: 10rem; /* filter bar controls */
+  --meta-column-min-width: 12rem; /* detail page metadata grid */
   /* Mobile breakpoint: 48rem. CSS can't read custom properties in @media, so app.css repeats it. */
 }
 
@@ -106,6 +110,7 @@
 
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
   --shadow-md: 0 4px 12px rgb(0 0 0 / 50%);
+  --color-backdrop: rgb(0 0 0 / 60%);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -137,5 +142,6 @@
 
     --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
     --shadow-md: 0 4px 12px rgb(0 0 0 / 50%);
+    --color-backdrop: rgb(0 0 0 / 60%);
   }
 }

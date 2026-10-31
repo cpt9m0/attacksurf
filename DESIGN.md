@@ -43,6 +43,7 @@ Defined once as CSS custom properties on `:root`, overridden under `[data-theme=
 | `--color-text-muted` | secondary text | TBD | TBD |
 | `--color-primary` | actions, links, focus | TBD | TBD |
 | `--color-success` / `--color-warning` / `--color-danger` | status | TBD | TBD |
+| `--color-backdrop` | behind modal dialogs | TBD | TBD |
 
 ### Severity scale (core)
 | Token | Severity | Color | Icon/shape (non-color cue) |
@@ -69,6 +70,7 @@ All severity colors must reach 4.5:1 contrast for text on their badge background
 | `--radius-sm/md/lg` | TBD |
 | `--shadow-sm/md` | TBD |
 | Borders, focus ring, opacity | `--border-width`, `--border-width-accent`, `--focus-ring-width/-offset`, `--opacity-disabled` (placeholders) |
+| Layout widths | `--content-max-width`, `--nav-width`, `--auth-card-width`, `--field-min-width`, `--filter-min-width`, `--meta-column-min-width` (placeholders) |
 | Line heights, weights, icons | `--line-height-body/-heading/-badge`, `--font-weight-semibold/-bold`, `--icon-size`, `--icon-size-lg`, `--measure` (placeholders) |
 
 `app.css` uses only these variables (a test rejects raw colors); the only raw dimension is the
@@ -88,15 +90,16 @@ All severity colors must reach 4.5:1 contrast for text on their badge background
 Implemented as Jinja macros in `templates/components/`. Each entry: purpose, variants, states.
 Built in #6: `button`, `severity_badge` + `status_pill` (`badges.html`), `data_table` +
 `pagination` (`table.html`), `empty_state`, `flash_messages`, `icon`; #7 added `form_field`,
-`form_error`, `csrf_field` (`form.html`) and `layouts/auth.html` (signed-out pages). Specs
-(visuals) stay TBD.
+`form_error`, `csrf_field` (`form.html`) and `layouts/auth.html` (signed-out pages). #13 added
+`select_field` and `form_field(autofocus=)` (`form.html`), `confirm_dialog` (`confirm.html`),
+`relative_time` (`time.html`) and call-block cells for `data_table`. Specs (visuals) stay TBD.
 
 | Component | Notes | Spec |
 |---|---|---|
 | Button | primary / secondary / danger / ghost; loading state for HTMX (`htmx-request`) | TBD |
 | Severity badge | text + color + icon, never color alone | TBD |
 | Status pill | finding: open / fixed / accepted_risk / false_positive / regressed; scan: queued / running / completed / failed / cancelled | TBD |
-| Data table | sortable headers, filters bar, pagination, row selection for bulk actions, empty state | TBD |
+| Data table | sortable headers, filters bar, pagination, row selection for bulk actions, empty state. Rich cells (links, badges, `<code>`): `{% call(row, key) data_table(...) %}`, still autoescaped. Wide tables scroll inside `.table-wrap` (`.content` has `min-width: 0`) | TBD |
 | Card / stat tile | dashboard counts by severity | TBD |
 | Form field | label, hint, inline error (HTMX validation) | TBD |
 | Flash / toast | success / error / info | TBD |
@@ -104,17 +107,29 @@ Built in #6: `button`, `severity_badge` + `status_pill` (`badges.html`), `data_t
 | Code / evidence block | monospace, escaped, copy button, size-capped with "show more" | TBD |
 | AI panel | AI triage output, clearly labeled as AI-generated, shows model + prompt version | TBD |
 | Empty state | illustration/icon + one-line explanation + primary action | TBD |
-| Modal / confirm | destructive actions (delete asset, accept risk) | TBD |
+| Modal / confirm | destructive actions (archive asset, accept risk): `confirm_dialog(id, trigger_label, title, message, action, confirm_label)`, a native `<dialog>` opened by `Alpine.data("confirmDialog")`; focus starts on Cancel, Escape closes, confirm POSTs with CSRF | TBD |
 
 ## 6. Interaction patterns (HTMX)
 
 - Partial responses: routes call `web.rendering.render_page()`; pages start with
   `{% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}`. HTMX requests get
-  the fragment, boosted requests and normal loads the full page (`Vary: HX-Request`).
+  the fragment; boosted requests, history restores (`HX-History-Restore-Request`: Back after
+  `hx-push-url` when HTMX's history cache misses, which HTMX sends with `HX-Request` and swaps
+  into the whole `<body>`) and normal loads get the full page (`Vary` on all three headers).
 - Long-running work: show job progress via polling (`hx-trigger="every 2s"`), stop when done.
 - Forms: inline validation errors; disable the submit button during request.
 - Destructive actions: confirm modal; never one-click delete.
-- Lists: filters update the URL query string (`hx-push-url`) so views are shareable.
+- Lists: filters update the URL query string (`hx-push-url`) so views are shareable. The
+  filter form targets only the results region (`hx-target` + `hx-select="#…-results"`), so
+  inputs keep focus while typing; search fires on `input changed delay:300ms`. Without JS it
+  is a plain GET form. Put `hx-sync="this:replace"` on the form: the search box sends its own
+  requests and inherits it (`this` resolves to the form), so an older response can't overwrite
+  newer results. Same on tab bars.
+- Tabs on detail pages are links (`?tab=…`, `aria-current="page"`); the tab bar lives inside the
+  swapped region so its state updates with the content.
+- Inline-validated forms swap themselves (`hx-target="this"`, 422 with the field error) and set
+  `autofocus` on the invalid field; success responds with `HX-Redirect` (and a flash).
+- Dates: `relative_time(dt)` renders "3 days ago" with the exact UTC time on hover (§7).
 
 ## 7. Content and tone
 
