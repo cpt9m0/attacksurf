@@ -33,7 +33,8 @@
         {%- for item in nav_items %}
         <li>
           <a href="{{ url_for(item.endpoint) }}"
-             {%- if request.endpoint == item.endpoint %} aria-current="page"{% endif %}>
+             {%- if request.endpoint == item.endpoint %} aria-current="page"
+             {%- elif request.endpoint in item.subpages %} aria-current="true"{% endif %}>
             {{ icon(item.icon) }} {{ item.label }}
           </a>
         </li>

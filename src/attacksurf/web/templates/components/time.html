@@ -1,0 +1,8 @@
+{#- Relative time with the exact UTC timestamp on hover (DESIGN.md §7). None renders a dash. -#}
+{% macro relative_time(value) -%}
+{%- if value -%}
+<time datetime="{{ value.isoformat() }}" title="{{ value | exact_time }}">{{ value | timeago }}</time>
+{%- else -%}
+<span class="muted">—</span>
+{%- endif -%}
+{%- endmacro %}

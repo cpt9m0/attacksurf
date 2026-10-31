@@ -20,4 +20,17 @@ document.addEventListener("alpine:init", function () {
       },
     };
   });
+
+  // components/confirm.html: a native modal <dialog> (focus trap, Escape and backdrop inertness
+  // come from the browser).
+  window.Alpine.data("confirmDialog", function () {
+    return {
+      open: function () {
+        this.$refs.dialog.showModal();
+      },
+      close: function () {
+        this.$refs.dialog.close();
+      },
+    };
+  });
 });

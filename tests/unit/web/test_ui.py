@@ -7,6 +7,7 @@ from flask import Flask, Response, flash
 from flask.testing import FlaskClient
 
 import attacksurf.web
+from attacksurf.services import asset_views
 from attacksurf.web.rendering import render_page
 
 STATIC = Path(attacksurf.web.__file__).parent / "static"
@@ -18,6 +19,14 @@ PAGES = [
     ("/findings", "Findings"),
     ("/settings", "Settings"),
 ]
+
+
+@pytest.fixture(autouse=True)
+def _no_assets(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No database here: the assets page renders an empty org (DB-backed: tests/integration/web).
+    empty = asset_views.AssetPage(items=(), page=1, pages=1, total=0)
+    monkeypatch.setattr(asset_views, "list_assets", lambda *_args, **_kw: empty)
+    monkeypatch.setattr(asset_views, "list_root_domains", lambda *_args, **_kw: ())
 
 
 @pytest.mark.parametrize(("path", "title"), PAGES)
@@ -73,11 +82,12 @@ def test_htmx_fragment_includes_flash_messages(app: Flask, auth_client: FlaskCli
     @app.get("/_test/flash")
     def flashing() -> Response:
         flash("Saved", "success")
-        return render_page("pages/assets.html")
+        return render_page("pages/scans.html")
 
     html = auth_client.get("/_test/flash", headers={"HX-Request": "true"}).get_data(as_text=True)
 
     assert 'class="shell"' not in html
+    assert "<h1>Scans</h1>" in html  # the page itself, not an error page (which also flashes)
     assert 'class="flash flash-success">Saved' in html
 
 

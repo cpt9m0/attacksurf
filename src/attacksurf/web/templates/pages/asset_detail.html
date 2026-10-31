@@ -1,0 +1,107 @@
+{% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
+{% from "components/badges.html" import severity_badge, status_pill %}
+{% from "components/confirm.html" import confirm_dialog %}
+{% from "components/table.html" import data_table %}
+{% from "components/time.html" import relative_time %}
+{% block title %}{{ asset.value }}{% endblock %}
+{% block content %}
+{% set relation_labels = {
+  "cname_to": "CNAME to", "resolves_to": "Resolves to", "subdomain_of": "Subdomain of", "serves": "Serves",
+} %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+  <a href="{{ url_for('ui.assets') }}">Assets</a>
+  {%- if asset.root_id %} / <a class="mono" href="{{ url_for('ui.asset_detail', asset_id=asset.root_id) }}">{{ asset.root_value }}</a>{% endif %}
+</nav>
+
+<div class="page-header">
+  <h1 class="mono">{{ asset.value }}</h1>
+  {%- if not asset.is_active %} {{ status_pill("archived") }}{% endif %}
+  {%- if can_archive %}
+  <div class="page-actions">
+    {%- if detail.discovered %}
+      {%- set effect = "It and the " ~ detail.discovered ~ (" asset" if detail.discovered == 1 else " assets")
+          ~ " discovered under it become inactive and are no longer scanned." %}
+    {%- else %}
+      {%- set effect = "It becomes inactive and is no longer scanned." %}
+    {%- endif %}
+    {{ confirm_dialog("archive", "Archive", "Archive " ~ asset.value ~ "?",
+        effect ~ " Findings and scan history are kept; adding the domain again restores it.",
+        url_for("ui.archive_asset", asset_id=asset.id), "Archive domain") }}
+  </div>
+  {%- endif %}
+</div>
+
+<dl class="meta card card-body">
+  <div><dt>Type</dt><dd>{{ asset.type }}</dd></div>
+  <div><dt>Source</dt><dd>{{ "Added by your team" if asset.source == "user" else "Discovered" }}</dd></div>
+  <div><dt>First seen</dt><dd>{{ relative_time(asset.first_seen) }}</dd></div>
+  <div><dt>Last seen</dt><dd>{{ relative_time(asset.last_seen) }}</dd></div>
+  <div><dt>Open findings</dt><dd>
+    {%- if asset.open_findings %}{{ asset.open_findings }} {{ severity_badge(asset.max_severity) }}{% else %}None{% endif %}</dd></div>
+  <div><dt>Tags</dt><dd>{% for tag in asset.tags %}<span class="tag">{{ tag }}</span>{% else %}<span class="muted">—</span>{% endfor %}</dd></div>
+  {%- if not asset.root_id %}
+  <div><dt>Discovered under it</dt><dd>
+    <a href="{{ url_for('ui.assets', root=asset.id, status='all') }}">{{ detail.discovered }} asset{{ "" if detail.discovered == 1 else "s" }}</a></dd></div>
+  {%- endif %}
+</dl>
+
+{#- Tab links swap only #asset-tab (which holds the tab bar too, so aria-current stays right). #}
+<div id="asset-tab">
+  <nav class="tabs" aria-label="Asset sections" hx-target="#asset-tab" hx-select="#asset-tab" hx-swap="outerHTML" hx-push-url="true">
+    {%- for key, label in tabs %}
+    {%- set href = url_for('ui.asset_detail', asset_id=asset.id, tab=None if key == 'overview' else key) %}
+    <a href="{{ href }}" hx-get="{{ href }}"{% if key == tab %} aria-current="page"{% endif %}>{{ label }}</a>
+    {%- endfor %}
+  </nav>
+
+  {%- if tab == "overview" %}
+  <section class="card" aria-labelledby="outgoing-title">
+    <h2 class="card-title" id="outgoing-title">Points to</h2>
+    {% call(row, key) data_table([("kind", "Relation"), ("peer", "Asset"), ("type", "Type"), ("last_seen", "Last seen")],
+        detail.outgoing, "Relations from this asset", "No outgoing relations",
+        "DNS records found by scans (CNAMEs, addresses) appear here.") %}
+      {%- if key == "kind" %}{{ relation_labels.get(row.kind, row.kind) }}
+      {%- elif key == "peer" %}<a class="mono" href="{{ url_for('ui.asset_detail', asset_id=row.peer_id) }}">{{ row.peer_value }}</a>
+      {%- elif key == "type" %}{{ row.peer_type }}
+      {%- elif key == "last_seen" %}{{ relative_time(row.last_seen) }}{% endif %}
+    {% endcall %}
+  </section>
+  <section class="card" aria-labelledby="incoming-title">
+    <h2 class="card-title" id="incoming-title">Referenced by</h2>
+    {% call(row, key) data_table([("peer", "Asset"), ("kind", "Relation"), ("type", "Type"), ("last_seen", "Last seen")],
+        detail.incoming, "Relations to this asset", "Nothing points here",
+        "Assets whose records point at this one appear here.") %}
+      {%- if key == "kind" %}{{ relation_labels.get(row.kind, row.kind) }} this asset
+      {%- elif key == "peer" %}<a class="mono" href="{{ url_for('ui.asset_detail', asset_id=row.peer_id) }}">{{ row.peer_value }}</a>
+      {%- elif key == "type" %}{{ row.peer_type }}
+      {%- elif key == "last_seen" %}{{ relative_time(row.last_seen) }}{% endif %}
+    {% endcall %}
+  </section>
+
+  {%- elif tab == "findings" %}
+  <section class="card" aria-label="Findings">
+    {% call(row, key) data_table([("severity", "Severity"), ("title", "Finding"), ("rule", "Rule"), ("status", "Status"), ("last_seen", "Last seen")],
+        findings, "Findings on this asset", "No findings", "Scans haven't found issues on this asset.") %}
+      {%- if key == "severity" %}{{ severity_badge(row.severity) }}
+      {%- elif key == "title" %}{{ row.title }}{% if row.location %} <span class="mono muted">{{ row.location }}</span>{% endif %}
+      {%- elif key == "rule" %}<code>{{ row.rule_id }}</code>
+      {%- elif key == "status" %}{{ status_pill(row.status) }}
+      {%- elif key == "last_seen" %}{{ relative_time(row.last_seen) }}{% endif %}
+    {% endcall %}
+  </section>
+
+  {%- else %}
+  <section class="card" aria-label="Scan history">
+    {% call(row, key) data_table([("created_at", "Queued"), ("profile", "Profile"), ("trigger", "Trigger"), ("status", "Status"), ("finished_at", "Finished")],
+        scans, "Scans of this asset's root domain", "No scans yet",
+        "Scans run on root domains; their history shows here for the root and everything under it.") %}
+      {%- if key == "created_at" %}{{ relative_time(row.created_at) }}
+      {%- elif key == "profile" %}<code>{{ row.profile }}</code>
+      {%- elif key == "trigger" %}{{ row.triggered_by }}
+      {%- elif key == "status" %}{{ status_pill(row.status) }}
+      {%- elif key == "finished_at" %}{{ relative_time(row.finished_at) }}{% endif %}
+    {% endcall %}
+  </section>
+  {%- endif %}
+</div>
+{% endblock %}

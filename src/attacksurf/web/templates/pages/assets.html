@@ -1,9 +1,62 @@
 {% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
-{% from "components/empty_state.html" import empty_state %}
+{% from "components/badges.html" import severity_badge, status_pill %}
+{% from "components/form.html" import form_field, select_field %}
+{% from "components/table.html" import data_table, pagination %}
+{% from "components/time.html" import relative_time %}
 {% block title %}Assets{% endblock %}
 {% block content %}
 <h1>Assets</h1>
-<div class="card">
-  {{ empty_state("No assets yet", "Assets are the domains you own and everything discovered under them. Adding domains arrives in a later release.", icon_name="globe") }}
+
+<section class="card card-body" aria-labelledby="add-domain-title">
+  <h2 id="add-domain-title">Add a domain</h2>
+  {% include "pages/_add_domain_form.html" %}
+</section>
+
+{#- Filters swap only #asset-results (hx-select), so the search box keeps focus while typing;
+    hx-push-url keeps the view shareable. Plain GET without JS. #}
+<form class="filters card card-body" method="get" action="{{ url_for('ui.assets') }}" role="search" aria-label="Filter assets"
+      hx-get="{{ url_for('ui.assets') }}" hx-trigger="change, submit" hx-target="#asset-results"
+      hx-select="#asset-results" hx-swap="outerHTML" hx-push-url="true">
+  <div class="field">
+    <label for="f-q">Search</label>
+    <input id="f-q" name="q" type="search" value="{{ flt.q or '' }}" autocomplete="off"
+           hx-get="{{ url_for('ui.assets') }}" hx-trigger="input changed delay:300ms, search" hx-include="closest form">
+  </div>
+  {{ select_field("type", "Type", type_options, flt.type or "") }}
+  {{ select_field("root", "Root domain", root_options, flt.root_id or "") }}
+  {{ form_field("tag", "Tag", value=flt.tag or "", required=false, autocomplete="off") }}
+  {{ select_field("status", "Status", status_options, flt.status) }}
+  <button type="submit" class="btn btn-secondary">Apply</button>
+</form>
+
+<div id="asset-results">
+  <p class="results-summary" role="status">
+    {{ result.total }} asset{{ "" if result.total == 1 else "s" }}{% if filtered %} {{ "matches" if result.total == 1 else "match" }} these filters · <a href="{{ url_for('ui.assets') }}">Clear filters</a>{% endif %}
+  </p>
+  <div class="card">
+    {%- set columns = [("value", "Asset"), ("type", "Type"), ("root", "Root"), ("tags", "Tags"), ("last_seen", "Last seen"), ("findings", "Open findings")] %}
+    {%- if filtered %}
+      {%- set empty_title, empty_message = "No matching assets", "Try other filters, or clear them to see every asset." %}
+    {%- else %}
+      {%- set empty_title, empty_message = "No assets yet", "Add a domain above. Scans then discover its subdomains and the addresses they point to." %}
+    {%- endif %}
+    {% call(row, key) data_table(columns, result.items, "Assets", empty_title, empty_message) %}
+      {%- if key == "value" -%}
+        <a class="mono" href="{{ url_for('ui.asset_detail', asset_id=row.id) }}">{{ row.value }}</a>
+        {%- if not row.is_active %} {{ status_pill("archived") }}{% endif %}
+      {%- elif key == "type" -%}
+        {{ row.type }}
+      {%- elif key == "root" -%}
+        {%- if row.root_id %}<a class="mono" href="{{ url_for('ui.asset_detail', asset_id=row.root_id) }}">{{ row.root_value }}</a>{% else %}<span class="muted">Root</span>{% endif %}
+      {%- elif key == "tags" -%}
+        {%- for tag in row.tags %}<span class="tag">{{ tag }}</span>{% else %}<span class="muted">—</span>{% endfor %}
+      {%- elif key == "last_seen" -%}
+        {{ relative_time(row.last_seen) }}
+      {%- elif key == "findings" -%}
+        {%- if row.open_findings %}{{ row.open_findings }} {{ severity_badge(row.max_severity) }}{% else %}<span class="muted">None</span>{% endif %}
+      {%- endif -%}
+    {% endcall %}
+  </div>
+  {{ pagination(result.page, result.pages, "ui.assets", **filter_args) }}
 </div>
 {% endblock %}

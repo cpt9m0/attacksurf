@@ -43,7 +43,8 @@ own key) **triages, prioritizes, and explains** them in plain language with fix 
 - **Email security**: SPF, DMARC, DKIM, MTA-STS checks (is your domain spoofable?)
 - **DNS hygiene**: DNSSEC, nameserver and MX configuration, CAA, zone transfer (AXFR) exposure
 - **Domain expiry** monitoring via RDAP
-- **Asset graph**: domain → subdomain → CNAME → IP
+- **Asset inventory**: add the domains you own, then browse everything discovered under them
+  (filters, search, open findings per asset) and the asset graph: domain → subdomain → CNAME → IP
 
 ### Platform
 - **AI triage**: severity adjustment, false-positive likelihood, remediation steps, exposure summaries
@@ -101,7 +102,7 @@ Flask + HTMX web app, Celery workers, PostgreSQL, Redis. Each check is a small p
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Foundation: tooling, DB, auth, UI shell | 🚧 in progress |
-| 2 | Scan engine: plugins, pipeline, ScopeGuard | plugin/pipeline framework built; ScopeGuard next |
+| 2 | Scan engine: plugins, pipeline, ScopeGuard | ✅ built |
 | 3 | DNS module | planned |
 | 4 | AI triage and summaries | planned |
 | 5 | Scheduling, alerts, deployment → **v0.1.0** | planned |

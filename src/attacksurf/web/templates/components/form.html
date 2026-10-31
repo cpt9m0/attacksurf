@@ -4,13 +4,15 @@
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 {%- endmacro %}
 
-{% macro form_field(name, label, type="text", value="", error=none, hint=none, autocomplete=none, required=true) -%}
+{#- autofocus: set on a re-rendered invalid field, so focus (and its error) lands there after a swap. -#}
+{% macro form_field(name, label, type="text", value="", error=none, hint=none, autocomplete=none, required=true, autofocus=false) -%}
 {%- set described = (["f-" ~ name ~ "-hint"] if hint else []) + (["f-" ~ name ~ "-error"] if error else []) -%}
 <div class="field">
   <label for="f-{{ name }}">{{ label }}</label>
   <input id="f-{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ value }}"
          {%- if autocomplete %} autocomplete="{{ autocomplete }}"{% endif %}
          {%- if required %} required{% endif %}
+         {%- if autofocus %} autofocus{% endif %}
          {%- if described %} aria-describedby="{{ described | join(' ') }}"{% endif %}
          {%- if error %} aria-invalid="true"{% endif %}>
   {%- if hint %}
@@ -19,6 +21,18 @@
   {%- if error %}
   <p class="field-error" id="f-{{ name }}-error">{{ error }}</p>
   {%- endif %}
+</div>
+{%- endmacro %}
+
+{#- options: [(value, label)]; `selected` is compared as a string, so enums and UUIDs work. -#}
+{% macro select_field(name, label, options, selected="") -%}
+<div class="field">
+  <label for="f-{{ name }}">{{ label }}</label>
+  <select id="f-{{ name }}" name="{{ name }}">
+    {%- for value, text in options %}
+    <option value="{{ value }}"{% if value | string == selected | string %} selected{% endif %}>{{ text }}</option>
+    {%- endfor %}
+  </select>
 </div>
 {%- endmacro %}
 
