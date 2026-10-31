@@ -18,6 +18,22 @@ class Severity(StrEnum):
     CRITICAL = "critical"
 
 
+# Higher is worse; lets SQL take `max()` over severities stored as text.
+SEVERITY_RANK = {
+    Severity.INFO: 1,
+    Severity.LOW: 2,
+    Severity.MEDIUM: 3,
+    Severity.HIGH: 4,
+    Severity.CRITICAL: 5,
+}
+_SEVERITY_BY_RANK = {rank: severity for severity, rank in SEVERITY_RANK.items()}
+
+
+def severity_from_rank(rank: int | None) -> Severity | None:
+    """Inverse of `SEVERITY_RANK`; `None` (no findings) stays `None`."""
+    return None if rank is None else _SEVERITY_BY_RANK[rank]
+
+
 class Confidence(StrEnum):
     LOW = "low"
     MEDIUM = "medium"

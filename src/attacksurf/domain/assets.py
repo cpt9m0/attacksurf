@@ -58,6 +58,10 @@ class AssetNotFound(AssetError):
     """The asset doesn't exist or belongs to another org (never says which)."""
 
 
+class DomainAlreadyAdded(AssetError):
+    """The org already has this domain as an active root."""
+
+
 def normalize_asset_value(asset_type: AssetType, raw: str) -> str:
     """Canonical form used for storage and the `(org_id, type, value)` uniqueness."""
     match asset_type:
