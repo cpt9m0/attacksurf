@@ -16,6 +16,7 @@ from attacksurf.domain.verification import record_value
 from attacksurf.infra.db.models import Asset, Job, Membership, User, Verification
 from attacksurf.services import verifications
 from attacksurf.services.assets import record_asset
+from attacksurf.web import ui
 from tests.fakes import FakeQueue
 
 _CSRF = re.compile(r'name="csrf_token" value="([^"]+)"')
@@ -75,8 +76,26 @@ def _start(client: FlaskClient, asset_id: UUID, *, htmx: bool = False) -> TestRe
     )
 
 
+class RecordingQueue:
+    """Stands in for the app's Celery queue: the real one would dial Redis (not in tests)."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    def enqueue(self, task_name: str, *, org_id: UUID, job_id: UUID) -> str:
+        self.sent.append(task_name)
+        return f"task-{len(self.sent)}"
+
+
 @pytest.fixture
-def alice(db_app: Flask) -> FlaskClient:
+def queue(monkeypatch: pytest.MonkeyPatch) -> RecordingQueue:
+    recorder = RecordingQueue()
+    monkeypatch.setattr(ui, "get_task_queue", lambda: recorder)
+    return recorder
+
+
+@pytest.fixture
+def alice(db_app: Flask, queue: RecordingQueue) -> FlaskClient:
     return _signup(db_app, "alice@example.com")
 
 
@@ -106,12 +125,13 @@ def test_starting_a_proof_shows_the_record_to_publish(
 
 
 def test_starting_a_proof_queues_the_check_without_a_scan(
-    alice: FlaskClient, db_session: Session, root: UUID
+    alice: FlaskClient, db_session: Session, root: UUID, queue: RecordingQueue
 ) -> None:
     _start(alice, root)
 
     job = db_session.scalars(select(Job)).one()
     assert (job.stage, job.scan_id, job.asset_id) == ("verify", None, root)
+    assert queue.sent == ["passive.verify_ownership"]
 
 
 def test_htmx_start_swaps_only_the_ownership_card(
