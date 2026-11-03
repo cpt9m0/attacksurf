@@ -36,9 +36,16 @@ document.addEventListener("alpine:init", function () {
 
   // components/verification.html: copy the TXT record into the owner's DNS provider. The
   // Clipboard API needs a secure context; elsewhere the field stays selectable by hand.
+  // The template binds to these properties (no inline expressions, like themeToggle).
   window.Alpine.data("copyField", function () {
     return {
       copied: false,
+      get label() {
+        return this.copied ? "Copied" : "Copy record";
+      },
+      get pressed() {
+        return this.copied ? "true" : "false";
+      },
       copy: function () {
         var self = this;
         var text = this.$refs.value.textContent;

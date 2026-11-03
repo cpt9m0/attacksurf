@@ -155,6 +155,25 @@ def test_check_requires_a_token_first(alice: FlaskClient, root: UUID) -> None:
     assert response.status_code == 404
 
 
+def test_verify_now_queues_a_check_without_rotating_the_token(
+    alice: FlaskClient, db_session: Session, root: UUID, queue: RecordingQueue
+) -> None:
+    """Regression: "Verify now" only re-rendered the card, so the button did nothing."""
+    _start(alice, root)
+    token = db_session.scalars(select(Verification.token)).one()
+    queue.sent.clear()
+
+    response = alice.post(
+        f"/assets/{root}/verify",
+        data={"action": "check", "csrf_token": _csrf(alice, f"/assets/{root}")},
+    )
+
+    assert response.status_code == 303
+    assert queue.sent == ["passive.verify_ownership"]
+    assert db_session.scalars(select(Verification.token)).one() == token
+    assert db_session.query(Job).filter(Job.stage == "verify").count() == 2
+
+
 def test_a_verified_root_shows_its_badge_everywhere(
     alice: FlaskClient, db_session: Session, root: UUID
 ) -> None:
@@ -225,6 +244,23 @@ def test_another_org_cannot_see_or_start_a_proof(
     assert detail.status_code == 404
     assert response.status_code == 404
     assert not db_session.scalars(select(Verification)).all()
+
+
+_ALPINE_EXPRESSION = re.compile(
+    r"""\s(?:x-(?!data=|init|ref|text|show|model|bind)[a-z-]+|:[a-z-]+)=["'][^"']*[?:+*]"""
+)
+
+
+def test_ownership_card_has_no_inline_alpine_expressions(
+    alice: FlaskClient, db_session: Session, root: UUID
+) -> None:
+    """CSP build: Alpine behavior lives in `static/js/app.js`, the markup only names it."""
+    _start(alice, root)
+    db_session.commit()
+
+    page = _html(alice, f"/assets/{root}")
+
+    assert not _ALPINE_EXPRESSION.search(page)
 
 
 def test_ownership_card_has_no_inline_script_style_or_handlers(

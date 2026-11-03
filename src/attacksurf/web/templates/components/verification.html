@@ -30,8 +30,8 @@
   </p>
   <div class="copy-field" x-data="copyField">
     <code x-ref="value">{{ proof.record_name }} TXT "{{ proof.record_value }}"</code>
-    <button type="button" class="btn btn-secondary" @click="copy" :aria-pressed="copied ? 'true' : 'false'">
-      <span x-text="copied ? 'Copied' : 'Copy record'">Copy record</span>
+    <button type="button" class="btn btn-secondary" @click="copy" aria-pressed="false" :aria-pressed="pressed">
+      <span x-text="label">Copy record</span>
     </button>
   </div>
   <dl class="meta">

@@ -124,6 +124,38 @@ def get_verification(session: Session, org_id: UUID, asset_id: UUID) -> Verifica
     return read_verification(session, org_id, root.id)
 
 
+def queue_check(
+    session: Session, queue: TaskQueue, *, org_id: UUID, asset_id: UUID
+) -> Verification:
+    """Queue another check of an existing proof, keeping its token ("Verify now").
+
+    The usual path is the scheduled re-check; this lets an admin trigger one right after
+    publishing the record, without rotating the token they just copied (`start_verification`
+    rotates). Raises `AssetNotFound` unless the asset is an active root with a proof.
+    """
+    root = session.scalars(
+        scoped(Asset, org_id).where(Asset.id == asset_id).with_for_update()
+    ).one_or_none()
+    if root is None or root.type is not AssetType.DOMAIN or not root.is_active:
+        raise AssetNotFound("Asset not found.")
+    verification = session.scalars(
+        scoped(Verification, org_id).where(Verification.asset_id == root.id).with_for_update()
+    ).one_or_none()
+    if verification is None:
+        raise AssetNotFound("Asset not found.")
+    session.commit()
+    jobs.create_job(
+        session,
+        queue,
+        org_id=org_id,
+        scan_id=None,
+        stage="verify",
+        task_name="passive.verify_ownership",
+        asset_id=root.id,
+    )
+    return verification
+
+
 def verification_for_asset(session: Session, org_id: UUID, asset_id: UUID) -> UUID | None:
     """The id of an asset's proof, or None. Tenant-scoped; used by the worker task."""
     return session.scalar(

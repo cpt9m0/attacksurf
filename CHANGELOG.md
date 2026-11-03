@@ -34,7 +34,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ### Added
 - Ownership card on a domain's overview page (#14 part 2): shows the TXT record to publish with
   a copy button, its last check / verification / recheck times, and admin-only actions (start,
-  verify now via HTMX, rotate behind a confirm). Inventory shows a "Verified" badge on roots;
+  verify now via HTMX, which queues a check without rotating the token, and rotate behind a
+  confirm). Inventory shows a "Verified" badge on roots;
   `passive.verify_ownership` runs each check and an hourly beat entry re-queues due proofs.
 - Ownership proof by DNS TXT (#14): `start_verification` issues (or rotates) a
   `_attacksurf-verify.<root>` token and queues a `passive.verify_ownership` job, an

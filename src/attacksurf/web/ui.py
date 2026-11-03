@@ -153,15 +153,15 @@ def archive_asset(asset_id: UUID) -> BaseResponse:
 def verify_asset(asset_id: UUID) -> BaseResponse:
     """Start or rotate a root's TXT proof, or run one check now (ADR 0014).
 
-    `action=start`/issues a token and queues the first check, `action=check` only queues a
-    check, anything else (the confirm dialog's rotate form) rotates the token.
+    `action=check` queues a check of the current token ("Verify now"), `action=start` issues a
+    token, and anything else (the rotate dialog) issues a new one.
     """
     session = get_session()
     try:
         if request.form.get("action") == "check":
-            detail = asset_views.get_asset_detail(session, _org_id(), asset_id)
-            if detail.asset.verification is None:
-                abort(404)
+            verifications.queue_check(
+                session, get_task_queue(), org_id=_org_id(), asset_id=asset_id
+            )
         else:
             verifications.start_verification(
                 session,

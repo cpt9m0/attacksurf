@@ -265,3 +265,38 @@ def test_get_verification_cannot_reach_another_orgs_asset(
 
     with pytest.raises(AssetNotFound):
         verifications.get_verification(db_session, other.id, root.id)
+
+
+def test_queue_check_reuses_the_token_and_queues_a_job(
+    db_session: Session, org: Org, root: Asset
+) -> None:
+    proof = _start(db_session, FakeQueue(db_session), org.id, root.id)
+    token = proof.token
+    queue = FakeQueue(db_session)
+
+    verifications.queue_check(db_session, queue, org_id=org.id, asset_id=root.id)
+
+    assert db_session.get_one(Verification, proof.id).token == token
+    assert [task for task, *_ in queue.sent] == ["passive.verify_ownership"]
+    assert queue.sent[0][3] is True  # the job row committed before the task was sent
+
+
+def test_queue_check_needs_an_existing_proof(db_session: Session, org: Org, root: Asset) -> None:
+    with pytest.raises(AssetNotFound):
+        verifications.queue_check(
+            db_session, FakeQueue(db_session), org_id=org.id, asset_id=root.id
+        )
+
+
+def test_queue_check_cannot_reach_another_orgs_domain(
+    db_session: Session, org: Org, root: Asset
+) -> None:
+    _start(db_session, FakeQueue(db_session), org.id, root.id)
+    other = Org(name="globex", slug="globex")
+    db_session.add(other)
+    db_session.flush()
+
+    with pytest.raises(AssetNotFound):
+        verifications.queue_check(
+            db_session, FakeQueue(db_session), org_id=other.id, asset_id=root.id
+        )
