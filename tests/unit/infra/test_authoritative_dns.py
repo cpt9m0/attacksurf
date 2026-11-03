@@ -8,12 +8,13 @@ import dns.exception
 import dns.flags
 import dns.message
 import dns.name
+import dns.rcode
 import dns.rdata
 import dns.rdataclass
 import dns.rdatatype
 import pytest
 
-from attacksurf.domain.net import TxtError
+from attacksurf.domain.net import DnsError, TxtError
 from attacksurf.infra import authoritative_dns
 from attacksurf.infra.authoritative_dns import AuthoritativeTxtLookup
 
@@ -25,9 +26,10 @@ class StubResolver:
         self.answers = answers
 
     def lookup_records(self, name: str, rdtype: str) -> tuple[str, ...]:
+        # DnsPythonResolver turns every dnspython failure into DnsError; mirror that here.
         outcome = self.answers.get((name, rdtype))
         if isinstance(outcome, Exception):
-            raise outcome
+            raise outcome if isinstance(outcome, DnsError) else DnsError()
         return tuple(outcome or ())
 
 
@@ -215,10 +217,105 @@ def test_a_cname_in_the_answer_is_not_followed(monkeypatch: pytest.MonkeyPatch) 
     assert lookup.lookup_txt("example.com", qname) == ()
 
 
-def test_a_resolver_failure_is_a_lookup_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    lookup, _ = _lookup(
-        monkeypatch, answers={("example.com", "NS"): dns.exception.Timeout()}, responses={}
-    )
+def test_a_stub_resolver_failure_is_a_lookup_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: the production adapter raises `DnsError`, not a dnspython exception."""
+    lookup, wire = _lookup(monkeypatch, answers={("example.com", "NS"): DnsError()}, responses={})
 
     with pytest.raises(TxtError):
         lookup.lookup_txt("example.com", "_attacksurf-verify.example.com")
+    assert wire.udp_calls == []
+
+
+def test_a_failed_nameserver_lookup_falls_back_to_the_next(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    qname = "_attacksurf-verify.example.com"
+    lookup, wire = _lookup(
+        monkeypatch,
+        answers={("ns1.example.net", "A"): DnsError()},  # ns1: A fails, AAAA still tried
+        responses={"93.184.216.35": _response(qname, [("attacksurf-verification=abc",)])},
+    )
+
+    assert lookup.lookup_txt("example.com", qname) == ("attacksurf-verification=abc",)
+    assert [address for address, _ in wire.udp_calls] == ["93.184.216.35"]
+
+
+def test_a_failure_response_is_retried_on_the_next_nameserver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SERVFAIL/REFUSED is "could not answer", never "the record is absent" (would revoke)."""
+    qname = "_attacksurf-verify.example.com"
+    servfail = _response(qname, [])
+    servfail.set_rcode(dns.rcode.SERVFAIL)
+    lookup, wire = _lookup(
+        monkeypatch,
+        answers={},
+        responses={
+            "93.184.216.34": servfail,
+            "93.184.216.35": _response(qname, [("attacksurf-verification=abc",)]),
+        },
+    )
+
+    assert lookup.lookup_txt("example.com", qname) == ("attacksurf-verification=abc",)
+    assert [address for address, _ in wire.udp_calls] == ["93.184.216.34", "93.184.216.35"]
+
+
+def test_a_zone_whose_nameservers_all_fail_is_a_lookup_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    qname = "_attacksurf-verify.example.com"
+    refused = _response(qname, [])
+    refused.set_rcode(dns.rcode.REFUSED)
+    lookup, _ = _lookup(
+        monkeypatch,
+        answers={},
+        responses={"93.184.216.34": refused, "93.184.216.35": refused},
+    )
+
+    with pytest.raises(TxtError):
+        lookup.lookup_txt("example.com", qname)
+
+
+def test_a_subdomain_root_uses_the_enclosing_zone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A root like `eng.example.com` usually has no NS of its own; its records live above."""
+    qname = "_attacksurf-verify.eng.example.com"
+    lookup, wire = _lookup(
+        monkeypatch,
+        answers={},  # eng.example.com has no NS; example.com does
+        responses={"93.184.216.34": _response(qname, [("attacksurf-verification=abc",)])},
+    )
+
+    assert lookup.lookup_txt("eng.example.com", qname) == ("attacksurf-verification=abc",)
+    assert [address for address, _ in wire.udp_calls] == ["93.184.216.34"]
+
+
+def test_a_delegated_subdomain_root_uses_its_own_zone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    qname = "_attacksurf-verify.eng.example.com"
+    lookup, _ = _lookup(
+        monkeypatch,
+        answers={
+            ("eng.example.com", "NS"): ["ns1.example.net"],
+            ("example.com", "NS"): ["ns2.example.net"],  # and the parent, which must not win
+        },
+        responses={"93.184.216.34": _response(qname, [("attacksurf-verification=abc",)])},
+    )
+
+    assert lookup.lookup_txt("eng.example.com", qname) == ("attacksurf-verification=abc",)
+
+
+def test_the_zone_walk_stops_at_the_registrable_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`a.b.example.com` with no NS anywhere stops at `example.com`, never at `com`."""
+    qname = "_attacksurf-verify.a.b.example.com"
+    lookup, _ = _lookup(
+        monkeypatch,
+        answers={("example.com", "NS"): ["ns1.example.net"]},
+        responses={"93.184.216.34": _response(qname, [("attacksurf-verification=abc",)])},
+    )
+
+    assert lookup.lookup_txt("a.b.example.com", qname) == ("attacksurf-verification=abc",)

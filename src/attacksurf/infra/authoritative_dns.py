@@ -19,21 +19,37 @@ import dns.flags
 import dns.message
 import dns.name
 import dns.query
+import dns.rcode
 import dns.rdatatype
 
-from attacksurf.domain.net import TxtError
+from attacksurf.domain.net import DnsError, TxtError
 from attacksurf.domain.scope import ScopeError, check_addresses
 from attacksurf.domain.verification import MAX_TXT_BYTES, MAX_TXT_RECORDS
+from attacksurf.infra import public_suffix
 
 TX_TIMEOUT_SECONDS = 2.0
 MAX_NAMESERVERS = 3
 MAX_NS_ADDRESSES = 4
+# How many labels to strip while looking for the enclosing zone (eng.example.com -> example.com).
+MAX_ZONE_WALK = 3
+# Answers that mean "this server could not answer", not "the record is absent".
+FAILURE_RCODES = frozenset(
+    {
+        dns.rcode.SERVFAIL,
+        dns.rcode.REFUSED,
+        dns.rcode.NOTIMP,
+        dns.rcode.FORMERR,
+    }
+)
 # A truncated answer must fit over TCP; anything bigger is not a TXT record we wrote.
 MAX_RESPONSE_BYTES = 64 * 1024
 
 
 class StubRecords(Protocol):
-    """The stub's record lookup; `DnsPythonResolver.lookup_records` implements it."""
+    """The stub's record lookup; `DnsPythonResolver.lookup_records` implements it.
+
+    Raises `domain.net.DnsError` (never a dnspython exception) when the stub can't answer.
+    """
 
     def lookup_records(self, name: str, rdtype: str) -> tuple[str, ...]: ...
 
@@ -46,9 +62,14 @@ class AuthoritativeTxtLookup:
         self._timeout = timeout
 
     def lookup_txt(self, host: str, name: str) -> tuple[str, ...]:
-        """TXT values at `name`, from `host`'s nameservers. Raises `TxtError` on any failure."""
-        zone = _absolute(host)
+        """TXT values at `name`, from the nameservers of the zone enclosing `host`.
+
+        The record is always read at `name` itself; only the *zone* may be a parent, because a
+        root like `eng.example.com` usually has no NS record of its own (its records live in
+        `example.com`). Raises `TxtError` on any failure.
+        """
         qname = _absolute(name)
+        zone = self._zone(host)
         if not qname.is_subdomain(zone):
             raise TxtError()
         nameservers = self._nameservers(zone)
@@ -59,8 +80,36 @@ class AuthoritativeTxtLookup:
                 answer = _query(qname, server, self._timeout)
             except dns.exception.DNSException:
                 continue  # try the next nameserver; all failing is a lookup error
+            if answer.rcode() in FAILURE_RCODES:
+                continue  # a failing server proves nothing about the record: ask another
             return _txt_values(answer, qname)
         raise TxtError()
+
+    def _zone(self, host: str | dns.name.Name) -> dns.name.Name:
+        """The closest zone at or above `host` that has an NS RRset.
+
+        Stops at the Public Suffix boundary: `example.com` is where a walk from a deeper name
+        ends when nothing delegated, and the PSL itself (a bare `com`) is never queried.
+        """
+        name = host if isinstance(host, dns.name.Name) else _absolute(host)
+        # Never walk past the registrable domain: above it is the PSL itself (a bare `com`).
+        stop = dns.name.from_text(
+            public_suffix.registrable(name.to_text(omit_final_dot=True)) or name.to_text()
+        )
+        for _ in range(MAX_ZONE_WALK + 1):
+            if name == stop or self._has_ns(name):
+                return name
+            parent = name.parent()
+            if parent == name:
+                break
+            name = parent
+        return stop
+
+    def _has_ns(self, name: dns.name.Name) -> bool:
+        try:
+            return bool(self._resolve(name.to_text(omit_final_dot=True), "NS"))
+        except TxtError:  # a stub failure says nothing about whether the zone is delegated
+            return False
 
     def _nameservers(self, zone: dns.name.Name) -> tuple[tuple[str, int], ...]:
         """Validated (address, port) pairs for the zone's authoritative servers.
@@ -68,16 +117,13 @@ class AuthoritativeTxtLookup:
         `check_addresses` rejects loopback, private, link-local and metadata ranges, so a zone
         that delegates to an internal address can't be used to probe our network.
         """
-        try:
-            ns_names = self._resolve(zone.to_text(omit_final_dot=True), "NS")
-        except dns.exception.DNSException:
-            raise TxtError() from None
+        ns_names = self._resolve(zone.to_text(omit_final_dot=True), "NS")
         servers: list[tuple[str, int]] = []
         for ns_text in ns_names[:MAX_NAMESERVERS]:
             ns_name = ns_text[:-1] if ns_text.endswith(".") else ns_text  # the stub takes no dot
             try:
                 addresses = self._resolve(ns_name, "A") + self._resolve(ns_name, "AAAA")
-            except dns.exception.DNSException:
+            except TxtError:
                 continue  # one unreachable NS doesn't fail a zone the others answer for
             for address in addresses[:MAX_NS_ADDRESSES]:
                 if _is_public(address):  # never queue an address the policy blocks
@@ -85,7 +131,11 @@ class AuthoritativeTxtLookup:
         return tuple(servers)
 
     def _resolve(self, host: str, rdtype: str) -> tuple[str, ...]:
-        return self._resolver.lookup_records(host, rdtype)
+        """Stub answers, translated: `DnsError` (the adapter's failure) becomes a lookup error."""
+        try:
+            return self._resolver.lookup_records(host, rdtype)
+        except DnsError:
+            raise TxtError() from None
 
 
 def _is_public(address: str) -> bool:

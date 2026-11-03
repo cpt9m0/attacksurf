@@ -24,6 +24,10 @@ which are attacker-influenced when a domain is delegated.
 - **Inheritance**: proofs belong to root domains. A `subdomain` asset is verified when its
   parent (the scan root it was discovered under) is verified, which is what the asset graph
   already encodes. Re-adding a domain re-issues a token; archived assets are never verified.
+- **Enclosing zone**: a root added as a subdomain (`eng.example.com`) usually has no NS RRset
+  of its own, so the check walks up from the name to the closest ancestor with one, stopping at
+  the registrable domain (never at the PSL itself). The TXT record is still read at the
+  original `_attacksurf-verify.<root>` name.
 - **Authoritative lookups**: `infra/authoritative_dns.py` asks the zone's nameservers for the
   TXT record. This is the **one** place allowed to send a query to a server named in a DNS
   answer (ADR 0013 forbids it for scanners), and it is narrow:
@@ -34,7 +38,10 @@ which are attacker-influenced when a domain is delegated.
   - answers are *read*, never followed: an NS or CNAME in the reply is ignored, and only a
     direct TXT record for the exact name counts;
   - bounded: at most 3 nameservers, 2 s per query, UDP with a TCP retry on truncation, and a
-    64 KiB response cap.
+    64 KiB response cap;
+  - a server that answers SERVFAIL/REFUSED/NOTIMP/FORMERR is treated as unavailable (try the
+    next one, then fail the check as transient), never as "the record is absent": interpreting
+    an outage as absence would revoke a valid proof.
 - **Revocation and grace**: a verified proof is re-checked daily by an hourly beat task; a
   missing record revokes it once `expires_at` (one day after the last success) has passed, so
   a flaky lookup or a worker outage doesn't cut active checks off immediately. Verified proofs
