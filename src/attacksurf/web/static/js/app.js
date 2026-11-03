@@ -33,4 +33,23 @@ document.addEventListener("alpine:init", function () {
       },
     };
   });
+
+  // components/verification.html: copy the TXT record into the owner's DNS provider. The
+  // Clipboard API needs a secure context; elsewhere the field stays selectable by hand.
+  window.Alpine.data("copyField", function () {
+    return {
+      copied: false,
+      copy: function () {
+        var self = this;
+        var text = this.$refs.value.textContent;
+        if (!navigator.clipboard) return;
+        navigator.clipboard.writeText(text).then(function () {
+          self.copied = true;
+          window.setTimeout(function () {
+            self.copied = false;
+          }, 2000);
+        });
+      },
+    };
+  });
 });

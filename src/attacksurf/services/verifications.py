@@ -124,6 +124,15 @@ def get_verification(session: Session, org_id: UUID, asset_id: UUID) -> Verifica
     return read_verification(session, org_id, root.id)
 
 
+def verification_for_asset(session: Session, org_id: UUID, asset_id: UUID) -> UUID | None:
+    """The id of an asset's proof, or None. Tenant-scoped; used by the worker task."""
+    return session.scalar(
+        scoped(Verification, org_id)
+        .where(Verification.asset_id == asset_id)
+        .with_only_columns(Verification.id)
+    )
+
+
 def read_verification(session: Session, org_id: UUID, root_id: UUID) -> VerificationView | None:
     """The verification row of a root, shaped for `web/`. No lookup: the proof is one row."""
     row = session.scalars(

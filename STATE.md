@@ -2,49 +2,54 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-10-31 · **Branch:** `13-assets-ui` · **Issue:** #13 (Assets UI)
+**Updated:** 2026-11-03 · **Branch:** `14-ownership-verification` · **Issue:** #14 (DNS TXT ownership)
 
 ## Status
-#13 is complete in two PRs: PR 1 (#113, services + `/api/v1/assets`) is merged; PR 2 (UI,
-Closes #13) is open from `13-assets-ui`. When it merges, #13 is done.
+#14 is implemented in two stacked commits on `14-ownership-verification`; two PRs are open
+against `main` (neither closes #14 alone — the one that merges last takes `Closes #14`):
+`4cda8e7` (PR 1: model, services, authoritative lookup, gate wiring) then
+`e35061a` (PR 2: worker task, hourly beat, ownership card).
+All checks green locally: ruff, pyright (0), import-linter, pytest 891 passed / 97.9%.
 
 ## Last task
-- Pages in `web/ui.py`: `/assets` (add-domain form with HTMX inline errors, filter bar swapping
-  only `#asset-results`, pagination), `/assets/<id>?tab=overview|findings|scans` (metadata,
-  relations both ways, findings, scan history), `POST /assets/<id>/archive` (admin, confirm dialog).
-- Components: `confirm_dialog` (`<dialog>` + `Alpine.data("confirmDialog")`), `select_field`,
-  `form_field(autofocus=)`, `relative_time` (`web/formatting.py` filters), `data_table` call blocks.
-- CSS: `.content { min-width: 0 }` so wide tables scroll inside `.table-wrap`; new tokens
-  `--color-backdrop`, `--field-min-width`, `--filter-min-width`, `--meta-column-min-width`.
-- Review fixes (Codex on #118): history restores get the full page (`web/rendering.py`), and
-  filter forms / tab bars use `hx-sync="this:replace"`; both reproduced and verified in Chromium.
-- Checked in real Chromium (light + dark): add/invalid add, search focus, filters, tabs, dialog
-  (Escape/Cancel/confirm), archive; no console errors besides the intended 422.
+- `verifications` table (migration `0005`), `jobs.scan_id` now nullable (`SET NULL`; a pruned
+  scan keeps its jobs). A revoked proof may carry `verified_at`; a pending one may not.
+- `domain/verification.py` (token, record name/value, chunk-tolerant `matches`),
+  `infra/authoritative_dns.py` (`AuthoritativeTxtLookup`: NS from the stub, every NS address
+  validated with the scan-target policy, no referrals, TXT chunks joined),
+  `services/ownership.py` (`DbOwnershipChecker`, `check_ownership`, `VerificationNotFound`),
+  `services/verifications.py` (`start_verification`, `read_verification`, `record_check`,
+  `due_verifications`, `enqueue_due_checks`).
+- `passive.verify_ownership` + hourly `passive.reverify_ownership` (beat, minute 17);
+  `POST /assets/<id>/verify` (admin, `action=start|check`, rotate = default) and
+  `GET /assets/<id>/ownership` for the HTMX card.
+- Checked in Chromium (light + dark): card, HTMX swap, copy button, rotate dialog
+  (Escape closes). Source ~330 lines in PR 2, ~470 + tests in PR 1.
 
 ## Next step
-Pick up #14 (DNS TXT ownership verification): it unblocks active checks and plugs a real
-`OwnershipChecker` into `workers.runtime.scanner_gate()`. #116 (cancel scans on archive) is a
-small MVP bug that can go first if preferred.
+Get both PRs reviewed and merged (security-sensitive: DNS lookups and the gate), then
+unblock the website module (#69 ADR, #70 active queue, #71 TLS adapter), which depends on
+this.
 
 ## Open threads
-- Follow-ups filed: #114 shell overflows at 390px (pre-existing, every page), #115 tag editing,
-  #116 in-flight scans keep running after their root is archived, #117 overlapping roots.
+- Dev DB needs `uv run alembic upgrade head` (done locally; `make migrate` in compose).
+- Verification jobs currently just stay `queued` in a dev stack without a worker; expected.
+- `due_verifications` is the only deliberately cross-tenant query (ids only, system work).
+- Follow-ups filed earlier still open: #114 shell overflow at 390px, #115 tag editing,
+  #116 cancel scans on archive, #117 overlapping roots.
 - `.env.example` still lacks ALLOW_SIGNUP, SESSION_LIFETIME_HOURS, PROXY_COUNT.
-- The Playwright MCP expects Google Chrome (`/opt/google/chrome`), which isn't installed. The
-  user approved Playwright's Chromium in `~/.cache/ms-playwright`; drive it with a scratchpad
-  script via `uv run --no-project --with playwright==1.55.0 python …`.
 
 ## Notes for the next agent
-- `web/` can't import SQLAlchemy (import-linter): read models live in `services/asset_views.py`.
-- DB-backed web tests: each request closes the shared `db_session` at teardown, detaching ORM rows;
-  pass ids around and re-read (`tests/integration/web/test_assets_ui.py` helpers).
-- Unit tests in `tests/unit/web/test_ui.py` stub `asset_views` (no DB there).
-- HTMX keeps its history cache in **sessionStorage** (`htmx-history-cache`); clear it there to
-  force a server history restore when testing Back navigation.
-- When reproducing a client race in Playwright, run a control with the fix removed (e.g. strip the
-  attribute via JS); a repro that passes both ways proves nothing. See #118 review fixes.
-- HTMX `hx-push-url` changes use pushState: in Playwright wait with `expect(page).to_have_url()`,
-  not `wait_for_url` (it waits for a load event that never comes).
-- Signup is rate limited to 5/hour per IP, also in dev; reuse accounts when testing by hand.
+- Signup, login and `/assets` POST are rate limited per IP (5/hour; also in dev). Reuse an
+  existing account; the dev DB has `dana845461@example.com` (password `correct horse battery`).
+- `pkill -f serve14.py` kills the shell that ran it; start the scratch server with
+  `setsid nohup uv run python … &` in a separate command.
+- `.example`/`.test` values are rejected (not in the PSL) — use `*.com` for manual demos.
+- Playwright: `uv run --no-project --with playwright==1.55.0 python …` (Chromium in
+  `~/.cache/ms-playwright`).
+- `op.f("ck_...")` in a migration is **not** what the models' naming convention produces for an
+  unnamed `CheckConstraint`: the metadata expands a short name to `ck_<table>_<name>`. Passing
+  the full name in the model (or a `op.f` full name in the migration) creates a constraint that
+  the model's metadata never matches; keep the when in the model and `alembic check` in the
+  migration test catch this, but only after a fresh schema.
 - DB tests: `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@localhost:5432/attacksurf_test`.
-- Stale shell groups: use `sg docker -c 'make up'`. Never chmod the Docker socket.
