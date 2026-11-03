@@ -2,7 +2,8 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-03 · **Branch:** `14-ownership-verification` · **Issue:** #14 (DNS TXT ownership)
+**Updated:** 2026-11-03 (after Codex review) · **Branches:** `14-ownership-verification-part1` /
+`14-ownership-verification` · **Issue:** #14 (DNS TXT ownership)
 
 ## Status
 #14 is implemented in two stacked commits on `14-ownership-verification`; two PRs are open
@@ -24,7 +25,14 @@ All checks green locally: ruff, pyright (0), import-linter, pytest 891 passed / 
   `POST /assets/<id>/verify` (admin, `action=start|check`, rotate = default) and
   `GET /assets/<id>/ownership` for the HTMX card.
 - Checked in Chromium (light + dark): card, HTMX swap, copy button, rotate dialog
-  (Escape closes). Source ~330 lines in PR 2, ~470 + tests in PR 1.
+  (Escape closes), "Verify now" now issues a real POST.
+
+## Review history
+Codex left five findings on the first push; all are fixed and answered inline:
+`3ad8762` (P2s: `DnsError` not translated, subdomain roots found no zone, failure rcodes read as
+"absent"), `b3128a4` + `dfdbfc0` (P1s: "Verify now" queued nothing, inline Alpine ternaries in
+the copy button). The subdomain-root fix was a design change approved by the user: the zone is
+the closest ancestor with an NS RRset up to the registrable domain (ADR 0014).
 
 ## Next step
 Get both PRs reviewed and merged (security-sensitive: DNS lookups and the gate), then
