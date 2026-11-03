@@ -38,7 +38,7 @@ def stubs(monkeypatch: pytest.MonkeyPatch, asset_id: object) -> dict[str, list[d
         max_severity=None,
         verification=None,
     )
-    calls: dict[str, list[dict[str, object]]] = {"started": []}
+    calls: dict[str, list[dict[str, object]]] = {"started": [], "checked": []}
     monkeypatch.setattr(asset_views, "get_asset", lambda *_a, **_k: row)
     monkeypatch.setattr(
         asset_views,
@@ -51,6 +51,11 @@ def stubs(monkeypatch: pytest.MonkeyPatch, asset_id: object) -> dict[str, list[d
         calls["started"].append(kw)
 
     monkeypatch.setattr(verifications, "start_verification", start)
+
+    def queue_check(*_args: object, **kw: object) -> None:
+        calls["checked"].append(kw)
+
+    monkeypatch.setattr(verifications, "queue_check", queue_check)
     return calls
 
 
@@ -132,7 +137,7 @@ def test_a_post_without_csrf_is_rejected(
     assert stubs["started"] == []
 
 
-def test_a_check_without_a_proof_is_not_found(
+def test_a_check_queues_without_starting_a_new_proof(
     auth_client: FlaskClient, asset_id: object, stubs: dict[str, list[dict[str, object]]]
 ) -> None:
     token = _csrf(auth_client, f"/assets/{asset_id}/ownership")
@@ -141,7 +146,9 @@ def test_a_check_without_a_proof_is_not_found(
         f"/assets/{asset_id}/verify", data={"action": "check", "csrf_token": token}
     )
 
-    assert response.status_code == 404
+    assert response.status_code == 303
+    assert stubs["started"] == []  # the token the user published must not rotate
+    assert len(stubs["checked"]) == 1
 
 
 def test_a_verified_once_counted_proof_is_shown_with_its_record(
