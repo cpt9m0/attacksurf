@@ -5,6 +5,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 
 ## [Unreleased]
 
+### Added
+- ADR 0016: the analysis tools, their licenses, and how their images are built and updated (#83).
+
 ### Fixed
 - Flaky CSRF test: corrupting a token's last base64 character can keep the signature valid
   (padding bits), so the test now changes the first one (#119).
