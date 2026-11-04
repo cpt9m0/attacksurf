@@ -27,7 +27,8 @@ not a sandbox. A malicious artifact must not reach the DB, Redis, the network or
     (stdout), kill and remove, and nothing else (no exec, images, volumes, networks, or other
     containers). It also validates every create request against the sandbox policy: image
     digest on the allowlist, `runsc` runtime (or the dev fallback), the flags and limits
-    below, and a single read-only bind under the artifact root. A compromised launcher can
+    below, a single read-only bind under the artifact root, and no other mount except the
+    OSV data volume for the osv-scanner image (ADR 0016). A compromised launcher can
     therefore only start more sandboxes. Off-the-shelf proxies filter by API section only and
     can't check create bodies, so this is a small purpose-built service.
   - **Sandbox**: one fresh gVisor (`runsc`) container per job, started with `--rm` and never
@@ -35,7 +36,8 @@ not a sandbox. A malicious artifact must not reach the DB, Redis, the network or
     Docker socket, no broker URL.
 - **I/O contract:** the artifact is mounted read-only at `/input`; the root filesystem is
   read-only; `/scratch` is a size-capped `tmpfs` (`noexec,nosuid,nodev`) and the only writable
-  path; the container runs with `--network=none` (loopback only). The tool writes one JSON
+  path; the container runs with `--network=none` (loopback only). The osv-scanner analyzer
+  alone also gets the OSV data volume read-only at `/data/osv`. The tool writes one JSON
   document to stdout. The launcher stops reading past the ADR 0011 output cap (2 MiB) and
   kills the run, so oversized output fails the job. stderr is drained and discarded because it
   can echo secrets the tool found; only exit status and byte counts are logged. The worker
@@ -84,7 +86,7 @@ not a sandbox. A malicious artifact must not reach the DB, Redis, the network or
 - Each job pays container start-up and gVisor syscall overhead; that's acceptable for
   background analysis.
 - `sandbox-proxy` is now the root-equivalent component. It must stay small, have its policy
-  checks unit-tested (rejecting privileged, extra binds, host namespaces, unknown images), and
-  deny by default. Rootless Docker is a possible later hardening on top.
+  checks unit-tested (rejecting privileged, extra binds, the OSV volume on any other image,
+  host namespaces, unknown images), and deny by default. Rootless Docker is a possible later hardening on top.
 - Residual risk: a gVisor escape combined with a tool exploit. Fresh containers, no network
   and no secrets keep what such an escape could reach small.
