@@ -62,27 +62,37 @@ Supporting pieces also ship in the images: the ADR 0015 extractor (our own code,
 - **Nothing is fetched at run time.** Every tool runs in its offline mode, and an attempted
   update would fail anyway because the sandbox has no network.
 - **Rules and checks** change with the tool version, through the same PR as any upgrade.
-- **The OSV database is baked into the osv-scanner image,** which CI rebuilds daily with the
-  same pinned tool and updates `sandbox-images.lock`. The two-week rule covers tool code, not
-  this data. Each result records the database's date, and an image older than seven days fails
-  the job rather than reporting a misleadingly clean result.
+- **The OSV database lives in a shared volume, synced daily (#93).** A passive task with a
+  `services` grant for OSV's public data host writes it, and the sandbox mounts it read-only at
+  `/data/osv`, for the osv-scanner image only (ADR 0014). The two-week rule covers tool code, not
+  this data.
+- **The sync is streamed and unparsed.** OSV's files far exceed the scanner client's 1 MiB cap, so
+  it uses a streaming port like ADR 0015's, limited to that host and size-capped. It stores the
+  files as downloaded and never unpacks them, so only the sandbox parses them.
+- **Each update is complete and atomic.** The sync writes a new snapshot, records its date and
+  SHA-256, then swaps it in. The previous snapshot stays until jobs using it have finished.
+- **Stale data fails.** Each result records the snapshot's date and hash, and a snapshot older
+  than seven days fails the job rather than reporting a misleadingly clean result.
 
 ### Rejected
 - **Downloading databases when a job starts:** this needs network access in the sandbox, which
   ADR 0014 forbids.
-- **A shared OSV volume, synced by a passive task** (as first drafted in #93): it needs a second
-  bind, which ADR 0014's proxy policy refuses, and lets a process outside the sandbox change
-  what analyzers read without a new digest.
+- **Baking OSV data into the image, rebuilt daily:** the digest would pin the exact data and the
+  proxy would stay at one mount, but every refresh would need a new digest deployed, and a
+  stalled deploy would stop dependency scans.
 - **One image with every tool:** a single exploit would reach every tool, and the image would
   need rebuilding for any change.
 - **`opengrep-rules` and Semgrep registry rules:** their licenses, as above.
 
 ## Consequences
-- #93 changes: its daily sync becomes the CI image rebuild. The issue text needs updating.
+- OSV data is the one thing in the sandbox not pinned by an image digest, so a compromised
+  passive worker could alter it, for example to hide vulnerabilities. It can't change what the
+  sandbox can reach, and the recorded hash shows which snapshot produced a result.
+- The proxy gains a second allowed mount, tied to the osv-scanner image, and tests that refuse it
+  for any other image.
 - #94 has to write and maintain its own rules, so coverage starts small and grows on purpose.
-- CI gains an image build workflow and a daily job. Each OSV refresh changes
-  `sandbox-images.lock`, so the deploy has to pick up a new digest daily, or the seven-day
-  limit will start failing dependency scans.
+- CI gains an image build workflow. Compose gains the OSV volume: writable by the sync,
+  read-only in the sandbox. If the sync stops, the seven-day limit fails dependency scans.
 - Advisory data carries the licenses of its sources. #93 records the required attribution in
   `NOTICE`.
 - The project doesn't currently have a `NOTICE` file; the first analyzer image adds it. If images

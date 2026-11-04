@@ -18,9 +18,9 @@ Then pick up #14 (DNS TXT ownership verification), or #84 (sandbox runner) if th
 goes first.
 
 ## Open threads
-- Waiting on the user: ADR 0015 allows only `github.com` and `gitlab.com`, while #88 says
-  "public git URL"; ADR 0016 bakes OSV data into a daily image, which replaces the volume in #93.
-  If the ADR stands, update the text of #93.
+- Decided: ADR 0015 allows only `github.com` and `gitlab.com`, so no self-hosted servers. OSV
+  data uses #93's read-only volume (ADRs 0014 and 0016). #93's text stays as written, but its
+  sync needs the streaming port from ADR 0016, because the scanner client caps at 1 MiB.
 - #127 (test leak, #126) is open and also rewrites this file; keep the newer handoff.
 - Follow-ups filed: #114 shell overflows at 390px (pre-existing, every page), #115 tag editing,
   #116 in-flight scans keep running after their root is archived, #117 overlapping roots.
