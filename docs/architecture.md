@@ -22,6 +22,19 @@ Browser ─► web    ├────────────►│ Redis  ├�
             └──────────────────► PostgreSQL ◄───────────────┘
 ```
 
+Analysis path (ADR 0014, not built yet): only `sandbox-proxy` holds the Docker socket, and the
+sandbox that reads the artifact has no network and no credentials.
+
+```
+worker-analysis ─ run(artifact ID, analyzer) ─► sandbox-launcher ─► sandbox-proxy ─► Docker
+(DB/Redis creds,                                (no credentials)    (only socket holder, │
+ never opens artifacts)                                              checks each create) │
+        ▲                                                                                │ starts
+        └──── JSON on stdout, ≤ 2 MiB, via launcher ◄──── gVisor sandbox, one per job ◄──┘
+                                                          no network · read-only /input
+                                                          tmpfs /scratch · CPU/mem/pids/time caps
+```
+
 ## Layers
 
 ```
