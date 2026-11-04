@@ -30,6 +30,8 @@ services; active checks (target HTTP) require ownership (#14) |
 | Credentials in asset values | URL assets with `user:pass@` are rejected, never stored; error messages don't echo them |
 | Prompt injection via scan data | scan data is delimited and size-capped in prompts, output is schema-validated, AI cannot take actions |
 | Secret leakage / forged sessions | env vars and connection URLs typed as `SecretStr` (masked in repr); `ENV=prod` refuses to start unless `SECRET_KEY` is ≥ 32 chars and not a placeholder such as `change-me`; org API keys encrypted at rest (Fernet/MultiFernet); structlog redacts secret-looking keys; keys never rendered back in full |
+| Malicious archive *(later)* | extracted only inside the sandbox by a purpose-built loop that never creates links; links, device nodes and FIFOs are skipped with a reason; absolute paths, `..`, duplicate paths and corrupt archives reject the whole artifact; size, file-count, depth and ratio caps count while writing and fail the job, because a partial tree would read as clean; nested archives aren't unpacked (ADR 0015) |
+| Repository fetch abuse (SSRF, `git` transports) *(later)* | no `git` binary with network access: smart HTTP in Python over the pinned safe client; exact-match forge allowlist in code; URLs rebuilt from a validated `host/path`; no redirects; dumb HTTP refused; size and time caps; the pack is stored unparsed; analysis waits for ownership proof (ADR 0015) |
 | Log injection | client `X-Request-ID` accepted only if it matches `[A-Za-z0-9-]{1,64}`, otherwise replaced; structured (JSON) logs |
 | Malicious uploads *(later)* | never executed; analysis in gVisor sandboxes without network |
 | Account attacks | argon2id hashing (`infra/crypto.py`, argon2-cffi defaults, rehash on login when parameters change); passwords 12–1024 chars (upper bound limits hashing DoS), never logged or echoed in errors; emails normalized to lowercase and unique; login passwords over 1024 chars are rejected without hashing the submitted value (a fixed dummy value is hashed instead, so the path costs the same argon2 work for known and unknown accounts; known accounts are audited with reason `password_too_long`); one generic "Invalid email or password" for every failure and equal argon2 work for unknown emails (no account enumeration via login or timing); inactive users can't log in and lose access on their next request; audit log of `user.login`, `user.login_failed` (with reason), `user.logout`, `asset.root_added` / `asset.root_restored` / `asset.root_archived` (`details` never holds secrets) |
@@ -54,6 +56,11 @@ subdomain cannot claim a fresh one; a policy error fails only its job.
 
 Active/analysis queues remain reserved and cannot be selected in a scan profile; active checks
 stay denied until ownership verification ships (#14).
+
+Repository fetches (ADR 0015, not built yet) pass the same gate through `check_fetch` and are
+not scanners: `worker-fetch` reaches only allowlisted forges, using a streaming transport
+limited to the two smart-HTTP requests. Scanners keep the GET-only client with its 1 MiB cap.
+The fetcher stores packs unparsed, so hostile objects are first parsed inside the sandbox.
 
 Plugins receive immutable context/value objects, never sessions or ORM rows. Threads cannot
 write results: services validate normalized `ScanOutput` again, select tenant-scoped assets,

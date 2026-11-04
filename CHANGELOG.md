@@ -5,6 +5,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 
 ## [Unreleased]
 
+### Added
+- ADR 0015: how repositories are fetched under ScopeGuard and how archives are extracted (#83).
+
 ### Fixed
 - Flaky CSRF test: corrupting a token's last base64 character can keep the signature valid
   (padding bits), so the test now changes the first one (#119).
