@@ -86,8 +86,8 @@ could fake that output, but planting the exploit already takes write access to t
 - **Archives enter by upload only (#87).** There's no "fetch this archive URL" feature and no
   forge tarball path, so nothing else reaches the network.
 - **Extraction happens inside the analyzer's sandbox (#86), never on the host.** It writes to
-  `/scratch` before the tool starts, so ADR 0014's proxy policy (one read-only bind) doesn't
-  change. The same rules apply when the fetched repository's tree is written out.
+  `/scratch` before the tool starts, so it needs no writable mount, which ADR 0014's proxy
+  policy wouldn't allow. The same rules apply when the fetched repository's tree is written out.
 - **The extractor is its own loop over entries,** not `tar`, `unzip` or `extractall`, and it
   never creates links. Extraction filters have had bypasses, and this leaves no link to resolve.
 
