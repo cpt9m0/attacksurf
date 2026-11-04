@@ -1,0 +1,80 @@
+{#- Ownership proof by DNS TXT (#14). Admins start or rotate a token; the record itself is
+    shown exactly as it must be published, because only the zone's owners can add it.
+    `asset` is the root that holds the proof; `manage` is false on subdomains and archives. -#}
+{%- from "components/confirm.html" import confirm_dialog -%}
+{%- from "components/form.html" import csrf_field -%}
+{%- from "components/icon.html" import icon -%}
+{%- from "components/time.html" import relative_time -%}
+
+{% set _tones = {"verified": "good", "pending": "active", "revoked": "bad"} %}
+{% macro ownership_badge(status) -%}
+{%- if status == "verified" -%}
+<span class="pill pill-good">{{ icon("shield-check") }}Verified</span>
+{%- else -%}
+<span class="pill pill-{{ _tones.get(status, "neutral") }}">{{ status | replace("_", " ") | capitalize }}</span>
+{%- endif -%}
+{%- endmacro %}
+
+{#- The card on a domain's overview tab. `proof` is a VerificationView (or none), `manage`
+    enables the admin actions, `root_value` names the domain in the copy, and `checking` is
+    true while a check runs: the card then polls itself until the result is in (DESIGN.md §6). -#}
+{% macro ownership_card(asset_id, root_value, proof, manage, checking=false) -%}
+<section class="card card-body ownership" id="ownership" aria-labelledby="ownership-title"
+         {%- if checking %} hx-get="{{ url_for('ui.ownership_card', asset_id=asset_id) }}"
+         hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML" hx-sync="this:replace"{% endif %}
+         aria-busy="{{ 'true' if checking else 'false' }}">
+  <div class="card-header">
+    <h2 class="card-title" id="ownership-title">Ownership</h2>
+    {%- if proof %}{{ ownership_badge(proof.status) }}{% endif %}
+    {%- if checking %} <span class="pill pill-active" role="status">Checking…</span>{% endif %}
+  </div>
+  {%- if proof %}
+  <p class="muted">
+    Publish this TXT record at your DNS provider, then run the check. Only the zone's owners
+    can add it, so a positive result proves control of {{ root_value }}.
+  </p>
+  <div class="copy-field" x-data="copyField">
+    <code x-ref="value">{{ proof.record_name }} TXT "{{ proof.record_value }}"</code>
+    <button type="button" class="btn btn-secondary" @click="copy" aria-pressed="false" :aria-pressed="pressed">
+      <span x-text="label">Copy record</span>
+    </button>
+  </div>
+  <dl class="meta">
+    <div><dt>Last checked</dt><dd>
+      {%- if proof.last_checked_at %}{{ relative_time(proof.last_checked_at) }}{% else %}<span class="muted">Not yet</span>{% endif %}</dd></div>
+    <div><dt>Verified</dt><dd>
+      {%- if proof.verified_at %}{{ relative_time(proof.verified_at) }}{% else %}<span class="muted">—</span>{% endif %}</dd></div>
+    <div><dt>Rechecked by</dt><dd>
+      {%- if proof.expires_at %}{{ relative_time(proof.expires_at) }}{% else %}<span class="muted">—</span>{% endif %}</dd></div>
+  </dl>
+  {%- if manage %}
+  <div class="page-actions">
+    <form method="post" action="{{ url_for('ui.verify_asset', asset_id=asset_id) }}"
+          hx-post="{{ url_for('ui.verify_asset', asset_id=asset_id) }}" hx-target="#ownership"
+          hx-swap="outerHTML" hx-disabled-elt="find button">
+      {{ csrf_field() }}
+      <input type="hidden" name="action" value="check">
+      <button type="submit" class="btn btn-primary"{% if checking %} disabled{% endif %}>Verify now</button>
+    </form>
+    {%- if proof.status != "pending" %}
+      {{ confirm_dialog("rotate", "Rotate token", "Rotate the verification token?",
+          "A new token replaces the old one: the domain drops back to unverified until the new record resolves, and any copy of the old value stops working.",
+          url_for('ui.verify_asset', asset_id=asset_id), "Rotate token",
+          trigger_variant="secondary", confirm_variant="secondary") }}
+    {%- endif %}
+  </div>
+  {%- endif %}
+  {%- elif manage %}
+  <p class="muted">Issue a token to prove control of {{ root_value }}. Active checks, such as
+    HTTP and port scans, run only on verified domains.</p>
+  <form method="post" action="{{ url_for('ui.verify_asset', asset_id=asset_id) }}">
+    {{ csrf_field() }}
+    <input type="hidden" name="action" value="start">
+    <button type="submit" class="btn btn-primary">Start verification</button>
+  </form>
+  {%- else %}
+  <p class="muted">Not verified yet. An administrator can prove control of this domain to unlock
+    active checks.</p>
+  {%- endif %}
+</section>
+{%- endmacro %}

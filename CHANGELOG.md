@@ -27,7 +27,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   stream that ends before its final block as truncated instead of returning partial content
   silently.
 
+### Changed
+- Deleting a scan keeps its jobs (with `scan_id` NULL) instead of deleting them, so job history
+  survives scan pruning and work outside a scan can be tracked.
+
 ### Added
+- Ownership card on a domain's overview page (#14): shows the TXT record to publish with
+  a copy button, its last check / verification / recheck times, and admin-only actions (start,
+  verify now via HTMX, which queues a check without rotating the token, and rotate behind a
+  confirm). The card polls itself while a check runs, so the outcome appears without a
+  reload. Inventory shows a "Verified" badge on roots; `passive.verify_ownership` runs each
+  check and an hourly beat entry re-queues due proofs.
+- Ownership proof by DNS TXT (#14): `start_verification` issues (or rotates) a
+  `_attacksurf-verify.<root>` token and queues a `passive.verify_ownership` job, an
+  authoritative lookup records `verified`/`pending`/`revoked` with a day-long recheck window and
+  a revoke grace, and `DbOwnershipChecker` makes ScopeGuard let active checks run only on a
+  verified, unexpired root (subdomains inherit it). Roots added as subdomains are checked in
+  their enclosing zone; failing nameservers are retried rather than read as a missing record.
+  New `verifications` table (migration 0005); `jobs.scan_id` is nullable so verification jobs no
+  longer need a scan. See ADR 0014.
 - Assets pages (#13): add a root domain from `/assets` (inline HTMX validation errors), browse
   assets with filters (type, root, tag, search, status) kept in the URL, and open an asset's
   detail page with its relations, findings and scan history tabs. Admins archive a root domain

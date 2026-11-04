@@ -3,6 +3,7 @@
 {% from "components/confirm.html" import confirm_dialog %}
 {% from "components/table.html" import data_table %}
 {% from "components/time.html" import relative_time %}
+{% from "components/verification.html" import ownership_badge, ownership_card %}
 {% block title %}{{ asset.value }}{% endblock %}
 {% block content %}
 {% set relation_labels = {
@@ -16,6 +17,7 @@
 <div class="page-header">
   <h1 class="mono">{{ asset.value }}</h1>
   {%- if not asset.is_active %} {{ status_pill("archived") }}{% endif %}
+  {%- if asset.verification == "verified" %} {{ ownership_badge("verified") }}{% endif %}
   {%- if can_archive %}
   <div class="page-actions">
     {%- if detail.discovered %}
@@ -56,6 +58,10 @@
   </nav>
 
   {%- if tab == "overview" %}
+  {#- Only roots hold a proof; on a subdomain this shows the root's proof, read-only. -#}
+  {%- if asset.type in ("domain", "subdomain") %}
+  {{ ownership_card(proof_root_id, proof_root_value, ownership, can_manage_ownership, checking) }}
+  {%- endif %}
   <section class="card" aria-labelledby="outgoing-title">
     <h2 class="card-title" id="outgoing-title">Points to</h2>
     {% call(row, key) data_table([("kind", "Relation"), ("peer", "Asset"), ("type", "Type"), ("last_seen", "Last seen")],

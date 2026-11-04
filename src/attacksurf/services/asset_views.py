@@ -22,7 +22,8 @@ from attacksurf.domain.findings import (
     severity_from_rank,
 )
 from attacksurf.domain.scans import ScanStatus, ScanTrigger
-from attacksurf.infra.db.models import Asset, AssetRelation, Finding, Scan
+from attacksurf.domain.verification import VerificationStatus
+from attacksurf.infra.db.models import Asset, AssetRelation, Finding, Scan, Verification
 from attacksurf.infra.db.tenancy import scoped
 
 PAGE_SIZE = 25
@@ -59,6 +60,7 @@ class AssetRow:
     is_active: bool
     open_findings: int
     max_severity: Severity | None  # worst open finding
+    verification: VerificationStatus | None  # None: no token issued yet
 
 
 @dataclass(frozen=True)
@@ -244,6 +246,11 @@ def list_root_domains(session: Session, org_id: UUID) -> tuple[RootOption, ...]:
 
 def _asset_rows(org_id: UUID) -> tuple[Select[Any], Any]:
     """Assets with their root's value and open-finding stats; returns the root alias too."""
+    proofs = (
+        scoped(Verification, org_id)
+        .with_only_columns(Verification.asset_id, Verification.status)
+        .subquery()
+    )
     stats = (
         scoped(Finding, org_id)
         .where(Finding.status == FindingStatus.OPEN)
@@ -258,15 +265,20 @@ def _asset_rows(org_id: UUID) -> tuple[Select[Any], Any]:
     root = aliased(Asset)
     stmt = (
         scoped(Asset, org_id)
-        .add_columns(root.value, stats.c.open_findings, stats.c.max_rank)
+        .add_columns(root.value, stats.c.open_findings, stats.c.max_rank, proofs.c.status)
         .outerjoin(root, (root.id == Asset.parent_id) & (root.org_id == org_id))
         .outerjoin(stats, stats.c.asset_id == Asset.id)
+        .outerjoin(proofs, proofs.c.asset_id == Asset.id)
     )
     return stmt, root
 
 
 def _asset_row(
-    asset: Asset, root_value: str | None, open_findings: int | None, max_rank: int | None
+    asset: Asset,
+    root_value: str | None,
+    open_findings: int | None,
+    max_rank: int | None,
+    verification: VerificationStatus | None,
 ) -> AssetRow:
     return AssetRow(
         id=asset.id,
@@ -281,6 +293,7 @@ def _asset_row(
         is_active=asset.is_active,
         open_findings=open_findings or 0,
         max_severity=severity_from_rank(max_rank),
+        verification=verification,
     )
 
 

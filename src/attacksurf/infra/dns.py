@@ -31,6 +31,10 @@ class DnsPythonResolver:
         resolver.retry_servfail = False
         self._resolver = resolver
 
+    def lookup_records(self, name: str, rdtype: str) -> tuple[str, ...]:
+        """Arbitrary record types (NS, A) from the stub, for the ownership check's NS discovery."""
+        return self._query(name, rdtype)
+
     def resolve_ipv4(self, host: str) -> tuple[str, ...]:
         return self._query(host, "A")
 
