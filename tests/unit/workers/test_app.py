@@ -1,4 +1,8 @@
 import logging
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from celery.signals import setup_logging, worker_process_init
@@ -50,3 +54,32 @@ def test_production_gate_is_scope_guard_with_unverified_ownership() -> None:
     assert isinstance(gate._ownership, UnverifiedOwnership)  # active checks denied until #14
     assert callable(runtime.dns_resolver().resolve_ipv4)
     assert runtime.http_client() is not runtime.http_client()
+
+
+PROBE_MODULE = """
+from attacksurf.workers import runtime
+from attacksurf.workers.app import app
+
+
+@app.task(name="passive.collection_probe")
+def probe() -> None: ...
+
+
+def test_worker_conf_uses_hermetic_settings() -> None:
+    assert app.conf.broker_url == runtime.settings().redis_url.get_secret_value()
+"""
+
+
+def test_module_level_tasks_do_not_load_real_settings_during_collection(tmp_path: Path) -> None:
+    # Collecting a module-level task finalizes the worker conf; it must already see test
+    # settings then, not .env/OS env (#126).
+    (tmp_path / "test_probe.py").write_text(PROBE_MODULE)
+    env = {**os.environ, "REDIS_URL": "redis://leaked.invalid:1/0"}
+    argv = [sys.executable, "-m", "pytest", "-c", os.devnull, "--rootdir", str(tmp_path)]
+    argv += ["-p", "no:cacheprovider", "-p", "tests.conftest", "-q", str(tmp_path)]
+
+    result = subprocess.run(  # noqa: S603 (fixed argv)
+        argv, env=env, cwd=Path(__file__).parents[3], check=False, capture_output=True
+    )
+
+    assert result.returncode == 0, result.stdout.decode()

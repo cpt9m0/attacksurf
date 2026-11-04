@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Fixed
+- Tests: hermetic worker settings are installed before pytest collection, so collecting a
+  module-level Celery task can't load `.env` into the worker config and fail the suite on
+  machines whose `REDIS_URL` differs from the default (#126).
 - Flaky CSRF test: corrupting a token's last base64 character can keep the signature valid
   (padding bits), so the test now changes the first one (#119).
 - Run database migrations as part of dev `make up`, before starting application services,
