@@ -9,7 +9,7 @@
 earlier two-PR stack was abandoned: #122 was merged into the part‑1 branch rather than `main`,
 and that branch was later force-pushed, so nothing from #14 is on `main` yet and none of the
 old branches is authoritative. This branch is `main` + the full implementation + every review
-fix. Locally green: ruff, pyright (0), import-linter, pytest 908 passed / 98%.
+fix. Locally green: ruff, pyright (0), import-linter, pytest 916 passed / 98%.
 
 ## Last task
 - Schema (migration `0005`): `verifications` table (unique per `(org_id, asset_id)`; a revoked
@@ -38,6 +38,13 @@ fix. Locally green: ruff, pyright (0), import-linter, pytest 908 passed / 98%.
 - **IPs/URLs inherited a domain's proof** (real security hole: `parent_id` is provenance) →
   inheritance restricted to domain/subdomain.
 - The async result never appeared → the card polls until the check finishes.
+- **CNAME bypass**: the stub follows CNAMEs, so an aliasing name borrowed the target
+  zone's nameservers and could have forged the proof → `lookup_records` returns the answered
+  owner and only an NS RRset owned by the queried name counts.
+- Re-check batch starvation: failing proofs sorted first forever → `failed_attempts` +
+  `retry_after` backoff (migration 0006).
+- Expired proofs still showed as Verified while the gate denied them → `ownership_state`
+  (verified past expiry is `expired`), shared by gate, list and card.
 
 ## Next step
 Open the PR (`Closes #14`), review, merge. Then close #121 and #122 with a note pointing at it
