@@ -14,15 +14,22 @@ not a sandbox. A malicious artifact must not reach the DB, Redis, the network or
 ## Decision
 - **Never execute the artifact.** Analysis is static only: no builds, installs, package
   scripts, `setup.py` or test runs. Tools run in modes that don't resolve or fetch anything.
-- **Three roles, and none of them holds both parsing and privilege:**
+- **Four roles, and none of them holds both parsing and privilege:**
   - `worker-analysis` (Celery, `analysis` queue): holds DB/Redis credentials, tracks the `Job`,
     and persists results. It never opens artifact bytes. It asks the launcher for a run
     identified by artifact ID and analyzer name, never by paths, images, args or mounts.
-  - `sandbox-launcher`: a small internal service and the **only** component with
-    container-runtime access. It has no DB/Redis credentials and no broker access. It maps the
-    analyzer name to an image digest from a fixed allowlist, resolves the artifact ID to its
-    directory under the artifact root itself, applies the fixed flags below, and returns exit
-    status plus capped stdout.
+  - `sandbox-launcher`: a small internal service with no DB/Redis credentials and no broker
+    access. It maps the analyzer name to an image digest from a fixed allowlist, resolves the
+    artifact ID to its directory under the artifact root itself, applies the fixed flags
+    below, and returns exit status plus capped stdout. It never holds the Docker socket.
+  - `sandbox-proxy`: the **only** component that mounts the Docker socket, reachable only by
+    the launcher on an internal network. It allows container create, start, wait, attach
+    (stdout), kill and remove, and nothing else (no exec, images, volumes, networks, or other
+    containers). It also validates every create request against the sandbox policy: image
+    digest on the allowlist, `runsc` runtime (or the dev fallback), the flags and limits
+    below, and a single read-only bind under the artifact root. A compromised launcher can
+    therefore only start more sandboxes. Off-the-shelf proxies filter by API section only and
+    can't check create bodies, so this is a small purpose-built service.
   - **Sandbox**: one fresh gVisor (`runsc`) container per job, started with `--rm` and never
     reused. Its environment contains only the image's own variables: no credentials, no
     Docker socket, no broker URL.
@@ -65,16 +72,19 @@ not a sandbox. A malicious artifact must not reach the DB, Redis, the network or
 - **Workers starting containers themselves:** the Docker socket is root on the host, and
   combining it with DB credentials and output parsing widens the blast radius of any worker
   bug.
+- **Launcher holding the socket directly:** its own code would be the only check, so one
+  launcher bug would mean control of the host.
 
 ## Consequences
-- Compose gains `worker-analysis` and `sandbox-launcher`. The VPS needs `runsc` registered in
-  Docker's `daemon.json`. New settings for runtime, limits and artifact root go in
-  `.env.example`.
-- The `analysis` queue stays reserved until the worker, launcher and at least one analyzer
-  exist.
+- Compose gains `worker-analysis`, `sandbox-launcher` and `sandbox-proxy`. The VPS needs
+  `runsc` registered in Docker's `daemon.json`. New settings for runtime, limits and artifact
+  root go in `.env.example`.
+- The `analysis` queue stays reserved until the worker, launcher, proxy and at least one
+  analyzer exist.
 - Each job pays container start-up and gVisor syscall overhead; that's acceptable for
   background analysis.
-- The launcher still holds the Docker socket. It stays minimal and accepts only IDs and names.
-  Rootless Docker or a filtering socket proxy is a possible later hardening.
+- `sandbox-proxy` is now the root-equivalent component. It must stay small, have its policy
+  checks unit-tested (rejecting privileged, extra binds, host namespaces, unknown images), and
+  deny by default. Rootless Docker is a possible later hardening on top.
 - Residual risk: a gVisor escape combined with a tool exploit. Fresh containers, no network
   and no secrets keep what such an escape could reach small.
