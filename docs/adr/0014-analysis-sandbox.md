@@ -87,6 +87,7 @@ not a sandbox. A malicious artifact must not reach the DB, Redis, the network or
   background analysis.
 - `sandbox-proxy` is now the root-equivalent component. It must stay small, have its policy
   checks unit-tested (rejecting privileged, extra binds, the OSV volume on any other image,
-  host namespaces, unknown images), and deny by default. Rootless Docker is a possible later hardening on top.
+  host namespaces, unknown images), and deny by default. Rootless Docker is a possible later
+  hardening on top.
 - Residual risk: a gVisor escape combined with a tool exploit. Fresh containers, no network
   and no secrets keep what such an escape could reach small.
