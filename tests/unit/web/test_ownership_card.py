@@ -9,7 +9,11 @@ from flask.testing import FlaskClient
 
 from attacksurf.domain.accounts import Role
 from attacksurf.domain.assets import AssetSource, AssetType
-from attacksurf.domain.verification import VerificationMethod, VerificationStatus
+from attacksurf.domain.verification import (
+    OwnershipState,
+    VerificationMethod,
+    VerificationStatus,
+)
 from attacksurf.services import asset_views, verifications
 from attacksurf.web import ui
 from tests.unit.web.conftest import make_session_user
@@ -36,7 +40,7 @@ def stubs(monkeypatch: pytest.MonkeyPatch, asset_id: object) -> dict[str, list[d
         is_active=True,
         open_findings=0,
         max_severity=None,
-        verification=None,
+        verification=OwnershipState.NONE,
     )
     calls: dict[str, list[dict[str, object]]] = {"started": [], "checked": []}
     monkeypatch.setattr(asset_views, "get_asset", lambda *_a, **_k: row)
@@ -161,6 +165,7 @@ def test_a_verified_once_counted_proof_is_shown_with_its_record(
     proof = verifications.VerificationView(
         asset_id=asset_id,  # type: ignore[arg-type]
         status=VerificationStatus.REVOKED,
+        state=OwnershipState.REVOKED,
         method=VerificationMethod.DNS_TXT,
         record_name="_attacksurf-verify.example.com",
         record_value="attacksurf-verification=token",

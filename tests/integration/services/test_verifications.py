@@ -300,3 +300,69 @@ def test_queue_check_cannot_reach_another_orgs_domain(
         verifications.queue_check(
             db_session, FakeQueue(db_session), org_id=other.id, asset_id=root.id
         )
+
+
+def test_a_failing_proof_backs_off_instead_of_blocking_the_batch(
+    db_session: Session, org: Org, root: Asset
+) -> None:
+    """Regression: permanently unreachable proofs kept taking the fixed batch's slots."""
+    failing = _start(db_session, FakeQueue(db_session), org.id, root.id)
+    verifications.record_check(db_session, failing, (record_value(failing.token),), now=NOW)
+    verifications.record_failure(failing, now=NOW)  # retry_after = NOW + 2 h
+    db_session.flush()
+
+    # Due (expired), but its backoff has not elapsed, so this run skips it entirely.
+    assert {
+        row[2] for row in verifications.due_verifications(db_session, NOW + timedelta(hours=1))
+    } == set()
+    # It is picked up again at its expiry once the backoff is over (2 h << 1 day).
+    expired = NOW + RECHECK_AFTER
+    assert {row[2] for row in verifications.due_verifications(db_session, expired)} == {failing.id}
+
+
+def test_a_full_batch_still_reaches_healthy_proofs(
+    db_session: Session, org: Org, root: Asset
+) -> None:
+    """Regression: failing proofs sorted first and took every slot in a `limit=1` batch."""
+    other_root = record_asset(
+        db_session, org.id, AssetType.DOMAIN, "healthy.example.net", source=AssetSource.USER
+    )
+    healthy = _start(db_session, FakeQueue(db_session), org.id, other_root.id)
+    verifications.record_check(db_session, healthy, (record_value(healthy.token),), now=NOW)
+    broken = _start(db_session, FakeQueue(db_session), org.id, root.id)
+    verifications.record_check(db_session, broken, (record_value(broken.token),), now=NOW)
+    db_session.flush()
+
+    # The healthy proof expires a day later than the broken one, so without the attempt-based
+    # ordering a one-slot batch would always pick the broken proof first.
+    broken.expires_at = NOW + timedelta(hours=1)
+    db_session.flush()
+    verifications.record_failure(broken, now=NOW)
+    verifications.record_failure(broken, now=NOW)  # back off 4 h, past its expiry
+    db_session.flush()
+
+    picked = verifications.due_verifications(
+        db_session, NOW + RECHECK_AFTER + timedelta(minutes=1), limit=1
+    )
+
+    assert [row[2] for row in picked] == [healthy.id]
+
+
+def test_a_successful_check_clears_the_backoff(db_session: Session, org: Org, root: Asset) -> None:
+    proof = _start(db_session, FakeQueue(db_session), org.id, root.id)
+    verifications.record_failure(proof, now=NOW)
+
+    verifications.record_check(db_session, proof, (record_value(proof.token),), now=NOW)
+
+    assert (proof.failed_attempts, proof.retry_after) == (0, None)
+
+
+def test_backoff_grows_per_consecutive_failure(db_session: Session, org: Org, root: Asset) -> None:
+    proof = _start(db_session, FakeQueue(db_session), org.id, root.id)
+
+    verifications.record_failure(proof, now=NOW)
+    first = proof.retry_after
+    verifications.record_failure(proof, now=NOW)
+
+    assert first == NOW + timedelta(hours=2)
+    assert proof.retry_after == NOW + timedelta(hours=4)

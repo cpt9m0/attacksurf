@@ -21,6 +21,10 @@ which are attacker-influenced when a domain is delegated.
   secret: it is shown in the UI and copied into the owner's DNS provider, and only write access
   to the zone proves anything. Tokens are stored in plain text; rotating one (re-issuing)
   rotates the row back to `pending`, so an old copy stops counting immediately.
+- **No alias-derived authorities**: the stub follows CNAMEs, so asking a name that aliases
+  elsewhere returns the *target's* NS RRset. Zone discovery therefore compares the answered
+  owner name with the queried one and ignores anything else: a subdomain that CNAMEs into a
+  zone its registrant controls can't borrow that zone's nameservers to forge the proof.
 - **Inheritance**: proofs belong to root domains. A `subdomain` asset is verified when its
   parent (the scan root it was discovered under) is verified, since both are names in the
   root's zone. Nothing else inherits: discovery sets `parent_id` for every asset a scan finds,
@@ -46,11 +50,19 @@ which are attacker-influenced when a domain is delegated.
   - a server that answers SERVFAIL/REFUSED/NOTIMP/FORMERR is treated as unavailable (try the
     next one, then fail the check as transient), never as "the record is absent": interpreting
     an outage as absence would revoke a valid proof.
+- **Backoff**: a lookup failure counts against the proof (`failed_attempts`) and pushes the
+  next scheduled check out by 1 h, 2 h, 4 h… (cap 8 doublings). Without it, permanently
+  unreachable proofs would sort first every run and fill the fixed batch, starving every
+  other tenant. Any answered lookup clears it.
 - **Revocation and grace**: a verified proof is re-checked daily by an hourly beat task; a
   missing record revokes it once `expires_at` (one day after the last success) has passed, so
   a flaky lookup or a worker outage doesn't cut active checks off immediately. Verified proofs
   also expire for the gate after a day, so a revoked domain can't keep its proof just because
   the re-check failed to run.
+- **One definition of "verified"**: `domain.verification.ownership_state` turns a stored row
+  into what it grants now (a `verified` row past `expires_at` is `expired`). The gate, the
+  asset list and the ownership card all use it, so a badge never claims more than ScopeGuard
+  allows.
 - **Gate wiring**: `services/ownership.DbOwnershipChecker` implements `OwnershipChecker` over
   the `verifications` table (one indexed read, no writes, denies on any database error) and
   `workers.runtime.scanner_gate()` uses it. The record side is

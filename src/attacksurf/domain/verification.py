@@ -6,7 +6,7 @@ control is that only the zone's owners can publish it.
 """
 
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 
 # One label under the asset: "_attacksurf-verify.example.com", so a CNAME wildcard on the
@@ -32,8 +32,36 @@ class VerificationStatus(StrEnum):
     REVOKED = "revoked"  # it was verified once, then the record disappeared
 
 
+class OwnershipState(StrEnum):
+    """What a proof grants right now, for the gate and the UI.
+
+    `EXPIRED` is derived, never stored: a row still says `verified` after `expires_at` (the
+    next check may revive it), but neither the gate nor a badge may count it.
+    """
+
+    NONE = "none"  # no token issued
+    PENDING = "pending"
+    VERIFIED = "verified"
+    EXPIRED = "expired"  # stored verified, past `expires_at`
+    REVOKED = "revoked"
+
+
 class VerificationMethod(StrEnum):
     DNS_TXT = "dns_txt"
+
+
+def ownership_state(
+    status: VerificationStatus | None, expires_at: datetime | None, now: datetime
+) -> OwnershipState:
+    """One definition of "does this proof count", shared by the gate and every badge (ADR 0014).
+
+    Otherwise the UI could show a green Verified while ScopeGuard denies the domain.
+    """
+    if status is None:
+        return OwnershipState.NONE
+    if status is VerificationStatus.VERIFIED and (expires_at is None or expires_at <= now):
+        return OwnershipState.EXPIRED
+    return OwnershipState(status.value)
 
 
 def new_token() -> str:

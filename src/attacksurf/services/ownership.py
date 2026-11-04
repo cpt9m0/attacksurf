@@ -14,7 +14,12 @@ from attacksurf.domain.assets import AssetType
 from attacksurf.domain.jobs import TransientJobError
 from attacksurf.domain.net import TxtError, TxtLookup
 from attacksurf.domain.scanners import AssetRef
-from attacksurf.domain.verification import VerificationStatus, record_name
+from attacksurf.domain.verification import (
+    OwnershipState,
+    VerificationStatus,
+    ownership_state,
+    record_name,
+)
 from attacksurf.infra.db.models import Asset, Verification
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services import verifications
@@ -61,16 +66,16 @@ class DbOwnershipChecker:
         # `parent_id` is provenance (what a scan found it under), not ownership: it is only
         # trusted for `subdomain`, where the root does control the name in its zone.
         proof_of = root_id if asset.type is AssetType.SUBDOMAIN and root_id else asset_id
-        verified = session.scalar(
+        row = session.execute(
             scoped(Verification, org_id)
-            .where(
-                Verification.asset_id == proof_of,
-                Verification.status == VerificationStatus.VERIFIED,
-                Verification.expires_at > datetime.now(UTC),
-            )
-            .with_only_columns(Verification.id)
-        )
-        return verified is not None
+            .where(Verification.asset_id == proof_of)
+            .with_only_columns(Verification.status, Verification.expires_at)
+        ).one_or_none()
+        if row is None:
+            return False
+        status, expires_at = row
+        # The same rule the UI shows, so a badge never claims more than the gate allows.
+        return ownership_state(status, expires_at, datetime.now(UTC)) is OwnershipState.VERIFIED
 
 
 class VerificationNotFound(LookupError):
@@ -109,6 +114,7 @@ def check_ownership(
     try:
         values = lookup.lookup_txt(asset.value, name)
     except TxtError as exc:
+        _record_failure(session, org_id, verification_id)
         raise TransientJobError(
             "The domain's nameservers could not be queried; the check will be retried."
         ) from exc
@@ -129,6 +135,20 @@ def check_ownership(
         )
     session.commit()
     return status
+
+
+def _record_failure(session: Session, org_id: UUID, verification_id: UUID) -> None:
+    """Count a failed lookup so the next re-check backs off instead of retrying immediately.
+
+    Commits on its own: the caller then raises (the job retries), and the counter must survive
+    that rollback or a permanently unreachable domain would starve every other tenant's checks.
+    """
+    verification = _locked_verification(session, org_id, verification_id)
+    if verification is None:
+        session.rollback()
+        return
+    verifications.record_failure(verification)
+    session.commit()
 
 
 def _locked_verification(

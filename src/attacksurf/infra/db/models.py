@@ -194,6 +194,10 @@ class Verification(TenantScoped, Timestamps, Base):
     verified_at: Mapped[datetime | None]
     last_checked_at: Mapped[datetime | None]
     expires_at: Mapped[datetime | None]
+    # Consecutive lookups that failed (unreachable nameservers). Backs the re-check off so a
+    # broken domain can't occupy every batch slot and starve the rest (ADR 0014).
+    failed_attempts: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    retry_after: Mapped[datetime | None]
 
 
 class Scan(TenantScoped, Timestamps, Base):

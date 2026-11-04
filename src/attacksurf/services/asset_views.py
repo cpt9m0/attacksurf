@@ -5,7 +5,7 @@ Results are frozen dataclasses, so `web/` renders and serializes them without to
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
@@ -22,7 +22,7 @@ from attacksurf.domain.findings import (
     severity_from_rank,
 )
 from attacksurf.domain.scans import ScanStatus, ScanTrigger
-from attacksurf.domain.verification import VerificationStatus
+from attacksurf.domain.verification import OwnershipState, ownership_state
 from attacksurf.infra.db.models import Asset, AssetRelation, Finding, Scan, Verification
 from attacksurf.infra.db.tenancy import scoped
 
@@ -60,7 +60,7 @@ class AssetRow:
     is_active: bool
     open_findings: int
     max_severity: Severity | None  # worst open finding
-    verification: VerificationStatus | None  # None: no token issued yet
+    verification: OwnershipState  # expired while the row still says verified is shown as such
 
 
 @dataclass(frozen=True)
@@ -140,7 +140,10 @@ def list_assets(session: Session, org_id: UUID, flt: AssetFilter, page: int = 1)
         .offset((page - 1) * PAGE_SIZE)
     ).all()
     return AssetPage(
-        items=tuple(_asset_row(*row) for row in rows), page=page, pages=pages, total=total
+        items=tuple(_asset_row(row) for row in rows),
+        page=page,
+        pages=pages,
+        total=total,
     )
 
 
@@ -150,7 +153,7 @@ def get_asset(session: Session, org_id: UUID, asset_id: UUID) -> AssetRow:
     row = session.execute(stmt.where(Asset.id == asset_id)).one_or_none()
     if row is None:
         raise AssetNotFound("Asset not found.")
-    return _asset_row(*row)
+    return _asset_row(row)
 
 
 def get_asset_detail(session: Session, org_id: UUID, asset_id: UUID) -> AssetDetail:
@@ -248,7 +251,7 @@ def _asset_rows(org_id: UUID) -> tuple[Select[Any], Any]:
     """Assets with their root's value and open-finding stats; returns the root alias too."""
     proofs = (
         scoped(Verification, org_id)
-        .with_only_columns(Verification.asset_id, Verification.status)
+        .with_only_columns(Verification.asset_id, Verification.status, Verification.expires_at)
         .subquery()
     )
     stats = (
@@ -265,7 +268,13 @@ def _asset_rows(org_id: UUID) -> tuple[Select[Any], Any]:
     root = aliased(Asset)
     stmt = (
         scoped(Asset, org_id)
-        .add_columns(root.value, stats.c.open_findings, stats.c.max_rank, proofs.c.status)
+        .add_columns(
+            root.value,
+            stats.c.open_findings,
+            stats.c.max_rank,
+            proofs.c.status,
+            proofs.c.expires_at,
+        )
         .outerjoin(root, (root.id == Asset.parent_id) & (root.org_id == org_id))
         .outerjoin(stats, stats.c.asset_id == Asset.id)
         .outerjoin(proofs, proofs.c.asset_id == Asset.id)
@@ -273,13 +282,8 @@ def _asset_rows(org_id: UUID) -> tuple[Select[Any], Any]:
     return stmt, root
 
 
-def _asset_row(
-    asset: Asset,
-    root_value: str | None,
-    open_findings: int | None,
-    max_rank: int | None,
-    verification: VerificationStatus | None,
-) -> AssetRow:
+def _asset_row(row: Any) -> AssetRow:
+    asset, root_value, open_findings, max_rank, verification, expires_at = row
     return AssetRow(
         id=asset.id,
         type=asset.type,
@@ -293,7 +297,7 @@ def _asset_row(
         is_active=asset.is_active,
         open_findings=open_findings or 0,
         max_severity=severity_from_rank(max_rank),
-        verification=verification,
+        verification=ownership_state(verification, expires_at, datetime.now(UTC)),
     )
 
 

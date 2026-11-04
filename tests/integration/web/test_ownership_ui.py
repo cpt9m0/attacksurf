@@ -1,6 +1,7 @@
 """Ownership card on the asset pages: who may start a proof, and what it shows (#14)."""
 
 import re
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -358,3 +359,26 @@ def _org_id(session: Session, asset_id: UUID) -> UUID:
 def _list_row(page: str, asset_id: UUID) -> str:
     start = page.index(f'<tr><td><a class="mono" href="/assets/{asset_id}"')
     return page[start : page.index("</tr>", start)]
+
+
+def test_an_expired_proof_is_not_shown_as_verified(
+    alice: FlaskClient, db_session: Session, root: UUID
+) -> None:
+    """Regression: the gate denied the domain while the page still showed a green badge."""
+    proof = verifications.start_verification(
+        db_session, FakeQueue(db_session), org_id=_org_id(db_session, root), asset_id=root,
+        actor_id=None,
+    )  # fmt: skip
+    verifications.record_check(db_session, proof, (record_value(proof.token),))
+    proof.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    job = db_session.scalars(select(Job)).one()
+    job.status = JobStatus.COMPLETED
+    db_session.commit()
+
+    detail = _html(alice, f"/assets/{root}")
+    card = _html(alice, f"/assets/{root}/ownership")
+    row = _list_row(_html(alice, "/assets"), root)
+
+    assert "pill-good" not in detail.split('id="ownership-title"')[1].split("</section>")[0]
+    assert "Expired" in card
+    assert "Verified" not in row

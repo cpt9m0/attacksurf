@@ -31,9 +31,23 @@ class DnsPythonResolver:
         resolver.retry_servfail = False
         self._resolver = resolver
 
-    def lookup_records(self, name: str, rdtype: str) -> tuple[str, ...]:
-        """Arbitrary record types (NS, A) from the stub, for the ownership check's NS discovery."""
-        return self._query(name, rdtype)
+    def lookup_records(self, name: str, rdtype: str) -> tuple[str, tuple[str, ...]]:
+        """Arbitrary record types (NS, A) plus the owner name the stub actually answered for.
+
+        The owner is returned because the stub follows CNAMEs: asking `www.example.org` for NS
+        can answer with `example.net`'s servers, and ownership discovery must not mistake an
+        alias's authorities for the original name's (ADR 0014).
+        """
+        try:
+            answer: Any = self._resolver.resolve(
+                name, rdtype, search=False, raise_on_no_answer=False
+            )
+        except DNS_FAILURES:
+            raise DnsError() from None
+        if answer.rrset is None:
+            return _strip_dot(answer.canonical_name.to_text()), ()
+        owner = _strip_dot(answer.rrset.name.to_text())
+        return owner, tuple(str(record) for record in answer.rrset)
 
     def resolve_ipv4(self, host: str) -> tuple[str, ...]:
         return self._query(host, "A")
@@ -52,3 +66,7 @@ class DnsPythonResolver:
         if answer.rrset is None:
             return ()
         return tuple(str(record) for record in answer.rrset)
+
+
+def _strip_dot(name: str) -> str:
+    return name[:-1] if name.endswith(".") else name

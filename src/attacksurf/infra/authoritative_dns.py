@@ -51,7 +51,9 @@ class StubRecords(Protocol):
     Raises `domain.net.DnsError` (never a dnspython exception) when the stub can't answer.
     """
 
-    def lookup_records(self, name: str, rdtype: str) -> tuple[str, ...]: ...
+    def lookup_records(self, name: str, rdtype: str) -> tuple[str, tuple[str, ...]]:
+        """(owner name the stub answered for, values); the owner exposes followed CNAMEs."""
+        ...
 
 
 class AuthoritativeTxtLookup:
@@ -106,8 +108,13 @@ class AuthoritativeTxtLookup:
         return stop
 
     def _has_ns(self, name: dns.name.Name) -> bool:
+        """True only if `name` itself has NS records.
+
+        A name that is a CNAME can't be a zone: the stub would follow the alias, so an answer
+        owned by another name means "not a zone here", never "a zone pointed elsewhere".
+        """
         try:
-            return bool(self._resolve(name.to_text(omit_final_dot=True), "NS"))
+            return bool(self._ns_at(name))
         except TxtError:  # a stub failure says nothing about whether the zone is delegated
             return False
 
@@ -117,12 +124,12 @@ class AuthoritativeTxtLookup:
         `check_addresses` rejects loopback, private, link-local and metadata ranges, so a zone
         that delegates to an internal address can't be used to probe our network.
         """
-        ns_names = self._resolve(zone.to_text(omit_final_dot=True), "NS")
+        ns_names = self._ns_at(zone)
         servers: list[tuple[str, int]] = []
         for ns_text in ns_names[:MAX_NAMESERVERS]:
             ns_name = ns_text[:-1] if ns_text.endswith(".") else ns_text  # the stub takes no dot
             try:
-                addresses = self._resolve(ns_name, "A") + self._resolve(ns_name, "AAAA")
+                addresses = self._addresses(ns_name)
             except TxtError:
                 continue  # one unreachable NS doesn't fail a zone the others answer for
             for address in addresses[:MAX_NS_ADDRESSES]:
@@ -130,7 +137,20 @@ class AuthoritativeTxtLookup:
                     servers.append((address, 53))
         return tuple(servers)
 
-    def _resolve(self, host: str, rdtype: str) -> tuple[str, ...]:
+    def _addresses(self, host: str) -> tuple[str, ...]:
+        return self._resolve(host, "A")[1] + self._resolve(host, "AAAA")[1]
+
+    def _ns_at(self, name: dns.name.Name) -> tuple[str, ...]:
+        """The NS records owned by `name` itself; empty when the stub answered for an alias.
+
+        Without the owner check, a subdomain that CNAMEs elsewhere (`www` -> an attacker's
+        apex) would be served by the alias target's nameservers, which could then answer for
+        the *original* name's proof record — a proof published nowhere the org controls.
+        """
+        owner, values = self._resolve(name.to_text(omit_final_dot=True), "NS")
+        return values if owner == name.to_text(omit_final_dot=True) else ()
+
+    def _resolve(self, host: str, rdtype: str) -> tuple[str, tuple[str, ...]]:
         """Stub answers, translated: `DnsError` (the adapter's failure) becomes a lookup error."""
         try:
             return self._resolver.lookup_records(host, rdtype)

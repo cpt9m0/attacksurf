@@ -6,10 +6,10 @@ worker task that runs it commits. Nothing here performs DNS I/O; the lookup arri
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from attacksurf.domain.assets import AssetNotFound, AssetType
@@ -18,10 +18,12 @@ from attacksurf.domain.scans import JobStatus
 from attacksurf.domain.verification import (
     GRACE_AFTER_FAILURE,
     RECHECK_AFTER,
+    OwnershipState,
     VerificationMethod,
     VerificationStatus,
     matches,
     new_token,
+    ownership_state,
     record_name,
     record_value,
 )
@@ -32,14 +34,20 @@ from attacksurf.services.audit import audit
 
 # One re-verification run never queues more than this, so a mass expiry can't flood the queue.
 MAX_DUE_PER_RUN = 200
+# Backoff cap: 2**8 hours is already longer than any lookup outage worth retrying at all.
+MAX_BACKOFF_EXP = 8
 
 
 @dataclass(frozen=True)
 class VerificationView:
-    """What the UI shows: the record to publish, plus where the proof stands."""
+    """What the UI shows: the record to publish, plus where the proof stands.
+
+    `status` is what is stored; `state` is what it grants now (expired proofs show as such).
+    """
 
     asset_id: UUID
     status: VerificationStatus
+    state: OwnershipState
     method: VerificationMethod
     record_name: str
     record_value: str
@@ -200,6 +208,7 @@ def read_verification(session: Session, org_id: UUID, root_id: UUID) -> Verifica
     return VerificationView(
         asset_id=root_id,
         status=row.status,
+        state=ownership_state(row.status, row.expires_at, datetime.now(UTC)),
         method=row.method,
         record_name=record_name(root.value),
         record_value=record_value(row.token),
@@ -225,6 +234,9 @@ def record_check(
     now = now or datetime.now(UTC)
     found = matches(verification.token, values)
     verification.last_checked_at = now
+    # Any answered lookup clears the backoff, even a negative one: the domain is reachable.
+    verification.failed_attempts = 0
+    verification.retry_after = None
     if found:
         verification.status = VerificationStatus.VERIFIED
         if verification.verified_at is None:
@@ -238,6 +250,18 @@ def record_check(
     return verification.status
 
 
+def record_failure(verification: Verification, *, now: datetime | None = None) -> None:
+    """Count one failed lookup and push the next scheduled check back. Doesn't commit.
+
+    Backoff doubles per consecutive failure (1 h, 2 h, 4 h, ... up to `MAX_BACKOFF_EXP`), so a
+    domain whose nameservers are gone can't occupy the fixed batch ahead of healthy proofs.
+    """
+    now = now or datetime.now(UTC)
+    verification.failed_attempts += 1
+    exponent = min(verification.failed_attempts, MAX_BACKOFF_EXP)
+    verification.retry_after = now + timedelta(hours=1) * (2**exponent)
+
+
 def due_verifications(
     session: Session, now: datetime, limit: int = MAX_DUE_PER_RUN
 ) -> tuple[tuple[UUID, UUID, UUID], ...]:
@@ -247,6 +271,12 @@ def due_verifications(
     (each job is created with its row's own `org_id`), so no tenant data crosses a boundary.
     """
     stale_grace = now - GRACE_AFTER_FAILURE
+    # A proof whose lookup keeps failing is retried on a doubling backoff instead of being
+    # picked first every hour: sorted last, and skipped until its `retry_after`.
+    backoff = case(
+        (Verification.failed_attempts == 0, timedelta(0)),
+        else_=timedelta(hours=1) * (2 ** func.least(Verification.failed_attempts, MAX_BACKOFF_EXP)),
+    )
     rows = session.execute(
         select(Verification.org_id, Verification.asset_id, Verification.id)
         .join(Asset, Asset.id == Verification.asset_id)
@@ -261,8 +291,10 @@ def due_verifications(
                     Verification.last_checked_at <= stale_grace,
                 ),
             ),
+            # Never retry before the backoff elapsed (NULL: no failure yet).
+            or_(Verification.retry_after.is_(None), Verification.retry_after <= now),
         )
-        .order_by(Verification.expires_at, Verification.id)
+        .order_by(Verification.failed_attempts, backoff, Verification.expires_at, Verification.id)
         .limit(limit)
     ).all()
     return tuple(rows)
