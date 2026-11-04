@@ -28,6 +28,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   silently.
 
 ### Added
+- ADR 0014: sandbox for code and binary analysis (per-job gVisor containers started by a
+  credential-free launcher, no network, read-only input, resource limits) (#83).
 - Assets pages (#13): add a root domain from `/assets` (inline HTMX validation errors), browse
   assets with filters (type, root, tag, search, status) kept in the URL, and open an asset's
   detail page with its relations, findings and scan history tabs. Admins archive a root domain
