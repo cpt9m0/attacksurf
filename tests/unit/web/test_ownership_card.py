@@ -46,6 +46,7 @@ def stubs(monkeypatch: pytest.MonkeyPatch, asset_id: object) -> dict[str, list[d
         lambda *_a, **_k: asset_views.AssetDetail(row, (), (), 0),
     )
     monkeypatch.setattr(verifications, "read_verification", lambda *_a, **_k: None)
+    monkeypatch.setattr(verifications, "check_in_flight", lambda *_a, **_k: False)
 
     def start(*_args: object, **kw: object) -> None:
         calls["started"].append(kw)
