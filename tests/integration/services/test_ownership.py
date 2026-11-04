@@ -82,6 +82,41 @@ def test_a_subdomain_inherits_its_roots_proof(
     assert checker.is_verified(acme.id, AssetRef(type=AssetType.SUBDOMAIN, value="www.example.com"))
 
 
+def test_an_ip_discovered_under_a_verified_root_does_not_verify(
+    checker: DbOwnershipChecker, db_session: Session, acme: Org, root: Asset
+) -> None:
+    """DNS pointing at an address proves nothing about owning it, so no inheritance."""
+    _verified(db_session, acme.id, root.id)
+    record_asset(
+        db_session,
+        acme.id,
+        AssetType.IP,
+        "93.184.216.34",
+        source=AssetSource.DISCOVERED,
+        parent_id=root.id,
+    )
+
+    assert not checker.is_verified(acme.id, AssetRef(type=AssetType.IP, value="93.184.216.34"))
+
+
+def test_a_url_discovered_under_a_verified_root_does_not_verify(
+    checker: DbOwnershipChecker, db_session: Session, acme: Org, root: Asset
+) -> None:
+    _verified(db_session, acme.id, root.id)
+    record_asset(
+        db_session,
+        acme.id,
+        AssetType.URL,
+        "https://example.com/",
+        source=AssetSource.DISCOVERED,
+        parent_id=root.id,
+    )
+
+    assert not checker.is_verified(
+        acme.id, AssetRef(type=AssetType.URL, value="https://example.com/")
+    )
+
+
 def test_a_pending_proof_does_not_verify(
     checker: DbOwnershipChecker, db_session: Session, acme: Org, root: Asset
 ) -> None:

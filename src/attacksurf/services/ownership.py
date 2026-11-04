@@ -22,12 +22,16 @@ from attacksurf.services.audit import audit
 
 log = structlog.get_logger(__name__)
 
+# Types whose ownership a root's DNS TXT proof covers: the root's zone holds the record.
+INHERITING_TYPES = frozenset({AssetType.DOMAIN, AssetType.SUBDOMAIN})
+
 
 class DbOwnershipChecker:
     """`OwnershipChecker` over the `verifications` table: one indexed read, no writes.
 
-    A `subdomain` inherits its root's proof, so the check is on the asset's root. Archived
-    assets are never verified: verification follows the proof, not the history.
+    A `subdomain` inherits its root's proof (both are names in the root's zone); anything else,
+    IPs included, has no TXT proof and stays unverified. Archived assets are never verified:
+    verification follows the proof, not the history.
     """
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
@@ -42,6 +46,10 @@ class DbOwnershipChecker:
             return False
 
     def _is_verified(self, session: Session, org_id: UUID, asset: AssetRef) -> bool:
+        if asset.type not in INHERITING_TYPES:
+            # A DNS TXT proof says nothing about owning an address, URL or repository: those
+            # need their own method. Without it, active checks on them stay denied.
+            return False
         asset_id, root_id, is_active = session.execute(
             scoped(Asset, org_id)
             .where(Asset.type == asset.type, Asset.value == asset.value)
@@ -50,10 +58,13 @@ class DbOwnershipChecker:
         if asset_id is None or not is_active:
             return False
         # Only same-org proof rows are visible, and the composite FK pins the asset to the org.
+        # `parent_id` is provenance (what a scan found it under), not ownership: it is only
+        # trusted for `subdomain`, where the root does control the name in its zone.
+        proof_of = root_id if asset.type is AssetType.SUBDOMAIN and root_id else asset_id
         verified = session.scalar(
             scoped(Verification, org_id)
             .where(
-                Verification.asset_id == (root_id or asset_id),
+                Verification.asset_id == proof_of,
                 Verification.status == VerificationStatus.VERIFIED,
                 Verification.expires_at > datetime.now(UTC),
             )

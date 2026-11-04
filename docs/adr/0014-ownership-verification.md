@@ -22,8 +22,12 @@ which are attacker-influenced when a domain is delegated.
   to the zone proves anything. Tokens are stored in plain text; rotating one (re-issuing)
   rotates the row back to `pending`, so an old copy stops counting immediately.
 - **Inheritance**: proofs belong to root domains. A `subdomain` asset is verified when its
-  parent (the scan root it was discovered under) is verified, which is what the asset graph
-  already encodes. Re-adding a domain re-issues a token; archived assets are never verified.
+  parent (the scan root it was discovered under) is verified, since both are names in the
+  root's zone. Nothing else inherits: discovery sets `parent_id` for every asset a scan finds,
+  which records provenance, not ownership — DNS pointing at an IP or URL says nothing about
+  controlling it, so those need their own proof method and stay unverified (and their active
+  checks denied) until one exists. Re-adding a domain re-issues a token; archived assets are
+  never verified.
 - **Enclosing zone**: a root added as a subdomain (`eng.example.com`) usually has no NS RRset
   of its own, so the check walks up from the name to the closest ancestor with one, stopping at
   the registrable domain (never at the PSL itself). The TXT record is still read at the
