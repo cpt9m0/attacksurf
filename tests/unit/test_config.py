@@ -14,6 +14,11 @@ def test_settings_defaults_to_dev() -> None:
     assert not settings.is_prod
 
 
+def test_settings_have_no_default_llm_model() -> None:
+    # Model names come from config only (ADR 0014); no model means instance AI is off.
+    assert make_settings().llm_model is None
+
+
 def test_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
     clean_env.setenv("ENV", "prod")
     clean_env.setenv("SECRET_KEY", PROD_SECRET_KEY)
