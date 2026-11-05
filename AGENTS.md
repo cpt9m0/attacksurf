@@ -142,7 +142,8 @@ sync" rule below is satisfied**. Do not claim done without running them.
 - DB tests go in `tests/integration/` and use `db_session` (rolled back per test); they need
   `TEST_DATABASE_URL` (a `*_test` database; `make test` sets it). Real Postgres, never SQLite.
 - **No live network in tests.** Mock DNS/HTTP/LLM with fixtures (recorded responses in
-  `tests/fixtures/`). LLM tests use a fake provider.
+  `tests/fixtures/`). LLM tests use `tests.fakes.FakeLLMProvider`; real-provider calls are
+  marked `llm_live` and run only with `RUN_LLM_TESTS=1`, never in CI.
 - Coverage gate: 80% minimum (configured in `pyproject.toml`). Don't game it: test behavior,
   including error paths and security checks.
 - Bug fix ⇒ regression test first.
