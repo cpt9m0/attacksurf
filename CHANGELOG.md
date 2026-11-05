@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 
 ## [Unreleased]
 
+### Changed
+- `LLM_MODEL` no longer defaults to a Claude model in code: model names come only from config,
+  and an instance without both `LLM_API_KEY` and `LLM_MODEL` has AI off (ADR 0014).
+  Developers set the Meta development configuration in their own `.env` (see
+  `docs/development.md`). `LLM_PROVIDER` is validated as a `ProviderKind`.
+
 ### Fixed
 - Flaky CSRF test: corrupting a token's last base64 character can keep the signature valid
   (padding bits), so the test now changes the first one (#119).
@@ -28,6 +34,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   silently.
 
 ### Added
+- LLM provider contract (#23, ADR 0014): `LLMProvider` protocol, result/usage types and
+  `LLMError` subclasses in `domain/llm.py`; shared schema validation with one corrective retry
+  (`ai/structured.py`); one HTTP-status error mapping (`ai/errors.py`); `resolve_llm_config`
+  choosing the org's own key, else the capped instance key, else AI off (`ai/config.py`);
+  shared SDK timeout/retry values and a total per-call deadline for adapters to enforce,
+  sized to leave room under the Celery soft time limit (`ai/limits.py`); `FakeLLMProvider` and a contract test suite every provider adapter must
+  pass; `llm_live` pytest marker for opt-in calls to a real provider, skipped unless
+  `RUN_LLM_TESTS=1` and a key and model are set, and always in CI.
 - Assets pages (#13): add a root domain from `/assets` (inline HTMX validation errors), browse
   assets with filters (type, root, tag, search, status) kept in the URL, and open an asset's
   detail page with its relations, findings and scan history tabs. Admins archive a root domain
