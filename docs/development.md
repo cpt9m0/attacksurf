@@ -191,10 +191,17 @@ pyright and pytest versions come from `uv.lock`.
   provider adapter's tests subclass `tests/unit/ai/contract.ProviderContract` with a harness that
   stubs its HTTP. Tests that call a real provider are marked `llm_live`; `tests/conftest.py`
   skips them unless you run `RUN_LLM_TESTS=1 uv run pytest -m llm_live --no-cov` with
-  `LLM_API_KEY` and `LLM_MODEL` in your `.env`, and always in CI. `--no-cov` because a handful of live tests can't meet the whole-app coverage gate, which
-  still applies to the normal full suite.
+  `LLM_API_KEY` and `LLM_MODEL` in your `.env`, and always in CI. `--no-cov` because a
+  handful of live tests can't meet the whole-app coverage gate, which still applies to the
+  normal full suite.
+- Tests must pass on any OS: read files with `encoding="utf-8"` (Windows defaults to cp1252),
+  and simulate network failures instead of relying on how an OS treats a closed port.
 - On Windows, use `127.0.0.1` rather than `localhost` in `TEST_DATABASE_URL`: `localhost` tries
   IPv6 first, Docker only listens on IPv4, and every connection waits for a timeout.
+- `.gitattributes` makes every checkout use LF line endings, whatever `core.autocrlf` says, and
+  leaves vendored files byte-for-byte as committed. A Windows checkout made before it existed
+  still has CRLF files: with no uncommitted work, rewrite them once from Git Bash with
+  `git ls-files -z | xargs -0 rm -f && git checkout -- .` (untracked files such as `.env` stay).
 - Layout: `tests/unit/`, `tests/integration/` (DB, Celery; fixtures `db_engine`, `db_session`),
   `tests/e2e/` (against the running stack, e.g. `make test-worker`; Playwright later).
 - Celery tasks in tests: `task.apply(kwargs=...)` runs them in-process; patch

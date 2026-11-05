@@ -12,6 +12,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   `docs/development.md`). `LLM_PROVIDER` is validated as a `ProviderKind`.
 
 ### Fixed
+- The test suite passes on Windows checkouts: `.gitattributes` keeps LF line endings whatever
+  the local `core.autocrlf` setting (vendored files are never converted, so their SHA-256
+  checks hold), the vendor tests read files as UTF-8, and the connection-failure test simulates
+  a refused connection instead of dialing a closed port (Windows retries it until the timeout).
 - Flaky CSRF test: corrupting a token's last base64 character can keep the signature valid
   (padding bits), so the test now changes the first one (#119).
 - Run database migrations as part of dev `make up`, before starting application services,

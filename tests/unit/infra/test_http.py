@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import ClassVar
 from urllib.parse import urlsplit
 
+import httpcore
 import pytest
 
 from attacksurf.domain.net import DnsError
@@ -312,12 +313,22 @@ def test_timeouts_raise_a_safe_error(server_url: str) -> None:
         client.get(f"http://public.example:{port}/slow", limit=10)
 
 
-def test_connection_failures_are_reported_without_internals() -> None:
-    resolver = StaticResolver("127.0.0.1")
-    client = SafeHttpClient(resolver, timeout_seconds=0.2)
-    with pytest.raises(DnsError):
-        # Port 9 (discard) is closed in the test container.
+def test_connection_failures_are_reported_without_internals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Simulated refusal: a real closed port is refused at once on Linux but retried for ~2 s on
+    # Windows, where the client's timeout fires first and the test would see a timeout instead.
+    def refuse(*_args: object, **_kwargs: object) -> httpcore.NetworkStream:
+        raise httpcore.ConnectError("[Errno 111] Connection refused by 10.0.0.7")
+
+    monkeypatch.setattr(httpcore.SyncBackend, "connect_tcp", refuse)
+    client = SafeHttpClient(StaticResolver("127.0.0.1"))
+
+    with pytest.raises(DnsError) as caught:
         client.get("http://public.example:9/", limit=10)
+
+    assert "10.0.0.7" not in str(caught.value)
+    assert "Errno" not in str(caught.value)
     assert client.get.__self__ is client  # still usable for a retry
 
 
