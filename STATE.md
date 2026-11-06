@@ -2,32 +2,35 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-05 · **Branch:** `14-ownership-verification-single` · **Issue:** #14 (DNS TXT ownership)
+**Updated:** 2026-11-05 · **Branch:** `test/126-hermetic-worker-settings` · **Issue:** #126
 
 ## Status
-PR [#123](https://github.com/cpt9m0/attacksurf/pull/123) is open into `main`.
-Three review fixes are implemented and validated; the user has authorized commit and push.
+PR [#127](https://github.com/cpt9m0/attacksurf/pull/127) fixes test settings leaking during collection.
+User authorized merging; conflicts with current main are resolved and locally verified.
+PRs #123–#125 are merged; ownership verification is on main.
 
 ## Last task
-- Separate renewal (`recheck_at`, 20 hours) from authorization expiry (24 hours); migration
-  `0007` backfills existing deadlines without extending authorization. ADR 0015 records it.
-- Poll the viewed asset so inherited subdomain cards remain read-only after HTMX refresh.
-- Propagate NS discovery errors as transient failures instead of querying an unconfirmed parent.
-- Add regressions for early renewal, inherited polling, migration backfill, and expired-proof
-  failure handling. Update architecture/security docs, DESIGN.md, and CHANGELOG.md.
-- Validation: pytest 922 passed / 3 worker E2E tests skipped, 97.66% coverage; ruff check/format,
-  pyright (0 errors), and all pre-commit hooks pass. No live browser check in this task.
+- Keep both changelog entries when merging current main into PR #127; refresh this handoff.
+- Preserve main's database ownership gate test alongside the collection-time regression.
+- Hermetic worker settings are installed in `pytest_configure` before task proxies finalize
+  Celery configuration; cleanup restores the original settings accessor.
+- Validation: 923 passed, 3 worker E2E tests skipped; ruff check/format, pyright, and all
+  pre-commit hooks pass. Full suite runs with a deliberately non-default Redis URL.
 
 ## Next step
-Check PR #123 CI and review the three addressed threads. Human security review precedes merge.
+Verify PR #127 CI after the conflict-resolution push, then squash-merge and update main.
 
 ## Open threads
-- Dev DB needs migration `0007` before running this code; migration `0006` is unchanged.
+- The previous local main handoff is preserved in a Git stash named
+  `codex: preserve local handoff before PR 127`.
+- #83 has separate sandbox/fetcher/tool ADR branches. Their planned ADR numbers 0014/0015 now
+  collide with merged ownership ADRs; recheck and renumber those drafts before publishing.
+- Dev DB needs migration `0007` before running the merged ownership code.
 - Worker-less verification stays queued and polls indefinitely.
-- Follow-ups: #114 shell overflow, #115 tag editing, #116 cancel scans on archive,
-  #117 overlapping roots. `.env.example` lacks ALLOW_SIGNUP, SESSION_LIFETIME_HOURS, PROXY_COUNT.
+- Follow-ups: #114, #115, #116, #117. `.env.example` lacks ALLOW_SIGNUP,
+  SESSION_LIFETIME_HOURS, PROXY_COUNT.
 
 ## Notes for the next agent
-- Keep #14 in one PR into `main`; stale branches and PRs #121/#122 are not authoritative.
-- DB tests use `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@localhost:5432/attacksurf_test`.
-- Next feature work after #14 merges: website module (#69 ADR, #70 active queue, #71 TLS adapter).
+- Worker settings used by module-level Celery tasks must be installed before pytest collection.
+- Ownership renewals are due after 20 hours; authorization expires after 24 hours (ADR 0015).
+- Website roadmap starts with #69 ADR, #70 active queue, and #71 TLS adapter; verify dependencies.

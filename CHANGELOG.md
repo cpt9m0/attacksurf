@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Fixed
+- Tests: hermetic worker settings are installed before pytest collection, so collecting a
+  module-level Celery task can't load `.env` into the worker config and fail the suite on
+  machines whose `REDIS_URL` differs from the default (#126).
 - Ownership review fixes (#14): renew proofs four hours before authorization expires, keep
   inherited subdomain cards read-only across polling, and retry zone-discovery failures
   instead of treating them as missing proof records (migration 0007; ADR 0015).
