@@ -35,6 +35,8 @@ services; active checks (target HTTP) require a verified, unexpired ownership pr
 | Credentials in asset values | URL assets with `user:pass@` are rejected, never stored; error messages don't echo them |
 | Prompt injection via scan data | scan data is delimited and size-capped in prompts, output is schema-validated, AI cannot take actions |
 | Secret leakage / forged sessions | env vars and connection URLs typed as `SecretStr` (masked in repr); `ENV=prod` refuses to start unless `SECRET_KEY` is ≥ 32 chars and not a placeholder such as `change-me`; org API keys encrypted at rest (Fernet/MultiFernet); structlog redacts secret-looking keys; keys never rendered back in full |
+| Malicious archive *(later)* | extracted only inside the sandbox by a purpose-built loop that never creates links; links, device nodes and FIFOs are skipped with a reason; absolute paths, `..`, duplicate paths and corrupt archives reject the whole artifact; size, file-count, depth and ratio caps count while writing and fail the job, because a partial tree would read as clean; nested archives aren't unpacked (ADR 0017) |
+| Repository fetch abuse (SSRF, `git` transports) *(later)* | no `git` binary with network access: smart HTTP in Python over the pinned safe client; exact-match forge allowlist in code; URLs rebuilt from a validated `host/path`; no redirects; dumb HTTP refused; size and time caps; the pack is stored unparsed; analysis waits for ownership proof (ADR 0017) |
 | Log injection | client `X-Request-ID` accepted only if it matches `[A-Za-z0-9-]{1,64}`, otherwise replaced; structured (JSON) logs |
 | Malicious uploads *(later)* | never executed or built; static analysis only, in a fresh gVisor container per job started by `sandbox-launcher` through `sandbox-proxy`, the only holder of the Docker socket, which rejects any create request outside the sandbox policy (ADR 0016); the Celery worker holding DB/Redis credentials never opens artifact bytes |
 | Parser exploit in an analysis tool *(later)* | the sandbox has no network (`--network=none`), no credentials or Docker socket, a read-only root and input, non-root UID, all capabilities dropped, `no-new-privileges`; output is JSON on stdout, capped at 2 MiB and validated as `ScanOutput` before use; stderr is discarded (it can echo found secrets) |
@@ -61,6 +63,11 @@ subdomain cannot claim a fresh one; a policy error fails only its job.
 
 Active/analysis queues remain reserved and cannot be selected in a scan profile; active checks
 run only on assets whose root domain proved ownership by DNS TXT (ADR 0014).
+
+Repository fetches (ADR 0017, not built yet) pass the same gate through `check_fetch` and are
+not scanners: `worker-fetch` reaches only allowlisted forges, using a streaming transport
+limited to the two smart-HTTP requests. Scanners keep the GET-only client with its 1 MiB cap.
+The fetcher stores packs unparsed, so hostile objects are first parsed inside the sandbox.
 
 Plugins receive immutable context/value objects, never sessions or ORM rows. Threads cannot
 write results: services validate normalized `ScanOutput` again, select tenant-scoped assets,

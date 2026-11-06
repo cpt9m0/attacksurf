@@ -59,6 +59,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   detail page with its relations, findings and scan history tabs. Admins archive a root domain
   through a confirm dialog. New components: `confirm_dialog`, `select_field`, `relative_time`;
   `data_table` takes a call block for rich cells.
+- ADR 0017: how repositories are fetched under ScopeGuard and how archives are extracted (#83).
 - Root domains and asset browsing, service + JSON side (#13): `add_root_domain` validates names
   with the ScopeGuard rules (registrable or subdomain; no IPs, internal or bare-suffix names),
   `archive_root_domain` deactivates a root and everything discovered under it (admin only),

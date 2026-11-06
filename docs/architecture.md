@@ -158,6 +158,10 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   caps time and body size; `infra/dns.py` uses the stub resolver without search domains. A test
   fails if scanner modules import raw network libraries. Profiles may cap discovered assets per
   root (`max_discovered_assets`), enforced at persistence.
+- Repository fetches (ADR 0017, not built yet) use `ScopeGuard.check_fetch` and a separate
+  streaming port for git smart HTTP (dulwich over the pinned client). There's no `git` binary
+  with network access, hosts come from an allowlist in code, and packs are stored unparsed.
+  Archives arrive by upload only and are extracted inside the sandbox.
 
 ## AI layer
 
@@ -175,6 +179,7 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 |---|---|---|
 | `passive` | DNS, CT logs, RDAP, public APIs | normal egress |
 | `ai` | LLM calls | rate-limited per org |
+| `fetch` *(later)* | git smart-HTTP fetches | egress to allowlisted forges through ScopeGuard; no access to `sandbox-launcher`; never parses repository content (ADR 0017) |
 | `active` *(later)* | port/web probes on verified targets | separate network, egress rules |
 | `analysis` *(later)* | code/binary analysis | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
 
