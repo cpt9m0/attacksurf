@@ -152,11 +152,12 @@ def test_blocked_ip_assets_are_denied() -> None:
         scope.check(context(), target("169.254.169.254", AssetType.IP), ip_scanner)
 
 
-def test_active_checks_are_denied_until_ownership_is_verified() -> None:
+def test_active_checks_need_verified_ownership() -> None:
     active = scanner(asset_types=frozenset({AssetType.DOMAIN}), requires_verification=True)
     with pytest.raises(ScopeError, match="verified"):
         make_guard()[0].check(context(), target(), active)
     verify_all(make_guard()[0]).check(context(), target(), active)
+    # Nothing is verified without a proof (#14): the gate's default checker denies everything.
     assert UnverifiedOwnership().is_verified(uuid4(), target()) is False
 
 

@@ -8,6 +8,7 @@ from uuid import UUID
 
 from celery import Celery, chain, chord
 from celery.canvas import Signature
+from celery.schedules import crontab
 from kombu import Exchange, Queue
 
 from attacksurf.config import Settings
@@ -66,6 +67,14 @@ def celery_config(settings: Settings) -> dict[str, Any]:
         "broker_connection_retry_on_startup": True,
         "enable_utc": True,
         "timezone": "UTC",
+        # Re-check ownership proofs daily (#14). The task queues one tracked job per proof
+        # that is due, so job history explains every verification and revocation.
+        "beat_schedule": {
+            "reverify-ownership": {
+                "task": "passive.reverify_ownership",
+                "schedule": crontab(minute=17),
+            }
+        },
     }
 
 

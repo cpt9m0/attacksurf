@@ -1,4 +1,4 @@
-# 0014. Sandbox for code and binary analysis
+# 0016. Sandbox for code and binary analysis
 
 - Status: accepted
 - Date: 2026-11-04
@@ -28,7 +28,7 @@ not a sandbox. A malicious artifact must not reach the DB, Redis, the network or
     containers). It also validates every create request against the sandbox policy: image
     digest on the allowlist, `runsc` runtime (or the dev fallback), the flags and limits
     below, a single read-only bind under the artifact root, and no other mount except the
-    OSV data volume for the osv-scanner image (ADR 0016). A compromised launcher can
+    OSV data volume for the osv-scanner image (tool-image follow-up, PR #130). A compromised launcher can
     therefore only start more sandboxes. Off-the-shelf proxies filter by API section only and
     can't check create bodies, so this is a small purpose-built service.
   - **Sandbox**: one fresh gVisor (`runsc`) container per job, started with `--rm` and never
@@ -65,8 +65,9 @@ not a sandbox. A malicious artifact must not reach the DB, Redis, the network or
   `runsc` is a registered Docker runtime. The runtime used is logged for each run. Unit tests
   replace the launcher with a fake (no Docker). A separate CI job installs `runsc` and runs a
   harmless fixture image to check the flags, limits and the no-network guarantee.
-- **Out of scope here:** fetching artifacts over the network (ADR 0015) and the tool images
-  and their licenses (ADR 0016).
+- **Out of scope here:** fetching artifacts over the network
+  ([PR #129](https://github.com/cpt9m0/attacksurf/pull/129)) and the tool images and their
+  licenses ([PR #130](https://github.com/cpt9m0/attacksurf/pull/130)).
 
 ### Rejected
 - **Running the tools inside the Celery worker**, even under gVisor: a parser exploit would

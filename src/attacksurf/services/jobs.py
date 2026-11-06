@@ -29,13 +29,16 @@ def create_job(
     queue: TaskQueue,
     *,
     org_id: UUID,
-    scan_id: UUID,
+    scan_id: UUID | None,
     stage: str,
     task_name: str,
     scanner: str | None = None,
     asset_id: UUID | None = None,
 ) -> Job:
-    """Add a queued job and send its task. Commits first: a worker must find the row."""
+    """Add a queued job and send its task. Commits first: a worker must find the row.
+
+    `scan_id` is None for work outside a scan (ownership verification, #14).
+    """
     job = Job(
         org_id=org_id,
         scan_id=scan_id,
@@ -61,7 +64,7 @@ def record_job(
     session: Session,
     *,
     org_id: UUID,
-    scan_id: UUID,
+    scan_id: UUID | None,
     stage: str,
     scanner: str | None = None,
     asset_id: UUID | None = None,

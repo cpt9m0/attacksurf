@@ -115,3 +115,14 @@ def test_importing_worker_tasks_does_not_read_the_environment() -> None:
     )
 
     assert result.returncode == 0, result.stderr.decode()
+
+
+def test_beat_schedules_the_ownership_reverification_hourly() -> None:
+    app = create_celery(make_settings(redis_url=SecretStr("redis://redis.test:6379/2")))
+
+    entry = app.conf.beat_schedule["reverify-ownership"]
+
+    assert entry["task"] == "passive.reverify_ownership"
+    # Every hour at :17, so a mass expiry doesn't hit the queue all at once.
+    assert entry["schedule"].minute == {17}
+    assert len(entry["schedule"].hour) == 24
