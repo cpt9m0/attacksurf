@@ -17,6 +17,12 @@ def _extract() -> Any:
     )
 
 
+def registrable(hostname: str) -> str | None:
+    """The registrable domain (`example.com` for `eng.example.com`), or None off the PSL."""
+    result = _extract()(hostname)
+    return result.top_domain_under_public_suffix or None
+
+
 def classify(hostname: str) -> PublicSuffix:
     """Where `hostname` sits relative to the PSL. Callers pass normalized (A-label) names."""
     result = _extract()(hostname)

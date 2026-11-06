@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 from celery.signals import setup_logging, worker_process_init
 
-from attacksurf.infra.scope_guard import ScopeGuard, UnverifiedOwnership
+from attacksurf.infra.scope_guard import ScopeGuard
+from attacksurf.services.ownership import DbOwnershipChecker
 from attacksurf.workers import app as worker_app
 from attacksurf.workers import runtime
 
@@ -47,11 +48,11 @@ def test_celery_tracer_does_not_log_raw_exceptions(monkeypatch: pytest.MonkeyPat
     assert not tracer.isEnabledFor(logging.ERROR)
 
 
-def test_production_gate_is_scope_guard_with_unverified_ownership() -> None:
+def test_production_gate_checks_ownership_in_the_database() -> None:
     gate = runtime.scanner_gate()
 
     assert isinstance(gate, ScopeGuard)
-    assert isinstance(gate._ownership, UnverifiedOwnership)  # active checks denied until #14
+    assert isinstance(gate._ownership, DbOwnershipChecker)  # #14: proofs gate active checks
     assert callable(runtime.dns_resolver().resolve_ipv4)
     assert runtime.http_client() is not runtime.http_client()
 
