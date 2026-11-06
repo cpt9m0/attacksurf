@@ -7,7 +7,11 @@ their security data. Both make it a target. These rules apply to all code.
 
 - **Passive checks** (public DNS, Certificate Transparency, RDAP) may run on any registered domain.
 - **Active checks** (zone transfer now; port/web probing later) run **only on assets whose
-  ownership is verified** (DNS TXT token). ScopeGuard enforces this; scanners cannot bypass it.
+  ownership is verified** (DNS TXT token, ADR 0014). ScopeGuard enforces this; scanners cannot
+  bypass it. A proof is a `_attacksurf-verify.<root>` TXT record with a random per-asset token;
+  it is due for re-check after 20 hours, revoked if the record is absent after its expiry, and
+  expires for the gate after a day without a successful check (ADR 0015). Zone-discovery
+  failures trigger retries rather than falling back to an unconfirmed parent zone.
 - **Out of scope, always:** exploitation, brute forcing, credential attacks, DoS, actually
   claiming takeover-able resources, and scanning of third-party targets.
 
@@ -20,7 +24,8 @@ before the first request and every redirect hop, ignores env proxies, and caps t
 size — the ceiling applies to the *decoded* body, so a compressed response can't expand past it,
 and a plugin-supplied limit cannot raise it. A `TARGET` HTTP grant always requires verified
 ownership, whatever the plugin declares. Scanners may only contact declared public data
-services; active checks (target HTTP) require ownership (#14) |
+services; active checks (target HTTP) require a verified, unexpired ownership proof |
+| SSRF via the ownership check | The check follows a zone's nameservers, which the domain's owner controls. Every nameserver address is validated with the scan-target policy (no private, loopback, link-local/metadata, multicast or reserved ranges) and an internal-only delegation simply fails; replies are read, never followed, and only a direct TXT record for the exact name counts. Bounded: 3 nameservers, 2 s each, 64 KiB responses (ADR 0014) |
 | Cross-tenant data access | `org_id` on every tenant row, scoped queries, an isolation test per endpoint; links between tenant rows (asset parent and relations, scans, jobs, findings, evidence) use composite foreign keys `(id, org_id)`, so the database itself rejects a link to another org's row; Postgres RLS later |
 | XSS from scan data (TXT records, HTML, banners) | Jinja autoescape, never `|safe` on scan data; CSP `default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'` (no `unsafe-inline`/`unsafe-eval`; Alpine CSP build; a test rejects inline script/style/handlers in rendered pages) |
 | CSRF | Flask-WTF `CSRFProtect` on every POST/PUT/PATCH/DELETE: hidden `csrf_token` in forms, `X-CSRFToken` header for HTMX via `<body hx-headers>`; `SameSite=Lax` session cookie; logout is POST-only |
@@ -53,7 +58,7 @@ lock so overlapping scans can't each claim the full allowance and a check on a d
 subdomain cannot claim a fresh one; a policy error fails only its job.
 
 Active/analysis queues remain reserved and cannot be selected in a scan profile; active checks
-stay denied until ownership verification ships (#14).
+run only on assets whose root domain proved ownership by DNS TXT (ADR 0014).
 
 Plugins receive immutable context/value objects, never sessions or ORM rows. Threads cannot
 write results: services validate normalized `ScanOutput` again, select tenant-scoped assets,

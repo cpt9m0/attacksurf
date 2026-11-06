@@ -32,6 +32,7 @@ from attacksurf.domain.findings import (
 )
 from attacksurf.domain.rules import MAX_RULE_ID_LENGTH
 from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger
+from attacksurf.domain.verification import MAX_TOKEN_LENGTH, VerificationMethod, VerificationStatus
 from attacksurf.infra.db.base import Base, TenantScoped, Timestamps, UUIDPrimaryKey
 
 
@@ -164,6 +165,43 @@ def _same_org_fk_set_null(column: str, target: str) -> ForeignKeyConstraint:
     return _same_org_fk(column, target, ondelete=f"SET NULL ({column})")
 
 
+class Verification(TenantScoped, Timestamps, Base):
+    """One org's proof of control over a root domain, by a DNS TXT record (#14).
+
+    A `subdomain` asset inherits its root's proof, so only roots get a row. Re-issuing the
+    token resets the row to `pending`; `token` is public in DNS (shown in the UI), and
+    `expires_at` bounds how long a verified proof counts without a fresh check.
+    """
+
+    __tablename__ = "verifications"
+    __table_args__ = (
+        UniqueConstraint("org_id", "asset_id"),
+        _same_org_fk("asset_id", "assets"),
+        # A revoked proof keeps its verified_at (it proved control once); a pending one can't
+        # carry one, and pending is the only status a fresh token starts in.
+        CheckConstraint("status <> 'pending' OR verified_at IS NULL", name="verified_at_matches"),
+        Index("ix_verifications_status_expires_at", "status", "expires_at"),
+    )
+
+    asset_id: Mapped[UUID]
+    method: Mapped[VerificationMethod] = mapped_column(
+        _str_enum(VerificationMethod, "verification_method")
+    )
+    token: Mapped[str] = mapped_column(String(MAX_TOKEN_LENGTH))
+    status: Mapped[VerificationStatus] = mapped_column(
+        _str_enum(VerificationStatus, "verification_status")
+    )
+    verified_at: Mapped[datetime | None]
+    last_checked_at: Mapped[datetime | None]
+    expires_at: Mapped[datetime | None]
+    # When the next check is due: before `expires_at`, so a healthy proof is renewed in time.
+    recheck_at: Mapped[datetime | None]
+    # Consecutive lookups that failed (unreachable nameservers). Backs the re-check off so a
+    # broken domain can't occupy every batch slot and starve the rest (ADR 0014).
+    failed_attempts: Mapped[int] = mapped_column(default=0, server_default=text("0"))
+    retry_after: Mapped[datetime | None]
+
+
 class Scan(TenantScoped, Timestamps, Base):
     """One run of a scan profile against a root asset. `created_at` is when it was queued."""
 
@@ -187,18 +225,22 @@ class Scan(TenantScoped, Timestamps, Base):
 
 
 class Job(TenantScoped, Timestamps, Base):
-    """One unit of a scan: a pipeline stage, or one scanner on one asset."""
+    """One unit of background work: a pipeline stage, a scanner on one asset, or a check.
+
+    `scan_id` is NULL for work that isn't part of a scan (ownership verification), so a job can
+    be tracked and retried without inventing a `Scan`.
+    """
 
     __tablename__ = "jobs"
     __table_args__ = (
-        _same_org_fk("scan_id", "scans"),
+        _same_org_fk_set_null("scan_id", "scans"),
         # Kept when the asset goes: the job is the scan's history.
         _same_org_fk_set_null("asset_id", "assets"),
         CheckConstraint("attempts >= 0", name="attempts_not_negative"),
         CheckConstraint("finished_at >= started_at", name="finished_after_started"),
     )
 
-    scan_id: Mapped[UUID] = mapped_column(index=True)
+    scan_id: Mapped[UUID | None] = mapped_column(index=True)
     asset_id: Mapped[UUID | None] = mapped_column(index=True)
     stage: Mapped[str] = mapped_column(String(50))
     scanner: Mapped[str | None] = mapped_column(String(100))
