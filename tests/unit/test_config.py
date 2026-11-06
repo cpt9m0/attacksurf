@@ -15,7 +15,7 @@ def test_settings_defaults_to_dev() -> None:
 
 
 def test_settings_have_no_default_llm_model() -> None:
-    # Model names come from config only (ADR 0014); no model means instance AI is off.
+    # Model names come from config only (ADR 0019); no model means instance AI is off.
     assert make_settings().llm_model is None
 
 

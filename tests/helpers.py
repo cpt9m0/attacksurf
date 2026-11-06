@@ -33,7 +33,7 @@ def make_settings(**overrides: Any) -> Settings:
 def llm_live_skip_reason(
     environ: Mapping[str, str], settings: Callable[[], Settings]
 ) -> str | None:
-    """Why `llm_live` tests must not run now, or None when they may (ADR 0014).
+    """Why `llm_live` tests must not run now, or None when they may (ADR 0019).
 
     They call a real provider with the developer's own `.env` key, so they run only on request,
     never in CI (GitHub Actions sets `CI`). Settings are only read once live tests are enabled.

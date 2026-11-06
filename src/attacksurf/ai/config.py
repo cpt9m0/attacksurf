@@ -1,4 +1,4 @@
-"""Which provider config an org's AI calls use (ADR 0014)."""
+"""Which provider config an org's AI calls use (ADR 0019)."""
 
 from attacksurf.config import Settings
 from attacksurf.domain.llm import KeySource, LLMConfig, OrgLLMConfig

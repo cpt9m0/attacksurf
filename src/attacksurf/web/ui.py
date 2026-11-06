@@ -11,13 +11,14 @@ from werkzeug.wrappers.response import Response as BaseResponse
 
 from attacksurf.domain.accounts import Role, has_role
 from attacksurf.domain.assets import AssetError, AssetNotFound, AssetType
-from attacksurf.services import asset_views
+from attacksurf.services import asset_views, verifications
 from attacksurf.services import assets as assets_service
 from attacksurf.services.asset_views import AssetFilter, AssetStatus
 from attacksurf.web.asset_params import parse_asset_filter
 from attacksurf.web.auth import require_role
 from attacksurf.web.db import get_session
 from attacksurf.web.formatting import exact_time, humanize_delta
+from attacksurf.web.queue import get_task_queue
 from attacksurf.web.rendering import is_htmx_request, render_page
 
 bp = Blueprint("ui", __name__)
@@ -109,6 +110,11 @@ def asset_detail(asset_id: UUID) -> Response:
             else ()
         )
         scans = asset_views.list_asset_scans(session, _org_id(), asset_id) if tab == "scans" else ()
+        ownership_context = (
+            _ownership_context(asset_id)
+            if tab == "overview" and detail.asset.type in {AssetType.DOMAIN, AssetType.SUBDOMAIN}
+            else None
+        )
     except AssetNotFound:
         abort(404)
     asset = detail.asset
@@ -124,6 +130,8 @@ def asset_detail(asset_id: UUID) -> Response:
         and asset.type == AssetType.DOMAIN
         and asset.root_id is None
         and has_role(current_user.role, Role.ADMIN),
+        # Only roots carry a proof; a subdomain shows its root's, read-only.
+        **(dict(ownership_context) if ownership_context else {}),
     )
 
 
@@ -138,6 +146,45 @@ def archive_asset(asset_id: UUID) -> BaseResponse:
         abort(404)
     flash(f"Archived {asset.value} and the assets discovered under it.", "success")
     return redirect(url_for("ui.assets"), 303)
+
+
+@bp.post("/assets/<uuid:asset_id>/verify")
+@require_role(Role.ADMIN)
+def verify_asset(asset_id: UUID) -> BaseResponse:
+    """Start or rotate a root's TXT proof, or run one check now (ADR 0014).
+
+    `action=check` queues a check of the current token ("Verify now"), `action=start` issues a
+    token, and anything else (the rotate dialog) issues a new one.
+    """
+    session = get_session()
+    try:
+        if request.form.get("action") == "check":
+            verifications.queue_check(
+                session, get_task_queue(), org_id=_org_id(), asset_id=asset_id
+            )
+        else:
+            verifications.start_verification(
+                session,
+                get_task_queue(),
+                org_id=_org_id(),
+                asset_id=asset_id,
+                actor_id=current_user.session_user.user_id,
+            )
+    except AssetNotFound:
+        abort(404)
+    if is_htmx_request():
+        # Only the card changes: re-render it in place instead of reloading the page.
+        return _ownership_card(asset_id)
+    return redirect(url_for("ui.asset_detail", asset_id=asset_id), 303)
+
+
+@bp.get("/assets/<uuid:asset_id>/ownership")
+def ownership_card(asset_id: UUID) -> Response:
+    """The ownership card alone, so a re-render never depends on the surrounding page."""
+    try:
+        return _ownership_card(asset_id)
+    except AssetNotFound:
+        abort(404)
 
 
 @bp.get("/scans")
@@ -157,6 +204,28 @@ def settings() -> Response:
 
 def _org_id() -> UUID:
     return current_user.session_user.org_id
+
+
+def _ownership_card(asset_id: UUID) -> Response:
+    """The ownership card of one asset; on a subdomain, its root's proof, read-only."""
+    return render_page("pages/_ownership.html", **_ownership_context(asset_id))
+
+
+def _ownership_context(asset_id: UUID) -> dict[str, Any]:
+    """The proof a domain's card shows, plus where its actions post (the root, never a child)."""
+    session = get_session()
+    asset = asset_views.get_asset(session, _org_id(), asset_id)
+    root_id = asset.root_id or asset.id
+    root = asset if root_id == asset.id else asset_views.get_asset(session, _org_id(), root_id)
+    return {
+        "view_id": asset.id,  # the asset being viewed: polls re-render this, not the root
+        "proof_root_value": root.value,
+        "ownership": verifications.read_verification(session, _org_id(), root.id),
+        "checking": verifications.check_in_flight(session, _org_id(), root.id),
+        "can_manage_ownership": root.id == asset.id
+        and asset.is_active
+        and has_role(current_user.role, Role.ADMIN),
+    }
 
 
 def _assets_page(flt: AssetFilter, page: int, status: int = 200, **form: str) -> Response:

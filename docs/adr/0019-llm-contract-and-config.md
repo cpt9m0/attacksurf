@@ -1,4 +1,4 @@
-# 0014. LLM provider contract and config resolution
+# 0019. LLM provider contract and config resolution
 
 - Status: accepted
 - Date: 2026-11-05

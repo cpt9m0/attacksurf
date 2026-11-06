@@ -22,6 +22,20 @@ class DnsResolver(Protocol):
         ...
 
 
+class TxtError(DnsError):
+    """An authoritative TXT lookup failed (no reachable nameserver, timeout, bad answer)."""
+
+
+class TxtLookup(Protocol):
+    def lookup_txt(self, host: str, name: str) -> tuple[str, ...]:
+        """TXT values of `name` in the zone `host`, read from `host`'s own nameservers.
+
+        Caching resolvers may serve a stale record long after an owner removed it, so the
+        ownership proof must come from the authoritative servers (ADR 0014).
+        """
+        ...
+
+
 class HttpBody:
     """A response as a scanner sees it: the body was capped by the client while reading."""
 

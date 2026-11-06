@@ -5,17 +5,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 
 ## [Unreleased]
 
-### Changed
-- `LLM_MODEL` no longer defaults to a Claude model in code: model names come only from config,
-  and an instance without both `LLM_API_KEY` and `LLM_MODEL` has AI off (ADR 0014).
-  Developers set the Meta development configuration in their own `.env` (see
-  `docs/development.md`). `LLM_PROVIDER` is validated as a `ProviderKind`.
-
 ### Fixed
 - The test suite passes on Windows checkouts: `.gitattributes` keeps LF line endings whatever
   the local `core.autocrlf` setting (vendored files are never converted, so their SHA-256
   checks hold), the vendor tests read files as UTF-8, and the connection-failure test simulates
   a refused connection instead of dialing a closed port (Windows retries it until the timeout).
+- Tests: hermetic worker settings are installed before pytest collection, so collecting a
+  module-level Celery task can't load `.env` into the worker config and fail the suite on
+  machines whose `REDIS_URL` differs from the default (#126).
+- Ownership review fixes (#14): renew proofs four hours before authorization expires, keep
+  inherited subdomain cards read-only across polling, and retry zone-discovery failures
+  instead of treating them as missing proof records (migration 0007; ADR 0015).
 - Flaky CSRF test: corrupting a token's last base64 character can keep the signature valid
   (padding bits), so the test now changes the first one (#119).
 - Run database migrations as part of dev `make up`, before starting application services,
@@ -37,8 +37,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   stream that ends before its final block as truncated instead of returning partial content
   silently.
 
+### Changed
+- `LLM_MODEL` no longer defaults to a Claude model in code: model names come only from config,
+  and an instance without both `LLM_API_KEY` and `LLM_MODEL` has AI off (ADR 0019).
+  Developers set the Meta development configuration in their own `.env` (see
+  `docs/development.md`). `LLM_PROVIDER` is validated as a `ProviderKind`.
+- Deleting a scan keeps its jobs (with `scan_id` NULL) instead of deleting them, so job history
+  survives scan pruning and work outside a scan can be tracked.
+
 ### Added
-- LLM provider contract (#23, ADR 0014): `LLMProvider` protocol, result/usage types and
+- LLM provider contract (#23, ADR 0019): `LLMProvider` protocol, result/usage types and
   `LLMError` subclasses in `domain/llm.py`; shared schema validation with one corrective retry
   (`ai/structured.py`); one HTTP-status error mapping (`ai/errors.py`); `resolve_llm_config`
   choosing the org's own key, else the capped instance key, else AI off (`ai/config.py`);
@@ -46,17 +54,35 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   sized to leave room under the Celery soft time limit (`ai/limits.py`); `FakeLLMProvider` and a contract test suite every provider adapter must
   pass; `llm_live` pytest marker for opt-in calls to a real provider, skipped unless
   `RUN_LLM_TESTS=1` and a key and model are set, and always in CI.
+- ADR 0016: sandbox for code and binary analysis (per-job gVisor containers started by a
+  credential-free launcher, no network, read-only input, resource limits) (#83).
+- Ownership card on a domain's overview page (#14): shows the TXT record to publish with
+  a copy button, its last check / verification / recheck times, and admin-only actions (start,
+  verify now via HTMX, which queues a check without rotating the token, and rotate behind a
+  confirm). The card polls itself while a check runs, so the outcome appears without a
+  reload. Inventory shows a "Verified" badge on roots; `passive.verify_ownership` runs each
+  check and an hourly beat entry re-queues due proofs.
+- Ownership proof by DNS TXT (#14): `start_verification` issues (or rotates) a
+  `_attacksurf-verify.<root>` token and queues a `passive.verify_ownership` job, an
+  authoritative lookup records `verified`/`pending`/`revoked` with a day-long recheck window and
+  a revoke grace, and `DbOwnershipChecker` makes ScopeGuard let active checks run only on a
+  verified, unexpired root (subdomains inherit it). Roots added as subdomains are checked in
+  their enclosing zone; failing nameservers are retried rather than read as a missing record.
+  New `verifications` table (migrations 0005, 0006); `jobs.scan_id` is nullable so verification
+  jobs no longer need a scan. See ADR 0014.
 - Assets pages (#13): add a root domain from `/assets` (inline HTMX validation errors), browse
   assets with filters (type, root, tag, search, status) kept in the URL, and open an asset's
   detail page with its relations, findings and scan history tabs. Admins archive a root domain
   through a confirm dialog. New components: `confirm_dialog`, `select_field`, `relative_time`;
   `data_table` takes a call block for rich cells.
+- ADR 0017: how repositories are fetched under ScopeGuard and how archives are extracted (#83).
 - Root domains and asset browsing, service + JSON side (#13): `add_root_domain` validates names
   with the ScopeGuard rules (registrable or subdomain; no IPs, internal or bare-suffix names),
   `archive_root_domain` deactivates a root and everything discovered under it (admin only),
   both audited. `/api/v1/assets` lists assets (filters by type, root, tag, search, status;
   paginated; open-finding count and worst severity per asset) and serves detail with relations,
   findings and scan history.
+- ADR 0018: the analysis tools, their licenses, and how their images are built and updated (#83).
 - ScopeGuard and the scanner network boundary (ADR 0013): target validation against the bundled
   Public Suffix List (no internal names, single labels or IP literals), public-only resolved
   addresses (private, loopback, link-local/metadata, CGNAT, reserved, IPv6 equivalents), a frozen

@@ -1,4 +1,4 @@
-"""The LLM contract: what AI features need from a provider (ADR 0005, ADR 0014).
+"""The LLM contract: what AI features need from a provider (ADR 0005, ADR 0019).
 
 Implementations live in `ai/providers/` and are the only code that imports a provider SDK.
 """

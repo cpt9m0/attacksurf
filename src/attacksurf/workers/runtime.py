@@ -5,12 +5,14 @@ from functools import lru_cache
 from sqlalchemy.orm import Session, sessionmaker
 
 from attacksurf.config import Settings, get_settings
-from attacksurf.domain.net import DnsResolver
+from attacksurf.domain.net import DnsResolver, TxtLookup
 from attacksurf.domain.scanners import ScannerGate
+from attacksurf.infra.authoritative_dns import AuthoritativeTxtLookup
 from attacksurf.infra.db.session import create_db_engine, create_session_factory
 from attacksurf.infra.dns import DnsPythonResolver
 from attacksurf.infra.http import SafeHttpClient
-from attacksurf.infra.scope_guard import ScopeGuard, UnverifiedOwnership
+from attacksurf.infra.scope_guard import ScopeGuard
+from attacksurf.services.ownership import DbOwnershipChecker
 
 
 def settings() -> Settings:
@@ -28,9 +30,19 @@ def dns_resolver() -> DnsResolver:
     return DnsPythonResolver()
 
 
+@lru_cache(maxsize=1)
+def txt_lookup() -> TxtLookup:
+    """Ownership checks: needs the A/AAAA/NS answers, so it takes the dnspython resolver."""
+    return AuthoritativeTxtLookup(DnsPythonResolver())
+
+
 def scanner_gate() -> ScannerGate:
-    """The production gate. Ownership verification lands with #14, so active checks stay denied."""
-    return ScopeGuard(dns=dns_resolver(), http=http_client(), ownership=UnverifiedOwnership())
+    """The production gate: active checks run only on assets whose root proved ownership (#14)."""
+    return ScopeGuard(
+        dns=dns_resolver(),
+        http=http_client(),
+        ownership=DbOwnershipChecker(session_factory()),
+    )
 
 
 def http_client() -> SafeHttpClient:

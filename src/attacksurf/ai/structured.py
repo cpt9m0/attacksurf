@@ -1,4 +1,4 @@
-"""Schema validation shared by every provider, so all of them retry the same way (ADR 0014)."""
+"""Schema validation shared by every provider, so all of them retry the same way (ADR 0019)."""
 
 import re
 import time

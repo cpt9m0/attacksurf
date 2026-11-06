@@ -1,4 +1,4 @@
-"""Time limits every provider adapter applies to its SDK client (ADR 0014).
+"""Time limits every provider adapter applies to its SDK client (ADR 0019).
 
 The SDKs default to a 600 s timeout, longer than a Celery task may run, so each adapter builds
 its client with `REQUEST_TIMEOUT_SECONDS` and `MAX_RETRIES` (its tests assert it).

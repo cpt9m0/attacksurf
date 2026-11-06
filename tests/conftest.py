@@ -1,5 +1,4 @@
 import os
-from collections.abc import Iterator
 
 import pytest
 from flask import Flask
@@ -46,10 +45,13 @@ def client(app: Flask) -> FlaskClient:
     return app.test_client()
 
 
-@pytest.fixture(autouse=True, scope="session")
-def _hermetic_worker_settings() -> Iterator[None]:
-    """The worker app reads `runtime.settings()` lazily; give it test settings, not .env/env."""
+def pytest_configure(config: pytest.Config) -> None:
+    """Give the worker app test settings, not .env/env, before collection starts.
+
+    Collecting a module-level Celery task finalizes the worker conf, which reads
+    `runtime.settings()` once and caches it; a fixture would patch too late (#126).
+    """
     worker_settings = make_settings(env="test", secret_key=SecretStr("test-secret-key"))
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(runtime, "settings", lambda: worker_settings)
-        yield
+    mp = pytest.MonkeyPatch()
+    mp.setattr(runtime, "settings", lambda: worker_settings)
+    config.add_cleanup(mp.undo)

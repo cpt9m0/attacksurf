@@ -1,7 +1,7 @@
 """Checks that the shared limits are consistent with each other and with the Celery task limit.
 
 These are checks on the configured values only: whether a call actually stops at
-`CALL_DEADLINE_SECONDS` is each adapter's job, proven in its own tests (ADR 0014).
+`CALL_DEADLINE_SECONDS` is each adapter's job, proven in its own tests (ADR 0019).
 """
 
 from attacksurf.ai.limits import CALL_DEADLINE_SECONDS, MAX_RETRIES, REQUEST_TIMEOUT_SECONDS
