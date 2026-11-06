@@ -2,35 +2,37 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-05 · **Branch:** `test/126-hermetic-worker-settings` · **Issue:** #126
+**Updated:** 2026-11-05 · **Branch:** `docs/83-sandbox-adr` · **Issue:** #83 (analysis sandbox ADRs)
 
 ## Status
-PR [#127](https://github.com/cpt9m0/attacksurf/pull/127) fixes test settings leaking during collection.
-User authorized merging; conflicts with current main are resolved and locally verified.
-PRs #123–#125 are merged; ownership verification is on main.
+PR [#128](https://github.com/cpt9m0/attacksurf/pull/128) documents the sandbox decision.
+Review fixes are local: the required handoff is included and ADR numbering is reconciled with main.
+This is the first of three PRs for #83; no sandbox runtime is implemented yet.
 
 ## Last task
-- Keep both changelog entries when merging current main into PR #127; refresh this handoff.
-- Preserve main's database ownership gate test alongside the collection-time regression.
-- Hermetic worker settings are installed in `pytest_configure` before task proxies finalize
-  Celery configuration; cleanup restores the original settings accessor.
-- Validation: 923 passed, 3 worker E2E tests skipped; ruff check/format, pyright, and all
-  pre-commit hooks pass. Full suite runs with a deliberately non-default Redis URL.
+- Document static analysis in fresh gVisor containers, with no network or credentials,
+  read-only input, capped JSON stdout, and per-run resource limits.
+- Separate the credentialed worker, credential-free launcher, Docker-socket policy proxy,
+  and untrusted artifact parser; reflect the decision in architecture/security docs.
+- Update this handoff in the same PR, addressing the Codex review comment.
+- Rename the sandbox decision to ADR 0016: merged ADRs 0014/0015 cover ownership verification.
+  Update sandbox references and link follow-up PRs rather than assigning their ADR numbers.
+- Resolve the changelog conflict with main by retaining both entries.
+  Validation: 923 passed, 3 worker E2E skips, 97.63% coverage; ruff, pyright, and hooks pass.
 
 ## Next step
-Verify PR #127 CI after the conflict-resolution push, then squash-merge and update main.
+Wait for Codex review on the pushed fixes and green CI, then squash-merge #128 and update main.
 
 ## Open threads
-- The previous local main handoff is preserved in a Git stash named
-  `codex: preserve local handoff before PR 127`.
-- #83 has separate sandbox/fetcher/tool ADR branches. Their planned ADR numbers 0014/0015 now
-  collide with merged ownership ADRs; recheck and renumber those drafts before publishing.
-- Dev DB needs migration `0007` before running the merged ownership code.
-- Worker-less verification stays queued and polls indefinitely.
-- Follow-ups: #114, #115, #116, #117. `.env.example` lacks ALLOW_SIGNUP,
-  SESSION_LIFETIME_HOURS, PROXY_COUNT.
+- #83 remains open: [#129](https://github.com/cpt9m0/attacksurf/pull/129) covers fetching and
+  archives; [#130](https://github.com/cpt9m0/attacksurf/pull/130) covers tool images/licenses
+  and closes #83. Reconcile their ADR numbers/references with main before merging them.
+- User authorizes merging #128 after Codex review passes and CI is green.
+- Earlier local main handoffs are preserved in Git stashes, including
+  `codex: preserve local handoff before PR 128`.
+- Follow-ups: #114–#117. `.env.example` lacks ALLOW_SIGNUP, SESSION_LIFETIME_HOURS, PROXY_COUNT.
 
 ## Notes for the next agent
-- Worker settings used by module-level Celery tasks must be installed before pytest collection.
-- Ownership renewals are due after 20 hours; authorization expires after 24 hours (ADR 0015).
-- Website roadmap starts with #69 ADR, #70 active queue, and #71 TLS adapter; verify dependencies.
+- The `analysis` queue stays reserved until the worker, launcher, proxy, and an analyzer exist.
+- Only sandbox-proxy holds the Docker socket; its policy validates each container create request.
+- PRs #123–#127 are merged; do not restore their earlier ownership or worker-settings code.

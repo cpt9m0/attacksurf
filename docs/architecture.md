@@ -22,6 +22,19 @@ Browser ─► web    ├────────────►│ Redis  ├�
             └──────────────────► PostgreSQL ◄───────────────┘
 ```
 
+Analysis path (ADR 0016, not built yet): only `sandbox-proxy` holds the Docker socket, and the
+sandbox that reads the artifact has no network and no credentials.
+
+```
+worker-analysis ─ run(artifact ID, analyzer) ─► sandbox-launcher ─► sandbox-proxy ─► Docker
+(DB/Redis creds,                                (no credentials)    (only socket holder, │
+ never opens artifacts)                                              checks each create) │
+        ▲                                                                                │ starts
+        └──── JSON on stdout, ≤ 2 MiB, via launcher ◄──── gVisor sandbox, one per job ◄──┘
+                                                          no network · read-only /input
+                                                          tmpfs /scratch · CPU/mem/pids/time caps
+```
+
 ## Layers
 
 ```
@@ -163,7 +176,7 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 | `passive` | DNS, CT logs, RDAP, public APIs | normal egress |
 | `ai` | LLM calls | rate-limited per org |
 | `active` *(later)* | port/web probes on verified targets | separate network, egress rules |
-| `analysis` *(later)* | code/binary analysis | gVisor, no network, read-only FS |
+| `analysis` *(later)* | code/binary analysis | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
 
 - `infra/queue.py`: `create_celery(settings)` (Redis broker + result backend from `REDIS_URL`,
   JSON only, `acks_late` + `reject_on_worker_lost`, prefetch 1, results ignored unless a

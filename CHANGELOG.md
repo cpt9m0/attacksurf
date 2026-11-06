@@ -38,6 +38,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   survives scan pruning and work outside a scan can be tracked.
 
 ### Added
+- ADR 0016: sandbox for code and binary analysis (per-job gVisor containers started by a
+  credential-free launcher, no network, read-only input, resource limits) (#83).
 - Ownership card on a domain's overview page (#14): shows the TXT record to publish with
   a copy button, its last check / verification / recheck times, and admin-only actions (start,
   verify now via HTMX, which queues a check without rotating the token, and rotate behind a
