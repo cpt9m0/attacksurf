@@ -269,6 +269,29 @@ def test_the_card_polls_while_a_check_is_queued(
     assert "disabled" in page  # no piling up checks while one runs
 
 
+def test_polling_an_inherited_proof_preserves_the_read_only_subdomain(
+    alice: FlaskClient, db_session: Session, root: UUID
+) -> None:
+    _start(alice, root)
+    asset = db_session.get_one(Asset, root)
+    child = record_asset(
+        db_session,
+        asset.org_id,
+        AssetType.SUBDOMAIN,
+        "www.example.com",
+        source=AssetSource.DISCOVERED,
+        parent_id=root,
+    )
+    db_session.commit()
+
+    for path in (f"/assets/{child.id}", f"/assets/{child.id}/ownership"):
+        page = _html(alice, path)
+        assert f'hx-get="/assets/{child.id}/ownership"' in page
+        assert f'hx-get="/assets/{root}/ownership"' not in page
+        assert "Verify now" not in page
+        assert "Rotate token" not in page
+
+
 def test_the_card_stops_polling_once_the_check_finished(
     alice: FlaskClient, db_session: Session, root: UUID
 ) -> None:

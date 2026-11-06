@@ -19,12 +19,14 @@
 {{ ownership_badge(proof.state if proof else "none") }}
 {%- endmacro %}
 
-{#- The card on a domain's overview tab. `proof` is a VerificationView (or none), `manage`
-    enables the admin actions, `root_value` names the domain in the copy, and `checking` is
-    true while a check runs: the card then polls itself until the result is in (DESIGN.md §6). -#}
-{% macro ownership_card(asset_id, root_value, proof, manage, checking=false) -%}
+{#- The card on a domain's overview tab. `view_id` is the asset being *viewed* (a subdomain
+    shows its root's proof read-only, so polling must re-render the same view, never the root,
+    which would swap in admin actions for the whole tree). `root_value` names the domain in the
+    copy; `checking` means a check is running and the card polls until the result is in
+    (DESIGN.md §6). -#}
+{% macro ownership_card(view_id, root_value, proof, manage, checking=false) -%}
 <section class="card card-body ownership" id="ownership" aria-labelledby="ownership-title"
-         {%- if checking %} hx-get="{{ url_for('ui.ownership_card', asset_id=asset_id) }}"
+         {%- if checking %} hx-get="{{ url_for('ui.ownership_card', asset_id=view_id) }}"
          hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML" hx-sync="this:replace"{% endif %}
          aria-busy="{{ 'true' if checking else 'false' }}">
   <div class="card-header">
@@ -53,8 +55,8 @@
   </dl>
   {%- if manage %}
   <div class="page-actions">
-    <form method="post" action="{{ url_for('ui.verify_asset', asset_id=asset_id) }}"
-          hx-post="{{ url_for('ui.verify_asset', asset_id=asset_id) }}" hx-target="#ownership"
+    <form method="post" action="{{ url_for('ui.verify_asset', asset_id=view_id) }}"
+          hx-post="{{ url_for('ui.verify_asset', asset_id=view_id) }}" hx-target="#ownership"
           hx-swap="outerHTML" hx-disabled-elt="find button">
       {{ csrf_field() }}
       <input type="hidden" name="action" value="check">
@@ -63,7 +65,7 @@
     {%- if proof.state != "pending" %}
       {{ confirm_dialog("rotate", "Rotate token", "Rotate the verification token?",
           "A new token replaces the old one: the domain drops back to unverified until the new record resolves, and any copy of the old value stops working.",
-          url_for('ui.verify_asset', asset_id=asset_id), "Rotate token",
+          url_for('ui.verify_asset', asset_id=view_id), "Rotate token",
           trigger_variant="secondary", confirm_variant="secondary") }}
     {%- endif %}
   </div>
@@ -71,7 +73,7 @@
   {%- elif manage %}
   <p class="muted">Issue a token to prove control of {{ root_value }}. Active checks, such as
     HTTP and port scans, run only on verified domains.</p>
-  <form method="post" action="{{ url_for('ui.verify_asset', asset_id=asset_id) }}">
+  <form method="post" action="{{ url_for('ui.verify_asset', asset_id=view_id) }}">
     {{ csrf_field() }}
     <input type="hidden" name="action" value="start">
     <button type="submit" class="btn btn-primary">Start verification</button>

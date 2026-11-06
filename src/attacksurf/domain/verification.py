@@ -19,8 +19,14 @@ MAX_TOKEN_LENGTH = 128
 # A zone can hold several TXT records at the name; only these are ours to inspect.
 MAX_TXT_RECORDS = 50
 MAX_TXT_BYTES = 4096
-# How often a verified record is checked again by the hourly re-verification run.
-RECHECK_AFTER = timedelta(days=1)
+# How often a verified record is checked again by the hourly re-verification run. The recheck
+# is due well before the proof stops counting, so a healthy domain is refreshed while its
+# authorization is still valid: the hourly beat can be up to an hour late, and a lookup that
+# fails must not cost access either.
+RECHECK_AFTER = timedelta(hours=20)
+# How long a verified proof authorizes active checks. `RECHECK_AFTER` + the beat interval +
+# room for a failed check leaves the proof valid across at least one missed renewal.
+PROOF_VALID_FOR = timedelta(days=1)
 # How long a proof keeps counting after a failed (or never run) check, so a flaky lookup or a
 # worker outage doesn't revoke every domain at once.
 GRACE_AFTER_FAILURE = timedelta(days=7)
@@ -59,7 +65,7 @@ def ownership_state(
     """
     if status is None:
         return OwnershipState.NONE
-    if status is VerificationStatus.VERIFIED and (expires_at is None or expires_at <= now):
+    if status is VerificationStatus.VERIFIED and (expires_at is None or now >= expires_at):
         return OwnershipState.EXPIRED
     return OwnershipState(status.value)
 

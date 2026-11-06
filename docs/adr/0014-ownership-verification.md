@@ -3,6 +3,9 @@
 - Status: accepted
 - Date: 2026-11-03
 
+The renewal schedule is amended by [ADR 0015](0015-ownership-renewal-deadline.md): renewals
+are due before authorization expires. It also clarifies transient zone-discovery failures.
+
 ## Context
 ADR 0013 put every scanner run behind ScopeGuard and made active checks (target HTTP, and any
 plugin declaring `requires_verification`) conditional on `OwnershipChecker.is_verified`, which

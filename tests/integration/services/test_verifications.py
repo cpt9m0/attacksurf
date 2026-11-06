@@ -10,8 +10,11 @@ from attacksurf.domain.assets import AssetNotFound, AssetSource, AssetType
 from attacksurf.domain.scans import JobStatus
 from attacksurf.domain.verification import (
     GRACE_AFTER_FAILURE,
+    PROOF_VALID_FOR,
     RECHECK_AFTER,
+    OwnershipState,
     VerificationStatus,
+    ownership_state,
     record_value,
 )
 from attacksurf.infra.db.models import Asset, AuditLog, Job, Org, Verification
@@ -109,7 +112,7 @@ def test_rotating_a_verified_proof_resets_it_to_pending(
     rotated = _start(db_session, FakeQueue(db_session), org.id, root.id)
 
     assert rotated.status is VerificationStatus.PENDING
-    assert (rotated.verified_at, rotated.expires_at) == (None, None)
+    assert (rotated.verified_at, rotated.expires_at, rotated.recheck_at) == (None, None, None)
 
 
 @pytest.fixture
@@ -157,7 +160,7 @@ def test_a_found_record_verifies_the_proof(db_session: Session, org: Org, root: 
     assert (proof.verified_at, proof.last_checked_at, proof.expires_at) == (
         NOW,
         NOW,
-        NOW + RECHECK_AFTER,
+        NOW + PROOF_VALID_FOR,
     )
 
 
@@ -176,7 +179,7 @@ def test_a_missing_record_revokes_a_verified_proof_once_its_grace_is_over(
     verifications.record_check(db_session, proof, (record_value(proof.token),), now=NOW)
     verified_at = proof.verified_at
 
-    status = verifications.record_check(db_session, proof, (), now=NOW + RECHECK_AFTER)
+    status = verifications.record_check(db_session, proof, (), now=NOW + PROOF_VALID_FOR)
 
     assert status is VerificationStatus.REVOKED
     assert proof.verified_at == verified_at  # a revocation never forgets when it was proven
@@ -218,6 +221,40 @@ def test_due_verifications_skip_archived_roots(db_session: Session, org: Org, ro
     _archive(db_session, root)
 
     assert verifications.due_verifications(db_session, NOW + RECHECK_AFTER) == ()
+
+
+def test_renewal_is_due_while_the_proof_still_authorizes_checks(
+    db_session: Session, org: Org, root: Asset
+) -> None:
+    proof = _start(db_session, FakeQueue(db_session), org.id, root.id)
+    verifications.record_check(db_session, proof, (record_value(proof.token),), now=NOW)
+    db_session.flush()
+
+    assert (
+        verifications.due_verifications(db_session, NOW + RECHECK_AFTER - timedelta(seconds=1))
+        == ()
+    )
+    # Allow an hourly beat delay and one failed lookup's two-hour backoff.
+    renewal = NOW + RECHECK_AFTER + timedelta(hours=3)
+    assert [row[2] for row in verifications.due_verifications(db_session, renewal)] == [proof.id]
+    assert ownership_state(proof.status, proof.expires_at, renewal) is OwnershipState.VERIFIED
+
+    verifications.record_check(db_session, proof, (record_value(proof.token),), now=renewal)
+    db_session.flush()
+
+    assert proof.expires_at == renewal + PROOF_VALID_FOR
+    assert verifications.due_verifications(db_session, NOW + PROOF_VALID_FOR) == ()
+
+
+def test_verified_proof_without_a_recheck_deadline_is_due(
+    db_session: Session, org: Org, root: Asset
+) -> None:
+    proof = _start(db_session, FakeQueue(db_session), org.id, root.id)
+    verifications.record_check(db_session, proof, (record_value(proof.token),), now=NOW)
+    proof.recheck_at = None
+    db_session.flush()
+
+    assert [row[2] for row in verifications.due_verifications(db_session, NOW)] == [proof.id]
 
 
 def test_enqueue_due_checks_queues_one_job_per_due_proof(

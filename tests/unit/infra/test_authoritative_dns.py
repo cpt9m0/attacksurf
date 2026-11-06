@@ -307,6 +307,21 @@ def test_a_subdomain_root_uses_the_enclosing_zone(
     assert [address for address, _ in wire.udp_calls] == ["93.184.216.34"]
 
 
+def test_zone_discovery_failure_does_not_fall_back_to_the_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    qname = "_attacksurf-verify.eng.example.com"
+    lookup, wire = _lookup(
+        monkeypatch,
+        answers={("eng.example.com", "NS"): DnsError()},
+        responses={"93.184.216.34": _response(qname, [])},
+    )
+
+    with pytest.raises(TxtError):
+        lookup.lookup_txt("eng.example.com", qname)
+    assert wire.udp_calls == []
+
+
 def test_a_delegated_subdomain_root_uses_its_own_zone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

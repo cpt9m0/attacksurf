@@ -120,6 +120,8 @@ Specs (visuals) stay TBD.
   `hx-push-url` when HTMX's history cache misses, which HTMX sends with `HX-Request` and swaps
   into the whole `<body>`) and normal loads get the full page (`Vary` on all three headers).
 - Long-running work: show job progress via polling (`hx-trigger="every 2s"`), stop when done.
+  Ownership cards poll the viewed asset, including subdomains inheriting a root's proof, so
+  refreshing a read-only card preserves its available actions.
 - Forms: inline validation errors; disable the submit button during request.
 - Destructive actions: confirm modal; never one-click delete.
 - Lists: filters update the URL query string (`hx-push-url`) so views are shareable. The

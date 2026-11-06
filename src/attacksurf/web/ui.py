@@ -218,7 +218,7 @@ def _ownership_context(asset_id: UUID) -> dict[str, Any]:
     root_id = asset.root_id or asset.id
     root = asset if root_id == asset.id else asset_views.get_asset(session, _org_id(), root_id)
     return {
-        "proof_root_id": root.id,
+        "view_id": asset.id,  # the asset being viewed: polls re-render this, not the root
         "proof_root_value": root.value,
         "ownership": verifications.read_verification(session, _org_id(), root.id),
         "checking": verifications.check_in_flight(session, _org_id(), root.id),

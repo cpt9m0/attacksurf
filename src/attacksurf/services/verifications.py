@@ -17,6 +17,7 @@ from attacksurf.domain.jobs import TaskQueue
 from attacksurf.domain.scans import JobStatus
 from attacksurf.domain.verification import (
     GRACE_AFTER_FAILURE,
+    PROOF_VALID_FOR,
     RECHECK_AFTER,
     OwnershipState,
     VerificationMethod,
@@ -92,6 +93,7 @@ def start_verification(
         verification.status = VerificationStatus.PENDING
         verification.verified_at = None
         verification.expires_at = None
+        verification.recheck_at = None
         verification.last_checked_at = None
     session.flush()
     audit(
@@ -227,9 +229,9 @@ def record_check(
 ) -> VerificationStatus:
     """Apply one DNS answer to the proof. Doesn't commit.
 
-    Found: verified, and due again after `RECHECK_AFTER`. Not found: pending if it never
-    counted, revoked if it had; `expires_at` keeps a verified proof alive for
-    `GRACE_AFTER_FAILURE` so one flaky lookup doesn't cut active checks off.
+    Found: verified, due again after `RECHECK_AFTER` and valid for `PROOF_VALID_FOR` (longer,
+    so a late or failed re-check doesn't take access away). Not found: pending if it never
+    counted, revoked if it had and its `expires_at` passed.
     """
     now = now or datetime.now(UTC)
     found = matches(verification.token, values)
@@ -241,7 +243,8 @@ def record_check(
         verification.status = VerificationStatus.VERIFIED
         if verification.verified_at is None:
             verification.verified_at = now
-        verification.expires_at = now + RECHECK_AFTER
+        verification.recheck_at = now + RECHECK_AFTER
+        verification.expires_at = now + PROOF_VALID_FOR
     elif verification.status is VerificationStatus.VERIFIED and (
         verification.expires_at is None or now >= verification.expires_at
     ):
@@ -265,7 +268,7 @@ def record_failure(verification: Verification, *, now: datetime | None = None) -
 def due_verifications(
     session: Session, now: datetime, limit: int = MAX_DUE_PER_RUN
 ) -> tuple[tuple[UUID, UUID, UUID], ...]:
-    """(org, asset, verification) of proofs to re-check: expired ones, and stale pending ones.
+    """(org, asset, verification) of proofs to re-check: due renewals and stale pending ones.
 
     Cross-tenant on purpose: the hourly re-verification run is system-wide. It only yields ids
     (each job is created with its row's own `org_id`), so no tenant data crosses a boundary.
@@ -283,8 +286,10 @@ def due_verifications(
         .where(
             Asset.is_active.is_(True),
             or_(
+                # Due at `recheck_at`, which is set well before `expires_at`, so a healthy
+                # proof is renewed while it still authorizes checks.
                 (Verification.status == VerificationStatus.VERIFIED)
-                & (Verification.expires_at <= now),
+                & (or_(Verification.recheck_at.is_(None), Verification.recheck_at <= now)),
                 (Verification.status == VerificationStatus.PENDING)
                 & or_(
                     Verification.last_checked_at.is_(None),
@@ -294,7 +299,7 @@ def due_verifications(
             # Never retry before the backoff elapsed (NULL: no failure yet).
             or_(Verification.retry_after.is_(None), Verification.retry_after <= now),
         )
-        .order_by(Verification.failed_attempts, backoff, Verification.expires_at, Verification.id)
+        .order_by(Verification.failed_attempts, backoff, Verification.recheck_at, Verification.id)
         .limit(limit)
     ).all()
     return tuple(rows)

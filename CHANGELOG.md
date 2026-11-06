@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Fixed
+- Ownership review fixes (#14): renew proofs four hours before authorization expires, keep
+  inherited subdomain cards read-only across polling, and retry zone-discovery failures
+  instead of treating them as missing proof records (migration 0007; ADR 0015).
 - Flaky CSRF test: corrupting a token's last base64 character can keep the signature valid
   (padding bits), so the test now changes the first one (#119).
 - Run database migrations as part of dev `make up`, before starting application services,

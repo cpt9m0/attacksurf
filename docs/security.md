@@ -9,8 +9,9 @@ their security data. Both make it a target. These rules apply to all code.
 - **Active checks** (zone transfer now; port/web probing later) run **only on assets whose
   ownership is verified** (DNS TXT token, ADR 0014). ScopeGuard enforces this; scanners cannot
   bypass it. A proof is a `_attacksurf-verify.<root>` TXT record with a random per-asset token;
-  it is re-checked daily, revoked once the record is gone (after a one-day grace), and expires
-  for the gate after a day without a successful check.
+  it is due for re-check after 20 hours, revoked if the record is absent after its expiry, and
+  expires for the gate after a day without a successful check (ADR 0015). Zone-discovery
+  failures trigger retries rather than falling back to an unconfirmed parent zone.
 - **Out of scope, always:** exploitation, brute forcing, credential attacks, DoS, actually
   claiming takeover-able resources, and scanning of third-party targets.
 

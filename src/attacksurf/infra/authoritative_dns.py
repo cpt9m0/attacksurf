@@ -113,10 +113,9 @@ class AuthoritativeTxtLookup:
         A name that is a CNAME can't be a zone: the stub would follow the alias, so an answer
         owned by another name means "not a zone here", never "a zone pointed elsewhere".
         """
-        try:
-            return bool(self._ns_at(name))
-        except TxtError:  # a stub failure says nothing about whether the zone is delegated
-            return False
+        # A failed lookup cannot establish the absence of a delegation. Walking past it
+        # could query the parent and mistake a referral for a missing proof.
+        return bool(self._ns_at(name))
 
     def _nameservers(self, zone: dns.name.Name) -> tuple[tuple[str, int], ...]:
         """Validated (address, port) pairs for the zone's authoritative servers.

@@ -1,9 +1,11 @@
 """Database-level guarantees of ownership verifications (#14)."""
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -12,6 +14,7 @@ from attacksurf.domain.assets import AssetSource, AssetType
 from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger
 from attacksurf.domain.verification import VerificationMethod, VerificationStatus, new_token
 from attacksurf.infra.db.models import Asset, Job, Org, Scan, Verification
+from tests.integration.conftest import ALEMBIC_INI
 
 NOW = datetime(2026, 11, 1, tzinfo=UTC)
 
@@ -62,6 +65,28 @@ def test_a_root_can_only_have_one_verification(db_session: Session, acme: Tenant
 
     with pytest.raises(IntegrityError):
         db_session.flush()
+
+
+def test_renewal_migration_backfills_deadlines_without_extending_authorization(
+    db_session: Session, acme: Tenant
+) -> None:
+    proof = _verification(
+        acme,
+        status=VerificationStatus.VERIFIED,
+        verified_at=NOW,
+        expires_at=NOW + timedelta(days=1),
+    )
+    db_session.add(proof)
+    db_session.flush()
+    config = Config(ALEMBIC_INI)
+    config.attributes["connection"] = db_session.connection()
+
+    command.downgrade(config, "0006")
+    command.upgrade(config, "head")
+    db_session.refresh(proof)
+
+    assert proof.recheck_at == NOW + timedelta(hours=20)
+    assert proof.expires_at == NOW + timedelta(days=1)
 
 
 def test_a_verified_proof_records_when_it_was_verified(db_session: Session, acme: Tenant) -> None:

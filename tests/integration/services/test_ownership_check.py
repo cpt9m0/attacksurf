@@ -128,6 +128,33 @@ def test_a_lookup_failure_is_transient_so_the_job_retries(
     assert db_session.get_one(Verification, proof.id).status is VerificationStatus.PENDING
 
 
+def test_a_lookup_failure_preserves_an_expired_proof_and_records_backoff(
+    db_session: Session, org: Org, proof: Verification
+) -> None:
+    verifications.record_check(db_session, proof, (record_value(proof.token),), now=NOW)
+    expires_at = proof.expires_at
+    db_session.commit()
+    before = datetime.now(UTC)
+
+    with pytest.raises(TransientJobError):
+        ownership.check_ownership(
+            db_session,
+            FakeLookup(error=TxtError()),
+            org_id=org.id,
+            verification_id=proof.id,
+            now=NOW + timedelta(days=2),
+        )
+
+    db_session.refresh(proof)
+    assert proof.status is VerificationStatus.VERIFIED
+    assert proof.expires_at == expires_at
+    assert proof.failed_attempts == 1
+    assert proof.retry_after is not None
+    assert (
+        before + timedelta(hours=2) <= proof.retry_after <= datetime.now(UTC) + timedelta(hours=2)
+    )
+
+
 def test_another_org_cannot_run_someone_elses_check(
     db_session: Session, org: Org, proof: Verification
 ) -> None:
