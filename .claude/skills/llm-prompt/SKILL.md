@@ -8,9 +8,17 @@ description: Add or change an LLM-powered feature or prompt (triage, summaries, 
 ## Principles
 - LLMs **judge and explain**; scanners detect. The AI never creates findings from nothing and
   never changes finding status on its own.
-- Every call goes through the `LLMProvider` abstraction (works for Anthropic and
-  OpenAI-compatible). Never import a provider SDK outside `ai/providers/`.
-- Every call has a **pydantic output schema**; invalid output gets one retry, then a graceful skip.
+- Every call goes through the `LLMProvider` protocol (`domain/llm.py`, ADR 0019), built from the
+  `LLMConfig` that `ai/config.resolve_llm_config` returns (None = AI off: skip gracefully).
+  Never import a provider SDK outside `ai/providers/`; never hardcode a model name.
+  API keys and base URLs stay `SecretStr`; unwrap them only when constructing the SDK client.
+- Every call has a **pydantic output schema**; `ai/structured.complete_structured` gives invalid
+  output one retry, then raises `LLMOutputError`: catch it and skip gracefully.
+- Tests use `tests.fakes.FakeLLMProvider`; a new provider adapter must pass
+  `tests/unit/ai/contract.ProviderContract`, build its SDK client with `ai/limits.py`, and
+  enforce `CALL_DEADLINE_SECONDS` per call (SDK timeouts and `Retry-After` waits don't).
+- `LLMUnavailable` makes Celery retry the whole task: one `complete()` call per task, or cache
+  results per finding, so a retry never pays again for calls that already succeeded.
 - Every call records usage (`LLMUsage`) and respects the org's token budget.
 
 ## Steps

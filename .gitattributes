@@ -1,0 +1,6 @@
+# Same bytes on every checkout, whatever the local core.autocrlf setting: text files use LF
+# (hooks and tests expect it), binaries are detected and left alone.
+* text=auto eol=lf
+
+# Vendored libraries are pinned by SHA-256 (vendor/SHA256SUMS): never convert them.
+src/attacksurf/web/static/vendor/** -text

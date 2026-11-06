@@ -14,6 +14,11 @@ def test_settings_defaults_to_dev() -> None:
     assert not settings.is_prod
 
 
+def test_settings_have_no_default_llm_model() -> None:
+    # Model names come from config only (ADR 0019); no model means instance AI is off.
+    assert make_settings().llm_model is None
+
+
 def test_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
     clean_env.setenv("ENV", "prod")
     clean_env.setenv("SECRET_KEY", PROD_SECRET_KEY)
@@ -32,6 +37,17 @@ def test_empty_env_value_is_treated_as_unset(clean_env: pytest.MonkeyPatch) -> N
     clean_env.setenv("LLM_BASE_URL", "")
 
     assert settings_from_env().llm_base_url is None
+
+
+def test_llm_endpoint_from_environment_masks_credentials(clean_env: pytest.MonkeyPatch) -> None:
+    endpoint = "https://endpoint-user:endpoint-password@gateway.example/v1"
+    clean_env.setenv("LLM_BASE_URL", endpoint)
+
+    settings = settings_from_env()
+
+    assert "endpoint-password" not in repr(settings)
+    assert isinstance(settings.llm_base_url, SecretStr)
+    assert settings.llm_base_url.get_secret_value() == endpoint
 
 
 def test_prod_without_secret_key_fails_fast() -> None:

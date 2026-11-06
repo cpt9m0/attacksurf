@@ -125,6 +125,24 @@ Auth settings: `ALLOW_SIGNUP` (default `true`; when `false` only the first user 
 dev, 1 behind Caddy). Login/signup rate limits use Redis (`REDIS_URL`) and fall back to memory if
 it is down. Open http://127.0.0.1:5000, sign up; the first account owns a new org.
 
+### AI provider (instance key)
+
+`LLM_PROVIDER` (`anthropic` or `openai_compat`), `LLM_MODEL`, `LLM_BASE_URL` and `LLM_API_KEY`
+are the instance config: orgs without their own key use it (ADR 0019). The code has no default
+model; without a key and a model, AI is off. For development we use Meta's Muse Spark, which
+speaks both API formats with one key (it starts with `LLM_`): put this configuration in your own
+`.env`, replacing the `LLM_*` values copied from `.env.example`:
+
+```bash
+LLM_PROVIDER=openai_compat
+LLM_MODEL=muse-spark-1.3
+LLM_BASE_URL=https://api.meta.ai/v1          # anthropic format: https://api.meta.ai (no /v1)
+LLM_API_KEY=...                              # your own key, only in .env
+```
+
+`muse-spark-1.3-contributor` is cheaper because Meta may train on everything you send and get
+back: use it only with test fixtures, never with scan results of real domains.
+
 ## Everyday commands
 
 | Task | Command |
@@ -169,6 +187,21 @@ pyright and pytest versions come from `uv.lock`.
 
 - Coverage must stay **≥ 80%** (`--cov-fail-under=80` in `pyproject.toml`; CI enforces it).
 - No live network in tests: use fixtures under `tests/fixtures/` and fake providers.
+- LLM: tests use `tests.fakes.FakeLLMProvider` (queued replies, shared schema validation). A
+  provider adapter's tests subclass `tests/unit/ai/contract.ProviderContract` with a harness that
+  stubs its HTTP. Tests that call a real provider are marked `llm_live`; `tests/conftest.py`
+  skips them unless you run `RUN_LLM_TESTS=1 uv run pytest -m llm_live --no-cov` with
+  `LLM_API_KEY` and `LLM_MODEL` in your `.env`, and always in CI. `--no-cov` because a
+  handful of live tests can't meet the whole-app coverage gate, which still applies to the
+  normal full suite.
+- Tests must pass on any OS: read files with `encoding="utf-8"` (Windows defaults to cp1252),
+  and simulate network failures instead of relying on how an OS treats a closed port.
+- On Windows, use `127.0.0.1` rather than `localhost` in `TEST_DATABASE_URL`: `localhost` tries
+  IPv6 first, Docker only listens on IPv4, and every connection waits for a timeout.
+- `.gitattributes` makes every checkout use LF line endings, whatever `core.autocrlf` says, and
+  leaves vendored files byte-for-byte as committed. A Windows checkout made before it existed
+  still has CRLF files: with no uncommitted work, rewrite them once from Git Bash with
+  `git ls-files -z | xargs -0 rm -f && git checkout -- .` (untracked files such as `.env` stay).
 - Layout: `tests/unit/`, `tests/integration/` (DB, Celery; fixtures `db_engine`, `db_session`),
   `tests/e2e/` (against the running stack, e.g. `make test-worker`; Playwright later).
 - Celery tasks in tests: `task.apply(kwargs=...)` runs them in-process; patch

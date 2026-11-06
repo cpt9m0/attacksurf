@@ -98,7 +98,10 @@ venv = ".venv"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --cov=attacksurf --cov-report=term-missing --cov-fail-under=80"
-markers = ["worker: needs the running Compose workers (RUN_WORKER_TESTS=1)"]
+markers = [
+    "worker: needs the running Compose workers (RUN_WORKER_TESTS=1)",
+    "llm_live: calls a real LLM provider with the LLM_* settings (RUN_LLM_TESTS=1); never in CI",
+]
 
 [tool.coverage.run]
 branch = true

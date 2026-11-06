@@ -6,6 +6,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Fixed
+- LLM endpoint credentials are masked in settings and provider-config representations;
+  base URLs remain `SecretStr` through config resolution (#23).
+- The test suite passes on Windows checkouts: `.gitattributes` keeps LF line endings whatever
+  the local `core.autocrlf` setting (vendored files are never converted, so their SHA-256
+  checks hold), the vendor tests read files as UTF-8, and the connection-failure test simulates
+  a refused connection instead of dialing a closed port (Windows retries it until the timeout).
 - Tests: hermetic worker settings are installed before pytest collection, so collecting a
   module-level Celery task can't load `.env` into the worker config and fail the suite on
   machines whose `REDIS_URL` differs from the default (#126).
@@ -34,10 +40,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   silently.
 
 ### Changed
+- `LLM_MODEL` no longer defaults to a Claude model in code: model names come only from config,
+  and an instance without both `LLM_API_KEY` and `LLM_MODEL` has AI off (ADR 0019).
+  Developers set the Meta development configuration in their own `.env` (see
+  `docs/development.md`). `LLM_PROVIDER` is validated as a `ProviderKind`.
 - Deleting a scan keeps its jobs (with `scan_id` NULL) instead of deleting them, so job history
   survives scan pruning and work outside a scan can be tracked.
 
 ### Added
+- LLM provider contract (#23, ADR 0019): `LLMProvider` protocol, result/usage types and
+  `LLMError` subclasses in `domain/llm.py`; shared schema validation with one corrective retry
+  (`ai/structured.py`); one HTTP-status error mapping (`ai/errors.py`); `resolve_llm_config`
+  choosing the org's own key, else the capped instance key, else AI off (`ai/config.py`);
+  shared SDK timeout/retry values and a total per-call deadline for adapters to enforce,
+  sized to leave room under the Celery soft time limit (`ai/limits.py`); `FakeLLMProvider` and a contract test suite every provider adapter must
+  pass; `llm_live` pytest marker for opt-in calls to a real provider, skipped unless
+  `RUN_LLM_TESTS=1` and a key and model are set, and always in CI.
 - ADR 0016: sandbox for code and binary analysis (per-job gVisor containers started by a
   credential-free launcher, no network, read-only input, resource limits) (#83).
 - Ownership card on a domain's overview page (#14): shows the TXT record to publish with

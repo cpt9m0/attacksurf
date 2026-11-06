@@ -7,6 +7,8 @@ from typing import Literal, Self
 from pydantic import Field, PrivateAttr, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from attacksurf.domain.llm import ProviderKind
+
 MIN_PROD_SECRET_KEY_LENGTH = 32
 # Values that appear in docs/examples; using one in prod means a publicly known signing key.
 _PLACEHOLDER_SECRET_KEYS = frozenset({"change-me", "changeme", "secret", "dev", "test"})
@@ -35,9 +37,11 @@ class Settings(BaseSettings):
     # entry is the client IP for rate limiting; leave 0 when the app is reached directly.
     proxy_count: int = Field(default=0, ge=0, le=5)
 
-    llm_provider: Literal["anthropic", "openai_compat"] = "anthropic"
-    llm_model: str = "claude-sonnet-5-5"
-    llm_base_url: str | None = None
+    # Instance LLM config (ADR 0019): orgs without their own key use it, capped (#24). Model
+    # names come only from config, so there is no default; no key or no model means AI is off.
+    llm_provider: ProviderKind = ProviderKind.ANTHROPIC
+    llm_model: str | None = None
+    llm_base_url: SecretStr | None = None
     llm_api_key: SecretStr | None = None
 
     _secret_key_generated: bool = PrivateAttr(default=False)

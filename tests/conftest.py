@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from flask import Flask
 from flask.testing import FlaskClient
@@ -6,7 +8,18 @@ from pydantic import SecretStr
 from attacksurf import create_app
 from attacksurf.config import Settings
 from attacksurf.workers import runtime
-from tests.helpers import make_settings
+from tests.helpers import llm_live_skip_reason, make_settings
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Skip every `llm_live` test unless live calls are enabled here (never in CI)."""
+    live = [item for item in items if item.get_closest_marker("llm_live")]
+    if not live:
+        return
+    reason = llm_live_skip_reason(os.environ, Settings)
+    if reason is not None:
+        for item in live:
+            item.add_marker(pytest.mark.skip(reason=reason))
 
 
 @pytest.fixture

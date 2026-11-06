@@ -8,7 +8,7 @@ VENDOR = Path(attacksurf.web.__file__).parent / "static" / "vendor"
 
 def test_vendored_assets_match_checksums() -> None:
     # Supply-chain guard: vendored JS changes only together with SHA256SUMS (vendor/README.md).
-    lines = (VENDOR / "SHA256SUMS").read_text().splitlines()
+    lines = (VENDOR / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
 
     assert lines
     for line in lines:
@@ -25,10 +25,11 @@ def test_vendored_assets_ship_their_license_notices() -> None:
         ("alpinejs-LICENSE.md", "Caleb Porzio"),
         ("lucide-LICENSE.txt", "Lucide Icons and Contributors"),
     ]:
-        assert holder in (licenses / name).read_text(), name
+        assert holder in (licenses / name).read_text(encoding="utf-8"), name
 
 
 def test_every_vendored_script_is_checksummed() -> None:
-    listed = {line.split()[1] for line in (VENDOR / "SHA256SUMS").read_text().splitlines()}
+    sums = (VENDOR / "SHA256SUMS").read_text(encoding="utf-8")
+    listed = {line.split()[1] for line in sums.splitlines()}
 
     assert {p.name for p in VENDOR.glob("*.js")} == listed
