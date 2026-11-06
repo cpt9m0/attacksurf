@@ -66,6 +66,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   both audited. `/api/v1/assets` lists assets (filters by type, root, tag, search, status;
   paginated; open-finding count and worst severity per asset) and serves detail with relations,
   findings and scan history.
+- ADR 0018: the analysis tools, their licenses, and how their images are built and updated (#83).
 - ScopeGuard and the scanner network boundary (ADR 0013): target validation against the bundled
   Public Suffix List (no internal names, single labels or IP literals), public-only resolved
   addresses (private, loopback, link-local/metadata, CGNAT, reserved, IPv6 equivalents), a frozen
