@@ -1,10 +1,10 @@
-# 0015. Fetching repositories and handling archives under ScopeGuard
+# 0017. Fetching repositories and handling archives under ScopeGuard
 
 - Status: accepted
 - Date: 2026-11-04
 
 ## Context
-ADR 0014 gives the sandbox no network, so repository bytes must be fetched before analysis
+ADR 0016 gives the sandbox no network, so repository bytes must be fetched before analysis
 starts. The code module needs public git URLs (#88), GitHub App repositories (#91), recent
 history for secret scanning (#92) and archive uploads (#87). ADR 0013 says scanner traffic goes
 through ScopeGuard and that nothing contacts an arbitrary target without ownership proof.
@@ -86,7 +86,7 @@ could fake that output, but planting the exploit already takes write access to t
 - **Archives enter by upload only (#87).** There's no "fetch this archive URL" feature and no
   forge tarball path, so nothing else reaches the network.
 - **Extraction happens inside the analyzer's sandbox (#86), never on the host.** It writes to
-  `/scratch` before the tool starts, so it needs no writable mount, which ADR 0014's proxy
+  `/scratch` before the tool starts, so it needs no writable mount, which ADR 0016's proxy
   policy wouldn't allow. The same rules apply when the fetched repository's tree is written out.
 - **The extractor is its own loop over entries,** not `tar`, `unzip` or `extractall`, and it
   never creates links. Extraction filters have had bypasses, and this leaves no link to resolve.
@@ -129,7 +129,7 @@ are different: they're reported with the results, so a user can see what wasn't 
 - A fetched repository needs a step that builds it from the pack inside the sandbox and turns
   it into the same tree layout as an archive. It must not use `git archive` with the
   repository's own attributes, for the same `export-ignore` reason.
-- #85 encrypts artifacts at rest while ADR 0014 mounts a plain read-only directory. #84 and #85
+- #85 encrypts artifacts at rest while ADR 0016 mounts a plain read-only directory. #84 and #85
   must decrypt for a run only, under the artifact root, and remove the plaintext afterwards.
 - Known gaps, shown in the results: history beyond the depth, submodule contents, LFS objects
   and skipped links aren't analysed. Other forges and self-hosted servers need a new decision.

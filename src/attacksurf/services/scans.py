@@ -223,5 +223,5 @@ def fail_scan(session: Session, org_id: UUID, scan_id: UUID) -> None:
 def fail_job_scan(session: Session, org_id: UUID, job_id: UUID) -> None:
     """Fail a scan after a pipeline task error, including errors before canvas publication."""
     job = get_scoped(session, Job, job_id, org_id)
-    if job is not None:
+    if job is not None and job.scan_id is not None:  # jobs outside a scan have no scan to fail
         fail_scan(session, org_id, job.scan_id)

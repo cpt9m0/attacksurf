@@ -7,7 +7,11 @@ their security data. Both make it a target. These rules apply to all code.
 
 - **Passive checks** (public DNS, Certificate Transparency, RDAP) may run on any registered domain.
 - **Active checks** (zone transfer now; port/web probing later) run **only on assets whose
-  ownership is verified** (DNS TXT token). ScopeGuard enforces this; scanners cannot bypass it.
+  ownership is verified** (DNS TXT token, ADR 0014). ScopeGuard enforces this; scanners cannot
+  bypass it. A proof is a `_attacksurf-verify.<root>` TXT record with a random per-asset token;
+  it is due for re-check after 20 hours, revoked if the record is absent after its expiry, and
+  expires for the gate after a day without a successful check (ADR 0015). Zone-discovery
+  failures trigger retries rather than falling back to an unconfirmed parent zone.
 - **Out of scope, always:** exploitation, brute forcing, credential attacks, DoS, actually
   claiming takeover-able resources, and scanning of third-party targets.
 
@@ -20,7 +24,8 @@ before the first request and every redirect hop, ignores env proxies, and caps t
 size — the ceiling applies to the *decoded* body, so a compressed response can't expand past it,
 and a plugin-supplied limit cannot raise it. A `TARGET` HTTP grant always requires verified
 ownership, whatever the plugin declares. Scanners may only contact declared public data
-services; active checks (target HTTP) require ownership (#14) |
+services; active checks (target HTTP) require a verified, unexpired ownership proof |
+| SSRF via the ownership check | The check follows a zone's nameservers, which the domain's owner controls. Every nameserver address is validated with the scan-target policy (no private, loopback, link-local/metadata, multicast or reserved ranges) and an internal-only delegation simply fails; replies are read, never followed, and only a direct TXT record for the exact name counts. Bounded: 3 nameservers, 2 s each, 64 KiB responses (ADR 0014) |
 | Cross-tenant data access | `org_id` on every tenant row, scoped queries, an isolation test per endpoint; links between tenant rows (asset parent and relations, scans, jobs, findings, evidence) use composite foreign keys `(id, org_id)`, so the database itself rejects a link to another org's row; Postgres RLS later |
 | XSS from scan data (TXT records, HTML, banners) | Jinja autoescape, never `|safe` on scan data; CSP `default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'` (no `unsafe-inline`/`unsafe-eval`; Alpine CSP build; a test rejects inline script/style/handlers in rendered pages) |
 | CSRF | Flask-WTF `CSRFProtect` on every POST/PUT/PATCH/DELETE: hidden `csrf_token` in forms, `X-CSRFToken` header for HTMX via `<body hx-headers>`; `SameSite=Lax` session cookie; logout is POST-only |
@@ -30,10 +35,12 @@ services; active checks (target HTTP) require ownership (#14) |
 | Credentials in asset values | URL assets with `user:pass@` are rejected, never stored; error messages don't echo them |
 | Prompt injection via scan data | scan data is delimited and size-capped in prompts, output is schema-validated, AI cannot take actions |
 | Secret leakage / forged sessions | env vars and connection URLs typed as `SecretStr` (masked in repr); `ENV=prod` refuses to start unless `SECRET_KEY` is ≥ 32 chars and not a placeholder such as `change-me`; org API keys encrypted at rest (Fernet/MultiFernet); structlog redacts secret-looking keys; keys never rendered back in full |
-| Malicious archive *(later)* | extracted only inside the sandbox by a purpose-built loop that never creates links; links, device nodes and FIFOs are skipped with a reason; absolute paths, `..`, duplicate paths and corrupt archives reject the whole artifact; size, file-count, depth and ratio caps count while writing and fail the job, because a partial tree would read as clean; nested archives aren't unpacked (ADR 0015) |
-| Repository fetch abuse (SSRF, `git` transports) *(later)* | no `git` binary with network access: smart HTTP in Python over the pinned safe client; exact-match forge allowlist in code; URLs rebuilt from a validated `host/path`; no redirects; dumb HTTP refused; size and time caps; the pack is stored unparsed; analysis waits for ownership proof (ADR 0015) |
+| Malicious archive *(later)* | extracted only inside the sandbox by a purpose-built loop that never creates links; links, device nodes and FIFOs are skipped with a reason; absolute paths, `..`, duplicate paths and corrupt archives reject the whole artifact; size, file-count, depth and ratio caps count while writing and fail the job, because a partial tree would read as clean; nested archives aren't unpacked (ADR 0017) |
+| Repository fetch abuse (SSRF, `git` transports) *(later)* | no `git` binary with network access: smart HTTP in Python over the pinned safe client; exact-match forge allowlist in code; URLs rebuilt from a validated `host/path`; no redirects; dumb HTTP refused; size and time caps; the pack is stored unparsed; analysis waits for ownership proof (ADR 0017) |
 | Log injection | client `X-Request-ID` accepted only if it matches `[A-Za-z0-9-]{1,64}`, otherwise replaced; structured (JSON) logs |
-| Malicious uploads *(later)* | never executed; analysis in gVisor sandboxes without network |
+| Malicious uploads *(later)* | never executed or built; static analysis only, in a fresh gVisor container per job started by `sandbox-launcher` through `sandbox-proxy`, the only holder of the Docker socket, which rejects any create request outside the sandbox policy (ADR 0016); the Celery worker holding DB/Redis credentials never opens artifact bytes |
+| Parser exploit in an analysis tool *(later)* | the sandbox has no network (`--network=none`), no credentials or Docker socket, a read-only root and input, non-root UID, all capabilities dropped, `no-new-privileges`; output is JSON on stdout, capped at 2 MiB and validated as `ScanOutput` before use; stderr is discarded (it can echo found secrets) |
+| Resource exhaustion by an artifact *(later)* | per-run CPU, memory (no swap), pids, open files, `tmpfs` scratch size and a wall-time kill enforced by the launcher; worker concurrency caps parallel sandboxes; prod refuses to run without `runsc` |
 | Account attacks | argon2id hashing (`infra/crypto.py`, argon2-cffi defaults, rehash on login when parameters change); passwords 12–1024 chars (upper bound limits hashing DoS), never logged or echoed in errors; emails normalized to lowercase and unique; login passwords over 1024 chars are rejected without hashing the submitted value (a fixed dummy value is hashed instead, so the path costs the same argon2 work for known and unknown accounts; known accounts are audited with reason `password_too_long`); one generic "Invalid email or password" for every failure and equal argon2 work for unknown emails (no account enumeration via login or timing); inactive users can't log in and lose access on their next request; audit log of `user.login`, `user.login_failed` (with reason), `user.logout`, `asset.root_added` / `asset.root_restored` / `asset.root_archived` (`details` never holds secrets) |
 | Brute force | Flask-Limiter (Redis, in-memory fallback): login 5/min and 20/h per IP plus 10/h per email across IPs, signup 5/h per IP, 429 with `Retry-After`; real client IP behind the proxy via `PROXY_COUNT` (`ProxyFix`) |
 | Session theft / fixation | signed cookie session cleared on login and logout; `HttpOnly`, `SameSite=Lax`, prod: `Secure` + `__Host-` prefix; absolute lifetime `SESSION_LIFETIME_HOURS` (12h) counted from login and checked server-side (`auth_at` in the session), so activity can't extend it; cookie not re-issued on every request; no remember-me. Known limit: a stolen cookie stays valid until it expires (server-side revocation later) |
@@ -55,9 +62,9 @@ lock so overlapping scans can't each claim the full allowance and a check on a d
 subdomain cannot claim a fresh one; a policy error fails only its job.
 
 Active/analysis queues remain reserved and cannot be selected in a scan profile; active checks
-stay denied until ownership verification ships (#14).
+run only on assets whose root domain proved ownership by DNS TXT (ADR 0014).
 
-Repository fetches (ADR 0015, not built yet) pass the same gate through `check_fetch` and are
+Repository fetches (ADR 0017, not built yet) pass the same gate through `check_fetch` and are
 not scanners: `worker-fetch` reaches only allowlisted forges, using a streaming transport
 limited to the two smart-HTTP requests. Scanners keep the GET-only client with its 1 MiB cap.
 The fetcher stores packs unparsed, so hostile objects are first parsed inside the sandbox.

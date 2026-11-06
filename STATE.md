@@ -2,49 +2,34 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-10-31 · **Branch:** `13-assets-ui` · **Issue:** #13 (Assets UI)
+**Updated:** 2026-11-05 · **Branch:** `docs/83-fetcher-adr` · **Issue:** #83 (analysis sandbox ADRs)
 
 ## Status
-#13 is complete in two PRs: PR 1 (#113, services + `/api/v1/assets`) is merged; PR 2 (UI,
-Closes #13) is open from `13-assets-ui`. When it merges, #13 is done.
+PR [#129](https://github.com/cpt9m0/attacksurf/pull/129) documents repository fetching and archives.
+Its review fixes include this handoff and ADR numbering reconciled with current main.
+Sandbox ADR 0016 is merged in #128. Fetching is ADR 0017; no runtime is implemented yet.
 
 ## Last task
-- Pages in `web/ui.py`: `/assets` (add-domain form with HTMX inline errors, filter bar swapping
-  only `#asset-results`, pagination), `/assets/<id>?tab=overview|findings|scans` (metadata,
-  relations both ways, findings, scan history), `POST /assets/<id>/archive` (admin, confirm dialog).
-- Components: `confirm_dialog` (`<dialog>` + `Alpine.data("confirmDialog")`), `select_field`,
-  `form_field(autofocus=)`, `relative_time` (`web/formatting.py` filters), `data_table` call blocks.
-- CSS: `.content { min-width: 0 }` so wide tables scroll inside `.table-wrap`; new tokens
-  `--color-backdrop`, `--field-min-width`, `--filter-min-width`, `--meta-column-min-width`.
-- Review fixes (Codex on #118): history restores get the full page (`web/rendering.py`), and
-  filter forms / tab bars use `hx-sync="this:replace"`; both reproduced and verified in Chromium.
-- Checked in real Chromium (light + dark): add/invalid add, search focus, filters, tabs, dialog
-  (Escape/Cancel/confirm), archive; no console errors besides the intended 422.
+- Include this handoff in the same PR as the fetching decision, addressing Codex review.
+- Rename the fetching ADR to 0017; preserve ownership ADRs 0014/0015 and refer to sandbox
+  ADR 0016 for its roles, proxy policy, scratch storage, and plaintext artifact mount.
+- Update the changelog, architecture fetch-queue row, and security references.
+- Document forge-allowlisted smart HTTP with pinned connections, opaque pack storage,
+  sandbox-only ownership verification/extraction, and archive rejection/size rules.
+  Validation: 923 passed, 3 worker E2E skips, 97.63% coverage; ruff, pyright, and hooks pass.
 
 ## Next step
-Pick up #14 (DNS TXT ownership verification): it unblocks active checks and plugs a real
-`OwnershipChecker` into `workers.runtime.scanner_gate()`. #116 (cancel scans on archive) is a
-small MVP bug that can go first if preferred.
+Request Codex review on the pushed fixes, then merge #129 only if review and CI pass.
 
 ## Open threads
-- Follow-ups filed: #114 shell overflows at 390px (pre-existing, every page), #115 tag editing,
-  #116 in-flight scans keep running after their root is archived, #117 overlapping roots.
-- `.env.example` still lacks ALLOW_SIGNUP, SESSION_LIFETIME_HOURS, PROXY_COUNT.
-- The Playwright MCP expects Google Chrome (`/opt/google/chrome`), which isn't installed. The
-  user approved Playwright's Chromium in `~/.cache/ms-playwright`; drive it with a scratchpad
-  script via `uv run --no-project --with playwright==1.55.0 python …`.
+- #83 remains open until [#130](https://github.com/cpt9m0/attacksurf/pull/130), which covers
+  analysis tools, pinned images, and licenses. Reconcile its ADR number and references next.
+- Fetch/analysis queues remain reserved until their implementations exist.
+- Earlier local main handoffs are preserved in Git stashes, including
+  `codex: preserve local handoff before PR 129`.
+- Follow-ups: #114–#117. `.env.example` lacks ALLOW_SIGNUP, SESSION_LIFETIME_HOURS, PROXY_COUNT.
 
 ## Notes for the next agent
-- `web/` can't import SQLAlchemy (import-linter): read models live in `services/asset_views.py`.
-- DB-backed web tests: each request closes the shared `db_session` at teardown, detaching ORM rows;
-  pass ids around and re-read (`tests/integration/web/test_assets_ui.py` helpers).
-- Unit tests in `tests/unit/web/test_ui.py` stub `asset_views` (no DB there).
-- HTMX keeps its history cache in **sessionStorage** (`htmx-history-cache`); clear it there to
-  force a server history restore when testing Back navigation.
-- When reproducing a client race in Playwright, run a control with the fix removed (e.g. strip the
-  attribute via JS); a repro that passes both ways proves nothing. See #118 review fixes.
-- HTMX `hx-push-url` changes use pushState: in Playwright wait with `expect(page).to_have_url()`,
-  not `wait_for_url` (it waits for a load event that never comes).
-- Signup is rate limited to 5/hour per IP, also in dev; reuse accounts when testing by hand.
-- DB tests: `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@localhost:5432/attacksurf_test`.
-- Stale shell groups: use `sg docker -c 'make up'`. Never chmod the Docker socket.
+- Commits/pushes are authorized for all PRs in this chat; merge only when requested.
+- User requests the same review/CI-gated merge workflow for PR #129 as for #128.
+- Ownership verification and hermetic worker settings are already merged; retain them.

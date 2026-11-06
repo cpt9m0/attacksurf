@@ -3,6 +3,7 @@
 {% from "components/form.html" import form_field, select_field %}
 {% from "components/table.html" import data_table, pagination %}
 {% from "components/time.html" import relative_time %}
+{% from "components/verification.html" import ownership_badge %}
 {% block title %}Assets{% endblock %}
 {% block content %}
 <h1>Assets</h1>
@@ -46,6 +47,8 @@
       {%- if key == "value" -%}
         <a class="mono" href="{{ url_for('ui.asset_detail', asset_id=row.id) }}">{{ row.value }}</a>
         {%- if not row.is_active %} {{ status_pill("archived") }}{% endif %}
+        {#- Only roots are checked; a subdomain inherits its root's proof, so no badge here. -#}
+        {%- if row.root_id is none and row.verification == "verified" %} {{ ownership_badge("verified") }}{% endif %}
       {%- elif key == "type" -%}
         {{ row.type }}
       {%- elif key == "root" -%}
