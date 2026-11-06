@@ -39,6 +39,17 @@ def test_empty_env_value_is_treated_as_unset(clean_env: pytest.MonkeyPatch) -> N
     assert settings_from_env().llm_base_url is None
 
 
+def test_llm_endpoint_from_environment_masks_credentials(clean_env: pytest.MonkeyPatch) -> None:
+    endpoint = "https://endpoint-user:endpoint-password@gateway.example/v1"
+    clean_env.setenv("LLM_BASE_URL", endpoint)
+
+    settings = settings_from_env()
+
+    assert "endpoint-password" not in repr(settings)
+    assert isinstance(settings.llm_base_url, SecretStr)
+    assert settings.llm_base_url.get_secret_value() == endpoint
+
+
 def test_prod_without_secret_key_fails_fast() -> None:
     with pytest.raises(ValidationError, match="SECRET_KEY must be set"):
         make_settings(env="prod")

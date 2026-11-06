@@ -37,11 +37,11 @@ class Settings(BaseSettings):
     # entry is the client IP for rate limiting; leave 0 when the app is reached directly.
     proxy_count: int = Field(default=0, ge=0, le=5)
 
-    # Instance LLM config (ADR 0014): orgs without their own key use it, capped (#24). Model
+    # Instance LLM config (ADR 0019): orgs without their own key use it, capped (#24). Model
     # names come only from config, so there is no default; no key or no model means AI is off.
     llm_provider: ProviderKind = ProviderKind.ANTHROPIC
     llm_model: str | None = None
-    llm_base_url: str | None = None
+    llm_base_url: SecretStr | None = None
     llm_api_key: SecretStr | None = None
 
     _secret_key_generated: bool = PrivateAttr(default=False)

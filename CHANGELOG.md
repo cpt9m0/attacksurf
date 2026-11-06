@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Fixed
+- LLM endpoint credentials are masked in settings and provider-config representations;
+  base URLs remain `SecretStr` through config resolution (#23).
 - The test suite passes on Windows checkouts: `.gitattributes` keeps LF line endings whatever
   the local `core.autocrlf` setting (vendored files are never converted, so their SHA-256
   checks hold), the vendor tests read files as UTF-8, and the connection-failure test simulates

@@ -52,6 +52,9 @@ a cap. Development uses Meta's Muse Spark models, which serve both API formats w
 - **Base URLs**: `LLM_BASE_URL` is set by the operator and trusted. Org-supplied base URLs are
   accepted only once #24 validates them through ScopeGuard (SSRF), both when saved and when
   connecting; `resolve_llm_config` passes `OrgLLMConfig.base_url` through unchecked.
+  Base URLs can contain credentials, so `Settings.llm_base_url`, `OrgLLMConfig.base_url` and
+  `LLMConfig.base_url` use `SecretStr`. Resolution preserves the secret wrapper; adapters
+  unwrap with `get_secret_value()` only when constructing the SDK client.
 - **Tests**: `tests/fakes.FakeLLMProvider` runs the shared validator; every provider passes
   `tests/unit/ai/contract.ProviderContract` with stubbed HTTP. Live calls are marked `llm_live`
   and round-trip `contract.Verdict` on both APIs; a collection hook in `tests/conftest.py` skips

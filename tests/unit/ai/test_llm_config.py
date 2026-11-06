@@ -51,7 +51,7 @@ def test_resolve_llm_config_falls_back_to_the_instance_key() -> None:
         model="muse-spark-1.3-contributor",
         api_key=SecretStr("instance-key"),
         source=KeySource.INSTANCE,
-        base_url="https://api.meta.ai/v1",
+        base_url=SecretStr("https://api.meta.ai/v1"),
     )
 
 
@@ -76,3 +76,32 @@ def test_llm_config_repr_hides_the_api_key() -> None:
     config = resolve_llm_config(None, make_settings(**INSTANCE))
 
     assert "instance-key" not in repr(config)
+
+
+def test_instance_endpoint_credentials_are_hidden_after_resolution() -> None:
+    endpoint = "https://endpoint-user:endpoint-password@gateway.example/v1"
+    settings = make_settings(**(INSTANCE | {"llm_base_url": endpoint}))
+
+    config = resolve_llm_config(None, settings)
+
+    assert config is not None
+    for value in (settings, config):
+        assert "endpoint-user" not in repr(value)
+        assert "endpoint-password" not in str(value)
+    assert isinstance(config.base_url, SecretStr)
+    assert config.base_url.get_secret_value() == endpoint
+
+
+def test_org_endpoint_credentials_are_hidden_after_resolution() -> None:
+    endpoint = "https://org-user:org-password@gateway.example/v1"
+    org = org_config(base_url=SecretStr(endpoint))
+
+    config = resolve_llm_config(org, make_settings(**INSTANCE))
+
+    assert config is not None
+    for value in (org, config):
+        assert "org-user" not in repr(value)
+        assert "org-password" not in str(value)
+    assert config.base_url is org.base_url
+    assert isinstance(config.base_url, SecretStr)
+    assert config.base_url.get_secret_value() == endpoint

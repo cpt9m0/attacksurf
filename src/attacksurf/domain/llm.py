@@ -46,7 +46,7 @@ class OrgLLMConfig:
     provider: ProviderKind
     model: str
     api_key: SecretStr | None
-    base_url: str | None = None
+    base_url: SecretStr | None = None
 
 
 @dataclass(frozen=True)
@@ -57,7 +57,7 @@ class LLMConfig:
     model: str
     api_key: SecretStr
     source: KeySource
-    base_url: str | None = None
+    base_url: SecretStr | None = None
 
 
 @dataclass(frozen=True)

@@ -11,6 +11,7 @@ description: Add or change an LLM-powered feature or prompt (triage, summaries, 
 - Every call goes through the `LLMProvider` protocol (`domain/llm.py`, ADR 0019), built from the
   `LLMConfig` that `ai/config.resolve_llm_config` returns (None = AI off: skip gracefully).
   Never import a provider SDK outside `ai/providers/`; never hardcode a model name.
+  API keys and base URLs stay `SecretStr`; unwrap them only when constructing the SDK client.
 - Every call has a **pydantic output schema**; `ai/structured.complete_structured` gives invalid
   output one retry, then raises `LLMOutputError`: catch it and skip gracefully.
 - Tests use `tests.fakes.FakeLLMProvider`; a new provider adapter must pass
