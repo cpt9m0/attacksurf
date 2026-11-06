@@ -249,7 +249,8 @@ def test_deleting_a_scan_keeps_findings_and_job_history_of_assets(
     scan = _scan(acme)
     _add(db_session, scan)
     finding = _finding(acme, first_seen_scan_id=scan.id, last_seen_scan_id=scan.id)
-    _add(db_session, finding, _job(acme, scan))
+    job = _job(acme, scan)
+    _add(db_session, finding, job)
 
     db_session.execute(delete(Scan).where(Scan.id == scan.id))
     db_session.expire_all()
@@ -260,7 +261,8 @@ def test_deleting_a_scan_keeps_findings_and_job_history_of_assets(
         None,
         acme.org.id,
     )
-    assert db_session.scalars(select(Job)).all() == []
+    # The job is kept as history and loses its scan reference (verification jobs have none).
+    assert db_session.get_one(Job, job.id).scan_id is None
 
 
 def test_deleting_an_asset_keeps_jobs_but_drops_its_findings(
@@ -310,7 +312,8 @@ def test_deleting_a_root_asset_removes_its_scans_and_jobs(
     db_session.expunge_all()
 
     assert db_session.scalars(select(Scan)).all() == []
-    assert db_session.scalars(select(Job)).all() == []
+    # Scans cascade away under the asset; the jobs that referenced them are kept, unattached.
+    assert [job.scan_id for job in db_session.scalars(select(Job)).all()] == [None]
 
 
 def test_scan_results_are_tenant_isolated(

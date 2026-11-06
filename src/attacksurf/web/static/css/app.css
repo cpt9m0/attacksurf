@@ -680,3 +680,44 @@ dl.meta dd {
   gap: var(--space-3);
   margin: var(--space-5) 0 0;
 }
+
+/* Ownership card (#14): heading + badge, then the record with its copy button */
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.card-header .card-title {
+  padding: 0;
+  margin: 0;
+}
+
+.copy-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-4);
+  background: var(--color-surface-2);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.copy-field code {
+  flex: 1 1 var(--field-min-width);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.ownership .page-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-left: 0;
+}

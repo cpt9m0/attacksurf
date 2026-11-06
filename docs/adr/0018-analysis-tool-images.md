@@ -1,11 +1,11 @@
-# 0016. Analysis tools and their images
+# 0018. Analysis tools and their images
 
 - Status: accepted
 - Date: 2026-11-04
 
 ## Context
-ADR 0014 runs each analyzer in a no-network sandbox, chosen by image digest from a fixed
-allowlist. ADR 0015 adds an extractor and a pack-to-tree step inside that sandbox. This ADR
+ADR 0016 runs each analyzer in a no-network sandbox, chosen by image digest from a fixed
+allowlist. ADR 0017 adds an extractor and a pack-to-tree step inside that sandbox. This ADR
 decides which tools go in, how their images are built and how their data stays current.
 
 Three facts shape it:
@@ -28,7 +28,7 @@ Licenses were checked against each project's repository or PyPI metadata on 2026
 | LIEF | Apache-2.0 | ELF, PE and Mach-O parsing | #102 |
 | androguard | Apache-2.0 | APK parsing | #105 |
 
-Supporting pieces also ship in the images: the ADR 0015 extractor (our own code, AGPL) and `git`
+Supporting pieces also ship in the images: the ADR 0017 extractor (our own code, AGPL) and `git`
 (GPL-2.0-only), which gitleaks needs in order to read history.
 
 - **License compatibility:** all of these can ship alongside the project. Opengrep and `git` run
@@ -64,10 +64,10 @@ Supporting pieces also ship in the images: the ADR 0015 extractor (our own code,
 - **Rules and checks** change with the tool version, through the same PR as any upgrade.
 - **The OSV database lives in a shared volume, synced daily (#93).** A passive task with a
   `services` grant for OSV's public data host writes it, and the sandbox mounts it read-only at
-  `/data/osv`, for the osv-scanner image only (ADR 0014). The two-week rule covers tool code, not
+  `/data/osv`, for the osv-scanner image only (ADR 0016). The two-week rule covers tool code, not
   this data.
 - **The sync is streamed and unparsed.** OSV's files far exceed the scanner client's 1 MiB cap, so
-  it uses a streaming port like ADR 0015's, limited to that host and size-capped. It stores the
+  it uses a streaming port like ADR 0017's, limited to that host and size-capped. It stores the
   files as downloaded and never unpacks them, so only the sandbox parses them.
 - **Each update is complete and atomic.** The sync writes a new snapshot, records its date and
   SHA-256, then swaps it in. The previous snapshot stays until jobs using it have finished.
@@ -76,7 +76,7 @@ Supporting pieces also ship in the images: the ADR 0015 extractor (our own code,
 
 ### Rejected
 - **Downloading databases when a job starts:** this needs network access in the sandbox, which
-  ADR 0014 forbids.
+  ADR 0016 forbids.
 - **Baking OSV data into the image, rebuilt daily:** the digest would pin the exact data and the
   proxy would stay at one mount, but every refresh would need a new digest deployed, and a
   stalled deploy would stop dependency scans.
