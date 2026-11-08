@@ -2,12 +2,11 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-05 · **Branch:** `23-llm-contract` · **Issue:** #23 (LLM providers), PR 1 of 4
+**Updated:** 2026-11-05 · **Branch:** `main` · **Issue:** #23 (LLM providers), PR 1 of 4
 
 ## Status
-PR [#131](https://github.com/cpt9m0/attacksurf/pull/131) defines the shared LLM contract/config.
-Conflicts with current main are resolved. Codex found a base-URL credential leak on `10081a5`;
-the fix masks URLs with SecretStr in settings and both contract types and awaits fresh review.
+PR [#131](https://github.com/cpt9m0/attacksurf/pull/131) is squash-merged as `b7c0a1c`.
+Local `main` is synchronized with origin; Codex review and CI pass on `d1acef2`.
 ADR 0019 covers LLM contracts; ownership and analysis ADRs 0014–0018 are retained.
 
 ## Last task
@@ -21,9 +20,10 @@ ADR 0019 covers LLM contracts; ownership and analysis ADRs 0014–0018 are retai
   constants, provider contract tests, and the reviewed Windows test fixes.
 
 ## Next step
-Request Codex review on the pushed SecretStr fix, then merge if review and CI pass.
+Continue #23 provider adapters against ADR 0019 and the shared contract tests.
 
 ## Open threads
+- This final handoff refresh is local and uncommitted; no direct commit to main was made.
 - #23 remains open: next PRs implement Anthropic and OpenAI-compatible adapters; final PR adds
   LLMUsage/factory and closes #23. Each adapter must enforce the 240 s total call deadline.
 - SDK retries vs. Celery-only retries remain an adapter decision; org base URLs require

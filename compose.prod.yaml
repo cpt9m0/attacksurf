@@ -2,6 +2,8 @@
 # Traffic: Cloudflare edge -> Cloudflare Tunnel (cloudflared) -> caddy:80 -> web:5000 (gunicorn).
 # No inbound ports are published: cloudflared dials out, everything else is internal-only.
 # Usage: docs/deployment.md.
+# SECRETS_DIR overrides where the secret files live (default /etc/attacksurf); only for a
+# non-root local staging run, never in production.
 name: attacksurf-prod
 
 x-app: &app
@@ -59,8 +61,8 @@ services:
       dockerfile: Caddy.Dockerfile
     image: attacksurf-caddy:prod
     restart: unless-stopped
+    env_file: [./deploy/attacksurf.env]
     environment:
-      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in the deploy env file}
       CF_DNS_API_TOKEN_FILE: /run/secrets/cf_dns_api_token
     secrets: [cf_dns_api_token]
     volumes:
@@ -133,13 +135,13 @@ services:
 
 secrets:
   tunnel_token:
-    file: /etc/attacksurf/tunnel.token
+    file: ${SECRETS_DIR:-/etc/attacksurf}/tunnel.token
   cf_dns_api_token:
-    file: /etc/attacksurf/cloudflare-dns-token
+    file: ${SECRETS_DIR:-/etc/attacksurf}/cloudflare-dns-token
   postgres_password:
-    file: /etc/attacksurf/postgres_password
+    file: ${SECRETS_DIR:-/etc/attacksurf}/postgres_password
   redis_password:
-    file: /etc/attacksurf/redis_password
+    file: ${SECRETS_DIR:-/etc/attacksurf}/redis_password
 
 networks:
   internal:
