@@ -5,15 +5,15 @@ published: `cloudflared` dials out to Cloudflare, and everything else is on a pr
 network.
 
 ```
-Browser ── TLS ──► Cloudflare edge ──► cloudflared ══ TLS ══► caddy:80 ──► web:5000 (gunicorn)
-                        (proxied)        (tunnel)      (re-originated)
+Browser ── TLS ──► Cloudflare edge ◄══ TLS ══► cloudflared ── HTTP ──► caddy:80 ──► web:5000
+                    (proxied)      (tunnel's own leg)  (private network)
 ```
 
-Cloudflare terminates the visitor's TLS and `cloudflared` re-originates a TLS connection to the
-edge. Caddy therefore listens plain HTTP on the private network and does **not** manage a public
-certificate; the zone only needs SSL mode **Full** (Cloudflare validates the tunnel's own origin
-certificate, which this stack never sees). The app sees one proxy hop (Cloudflare), so
-`PROXY_COUNT=1`.
+Cloudflare terminates the visitor's TLS, and `cloudflared`'s encrypted leg is to the Cloudflare
+edge, not to Caddy. The local service leg is plain HTTP on a private Docker network, so Caddy does
+**not** manage a certificate and the public hostname must point at `http://caddy:80`, never
+`https://caddy:443`. The zone only needs SSL mode **Full**; the app still sees one proxy hop
+(Cloudflare), so `PROXY_COUNT=1`.
 
 ## Files
 
@@ -28,7 +28,8 @@ certificate, which this stack never sees). The app sees one proxy hop (Cloudflar
 ## Cloudflare setup (once)
 
 1. **Create the tunnel**: Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared.
-   Copy the token (`eyJ...`), not the `cfat_` API token.
+   Copy the **tunnel token** (`eyJ...`). No Cloudflare API token is needed: this stack never
+   issues certificates of its own.
 2. **Public hostnames** (tunnel → Public Hostnames), both `HTTP` to `caddy:80`:
    - `attacksurf.dev` (apex)
    - `www.attacksurf.dev`
@@ -70,7 +71,7 @@ sudo chown 0:10001 /etc/attacksurf/redis_password      && sudo chmod 640 /etc/at
 Verify with
 `docker compose -f compose.prod.yaml exec web sh -c 'id; wc -c < /run/secrets/postgres_password'`.
 
-Then the app env file, from the template (it holds `SECRET_KEY` and `ACME_EMAIL`, never the
+Then the app env file, from the template (it holds `SECRET_KEY`, never the
 passwords above):
 
 ```bash
@@ -78,7 +79,7 @@ git clone https://github.com/cpt9m0/attacksurf.git /opt/attacksurf
 cd /opt/attacksurf
 sudo install -m 640 -g "$(id -gn)" deploy/attacksurf.env.example /etc/attacksurf/attacksurf.env
 sudo chgrp "$(id -gn)" /etc/attacksurf && sudo chmod 750 /etc/attacksurf
-sudoedit /etc/attacksurf/attacksurf.env      # set SECRET_KEY (openssl rand -base64 48), ACME_EMAIL
+sudoedit /etc/attacksurf/attacksurf.env      # set SECRET_KEY (openssl rand -base64 48)
 ln -s /etc/attacksurf/attacksurf.env deploy/attacksurf.env
 ```
 

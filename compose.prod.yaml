@@ -44,7 +44,7 @@ services:
   # Publishes the app at attacksurf.dev and www.attacksurf.dev; routes are configured in the
   # Cloudflare dashboard (remote-managed tunnel), not here.
   cloudflared:
-    image: cloudflare/cloudflared:2026.10.0
+    image: cloudflare/cloudflared:2026.10.0@sha256:9b49eed8f62806d5d45ddf59ecefb5710429598ea6d3fcccd2af938f621b2b07
     restart: unless-stopped
     command: ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:20241", "run"]
     environment:
@@ -110,12 +110,15 @@ services:
   redis:
     image: redis:8@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6
     restart: unless-stopped
-    # Redis has no *_FILE convention (that is redis-stack); the password is read from the secret
-    # at start. `exec` keeps the server as PID 1 so it receives stop signals directly.
-    command:
+    # The image entrypoint drops privileges to `redis` before exec'ing the server. It must keep
+    # running: replacing it with a shell would leave redis-server as root. The password is read
+    # from the mounted secret in an environment assignment, which the entrypoint ignores, and
+    # expanded by its own shell into the redis-server arguments.
+    entrypoint:
       - sh
       - -c
-      - exec redis-server --requirepass "$$(cat /run/secrets/redis_password)" --save "" --appendonly no
+      - REDIS_PASSWORD="$$(cat /run/secrets/redis_password)" exec docker-entrypoint.sh redis-server --requirepass "$$REDIS_PASSWORD" --save "" --appendonly no
+      - --
     secrets: [redis_password]
     healthcheck:
       test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$(cat /run/secrets/redis_password)\" ping | grep -q PONG"]
