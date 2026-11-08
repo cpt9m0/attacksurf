@@ -11,3 +11,5 @@ RUN xcaddy build \
 FROM caddy:${CADDY_VERSION}
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 COPY Caddyfile /etc/caddy/Caddyfile
+COPY --chmod=0755 caddy-entrypoint.sh /usr/local/bin/caddy-entrypoint
+ENTRYPOINT ["/usr/local/bin/caddy-entrypoint"]
