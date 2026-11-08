@@ -2,38 +2,50 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-05 · **Branch:** `main` · **Issue:** #23 (LLM providers), PR 1 of 4
+**Updated:** 2026-11-08 · **Branch:** `132-cloudflare-caddy-tls` (PR #133, draft) · **Issue:** #132
 
 ## Status
-PR [#131](https://github.com/cpt9m0/attacksurf/pull/131) is squash-merged as `b7c0a1c`.
-Local `main` is synchronized with origin; Codex review and CI pass on `d1acef2`.
-ADR 0019 covers LLM contracts; ownership and analysis ADRs 0014–0018 are retained.
+`https://attacksurf.dev` is **live** from the shared `lili` host (Oracle ARM, Ubuntu 24.04) via a
+Cloudflare Tunnel. PR [#133](https://github.com/cpt9m0/attacksurf/pull/133) implements it; CI was
+pending at handoff. Verified on the host: `/healthz` 200, `/` → `/login`, `www` → apex 301,
+signup 200, 4 tunnel connections, and Caddy's access log resolves the visitor IP.
 
 ## Last task
-- Combine changelog entries and refresh this handoff for the current contract work.
-- Preserve #127's early hermetic worker settings in `pytest_configure` alongside the new
-  `pytest_collection_modifyitems` live-LLM guard; drop only the obsolete Iterator import.
-- Renumber the LLM ADR to 0019 and update LLM-specific docs, skill, and code/test references.
-- Mask endpoint credentials in settings and resolved org/instance configs; regression tests
-  reproduce the leak before the fix and verify masking while retaining the exact URL.
-- Preserve shared schema validation/retry, usage/error types, config resolution, timeout
-  constants, provider contract tests, and the reviewed Windows test fixes.
+- Added `compose.prod.yaml` (cloudflared, caddy, web/gunicorn, postgres, redis, migrate), a plain-
+  HTTP Caddyfile behind the tunnel, and `docs/deployment.md`; ADR 0020 records moving public TLS
+  to Cloudflare (SSL mode **Full**, not strict — there is no origin certificate).
+- Fixed rate limiting: it keyed on `get_remote_address` (first hop). Now `CF-Connecting-IP`, else
+  the leftmost `X-Forwarded-For`, which is safe only because the origin has no public port.
+- Fixed a date-dependent test in `test_verifications.py` that failed after its fixed `NOW` passed
+  the grace window; it blocked the pre-push hook and would have broken CI for a week.
+- **Host layout:** source at `/opt/attacksurf` (plain files, not a git clone — GitHub needs creds
+  there); secrets in `/etc/attacksurf/` (`tunnel.token` 640 client:65532, `postgres_password`,
+  `redis_password` 640 client:10001, `attacksurf.env` 640 client; `cloudflare-dns-token` is now
+  unused). Deploy: upload a `git archive` tarball, extract, `docker compose -f compose.prod.yaml
+  up -d --build`.
 
 ## Next step
-Continue #23 provider adapters against ADR 0019 and the shared contract tests.
+1. Watch PR #133 CI; mark ready and merge when green (commits/pushes are authorized in this chat;
+   merge only when asked).
+2. After merge, replace `/opt/attacksurf` with a `git clone` on the host and deploy from `main`
+   (needs a deploy key or the repo made accessible to the `ubuntu` user).
 
 ## Open threads
-- This final handoff refresh is local and uncommitted; no direct commit to main was made.
-- #23 remains open: next PRs implement Anthropic and OpenAI-compatible adapters; final PR adds
-  LLMUsage/factory and closes #23. Each adapter must enforce the 240 s total call deadline.
-- SDK retries vs. Celery-only retries remain an adapter decision; org base URLs require
-  ScopeGuard validation in #24 before use; PR 4 adds the AI-off startup warning.
-- #83 is closed with ADRs 0016–0018; sandbox/fetch/analyzer runtime is not implemented yet.
-- Earlier local main handoffs are preserved in Git stashes, including
-  `codex: preserve local handoff before PR 131`.
-- Follow-ups: #114–#117. `.env.example` lacks ALLOW_SIGNUP, SESSION_LIFETIME_HOURS, PROXY_COUNT.
+- **Rotate secrets pasted in chat:** the tunnel token is being rotated now; the `cfat_` API token
+  is no longer used by the stack and should be deleted in Cloudflare.
+- **No workers/beat in the prod stack** (#29): scans, ownership checks and AI jobs stay queued on
+  the live instance. Stacks on the same host keep Postgres/Redis; this one uses its own.
+- **Backups, Sentry, log rotation, host hardening** remain in #29. The host is shared with
+  jellyfin, uptime-kuma, `csday-prod` and an unrelated MetaHack `attacksurf-postgres/redis` pair;
+  a dedicated VPS is an open question.
+- `ALLOW_SIGNUP=true` on the public instance — close it until backups exist.
+- The local `STATE.md` edit present at session start (someone else's handoff refresh) was left
+  untracked outside this branch's commits.
 
 ## Notes for the next agent
-- Commits/pushes are authorized for all PRs in this chat; merge only when requested.
-- Keep worker configuration hermetic before collection; live LLM tests stay opt-in and never run in CI.
-- Validation: 1002 passed, 3 worker E2E skips, 97.72% coverage; all local checks pass.
+- Behaviour change to remember: `PROXY_COUNT` counts proxy **hops**; behind the tunnel it is 1.
+- Never put the tunnel/API tokens or DB passwords in the repo, the image, or a compose file; they
+  belong in `/etc/attacksurf/` with the uid/gid noted above.
+- Validate the Caddyfile with `caddy validate` in the built image before `up -d`; a bad config
+  makes caddy restart-loop and the site return 502 (happened twice during this task).
+- Validation: ruff, pyright, import-linter clean; 1005 passed, 3 skipped (worker E2E).
