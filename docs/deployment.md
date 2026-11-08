@@ -92,6 +92,14 @@ docker compose -f compose.prod.yaml ps
 curl -sS -o /dev/null -w '%{http_code}\n' https://attacksurf.dev/healthz   # 200
 ```
 
+`up -d` replaces `caddy` only after the new image builds; a Caddyfile error makes the container
+restart in a loop and the site returns 502. Check the config before deploying:
+
+```bash
+docker compose -f compose.prod.yaml run --rm --no-deps --entrypoint caddy caddy \
+  validate --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
 `postgres_password` and `redis_password` are read on first start; changing them later means
 updating the database's own password too (Redis has no persistence here, so it restarts clean).
 

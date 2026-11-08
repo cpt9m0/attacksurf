@@ -18,11 +18,17 @@
 	}
 }
 
-(attacksurf) {
+:80 {
+	# Access log: the visitor address in `client_ip` proves the forwarding chain works.
 	log {
 		output stdout
 		format json
-		level INFO
+	}
+
+	# Apex is canonical.
+	@www host www.attacksurf.dev
+	handle @www {
+		redir https://attacksurf.dev{uri} permanent
 	}
 
 	encode zstd gzip
@@ -41,17 +47,4 @@
 	}
 
 	reverse_proxy web:5000
-}
-
-:80 {
-	@apex host attacksurf.dev
-
-	handle @apex {
-		import attacksurf
-	}
-
-	# Apex is canonical.
-	handle {
-		redir https://attacksurf.dev{uri} permanent
-	}
 }
