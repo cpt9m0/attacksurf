@@ -19,6 +19,12 @@
 }
 
 (attacksurf) {
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+
 	encode zstd gzip
 
 	# The app sets its own CSP and clickjacking headers; these are the transport-level ones.
