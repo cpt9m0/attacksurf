@@ -16,6 +16,22 @@ x-app: &app
   # Redis and Postgres passwords come from the same secret files the servers use, so the
   # connection strings never appear in this file or in an env file.
   secrets: [postgres_password, redis_password]
+  entrypoint:
+    - bash
+    - -c
+    # Ubuntu-based image: `/bin/sh` is dash, which lacks `${var//x/y}`. The placeholders are
+    # replaced from the mounted secrets, then the service's own command (`$$@`) runs.
+    - export DATABASE_URL="$${DATABASE_URL//__PGPASS__/$$(cat /run/secrets/postgres_password)}" REDIS_URL="$${REDIS_URL//__REDIS_PASS__/$$(cat /run/secrets/redis_password)}"; exec "$$@"
+    - --
+  environment:
+    ENV: prod
+    # One proxy hop: Cloudflare. cloudflared and Caddy are not counted as extra hops for
+    # X-Forwarded-For (Caddy forwards the visitor address it received).
+    PROXY_COUNT: "1"
+    # Literal `$$` keeps Compose from interpolating; the placeholders are replaced from the
+    # mounted secrets by the entrypoint above (passwords may contain `@`).
+    DATABASE_URL: "postgresql+psycopg://attacksurf:__PGPASS__@postgres:5432/attacksurf"
+    REDIS_URL: "redis://:__REDIS_PASS__@redis:6379/0"
   depends_on:
     postgres:
       condition: service_healthy
@@ -61,9 +77,6 @@ services:
     restart: "no"
     command: ["alembic", "upgrade", "head"]
     env_file: [./deploy/attacksurf.env]
-    environment:
-      ENV: prod
-      PROXY_COUNT: "1"
     depends_on:
       postgres:
         condition: service_healthy
@@ -71,19 +84,7 @@ services:
   web:
     <<: *app
     env_file: [./deploy/attacksurf.env]
-    environment:
-      ENV: prod
-      # One proxy hop: Cloudflare. cloudflared and Caddy are not counted as extra hops for
-      # X-Forwarded-For (Caddy forwards the visitor address it received).
-      PROXY_COUNT: "1"
-      # Literal `$$` keeps Compose from interpolating; the placeholders are replaced from the
-      # mounted secrets by the entrypoint before gunicorn starts (passwords may contain `@`).
-      DATABASE_URL: "postgresql+psycopg://attacksurf:__PGPASS__@postgres:5432/attacksurf"
-      REDIS_URL: "redis://:__REDIS_PASS__@redis:6379/0"
-    entrypoint:
-      - sh
-      - -c
-      - DSN="$${DATABASE_URL//__PGPASS__/$(cat /run/secrets/postgres_password)}"; REDIS_DSN="$${REDIS_URL//__REDIS_PASS__/$(cat /run/secrets/redis_password)}"; export DATABASE_URL="$$DSN" REDIS_URL="$$REDIS_DSN"; exec gunicorn "attacksurf.app:create_app()" --bind 0.0.0.0:5000 --workers 2 --threads 4
+    command: ["gunicorn", "attacksurf.app:create_app()", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "4"]
     expose: ["5000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=2)"]

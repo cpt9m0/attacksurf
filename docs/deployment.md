@@ -49,6 +49,9 @@ sudo sh -c 'printf %s "$(openssl rand -hex 32)" > /etc/attacksurf/redis_password
 sudo chmod 600 /etc/attacksurf/*
 ```
 
+Passwords are hex because they are embedded in the `DATABASE_URL`/`REDIS_URL` values; a random
+string with `@`, `/` or `:` would need percent-encoding instead.
+
 Compose binds these files into `/run/secrets/`, which is an ordinary mount, not a Swarm secret:
 ownership and mode stay those of the host file. Containers that read a secret as non-root cannot
 read a root-only file (`cloudflared` runs as uid `65532`, the app as `10001`; `caddy`,
