@@ -14,6 +14,7 @@ dist
 .env
 .env.*
 !.env.example
+deploy/attacksurf.env
 tests
 docs
 *.md

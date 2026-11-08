@@ -1,0 +1,48 @@
+# Parse strictly at startup: a typo or a missing secret must fail the deploy, not surface later.
+{
+	email {$ACME_EMAIL}
+	admin off
+	log {
+		output stdout
+		format json
+	}
+	servers {
+		trusted_proxies static private_ranges
+		client_ip_headers X-Forwarded-For
+	}
+}
+
+(attacksurf) {
+	encode zstd gzip
+
+	# The app sets its own CSP and clickjacking headers; these are the transport-level ones.
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	# Uploads are not accepted yet; bound the body early so garbage never reaches the app.
+	request_body {
+		max_size 2MB
+	}
+
+	# Caddy's defaults already forward the visitor IP: with the `client_ip_headers` option
+	# above, an X-Forwarded-For chain from Cloudflare reaches the app with the visitor first.
+	reverse_proxy web:5000
+}
+
+# Cloudflare terminates TLS in front of the tunnel, but the origin still holds a real certificate
+# (DNS-01) so the zone can run Full (strict). Issuance needs only outbound DNS + HTTPS.
+https://attacksurf.dev {
+	import attacksurf
+	tls {$ACME_EMAIL} {
+		dns cloudflare {$CF_DNS_API_TOKEN}
+	}
+}
+
+# Apex is canonical: redirect www before any TLS work for the www name happens.
+http://www.attacksurf.dev {
+	redir https://attacksurf.dev{uri} permanent
+}

@@ -34,6 +34,12 @@ def csrf_token(client: FlaskClient, path: str = "/login") -> str:
     return match.group(1)
 
 
+def _csrf_token(client: FlaskClient, headers: dict[str, str], path: str = "/login") -> str:
+    match = _CSRF.search(client.get(path, headers=headers).get_data(as_text=True))
+    assert match
+    return match.group(1)
+
+
 def assert_csrf_valid(client: FlaskClient, token: str) -> None:
     """Assert the app *accepts* `token` as an HTMX header, i.e. it is a working CSRF token.
 
@@ -534,6 +540,79 @@ def test_proxy_count_enables_forwarded_headers() -> None:
 
 def test_no_proxy_fix_by_default(app: Flask) -> None:
     assert not isinstance(app.wsgi_app, ProxyFix)
+
+
+def test_rate_limit_keys_on_client_ip_behind_cloudflare_tunnel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Behind a Cloudflare Tunnel, limits must key on the visitor, not cloudflared or the edge."""
+    app = create_app(make_settings(env="test", secret_key="k", proxy_count=1))
+    monkeypatch.setattr(auth_service, "authenticate", Mock(side_effect=InvalidCredentials))
+    client = app.test_client()
+    # cloudflared => Caddy => app: the visitor is the leftmost X-Forwarded-For entry; the
+    # rightmost entries are Cloudflare edge addresses. HTTPS requests also need a same-origin
+    # Referer for Flask-WTF's strict origin check, as a browser sends.
+    headers = {
+        "X-Forwarded-For": "203.0.113.9, 172.68.1.1",
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "attacksurf.dev",
+        "Referer": "https://attacksurf.dev/login",
+    }
+    token = _csrf_token(client, headers)
+    data = {"email": "a@example.com", "password": "wrong", "csrf_token": token}
+
+    statuses = [
+        client.post(
+            "/login", data=data, headers=headers, environ_base={"REMOTE_ADDR": "172.18.0.4"}
+        ).status_code
+        for _ in range(6)
+    ]
+
+    assert statuses[:5] == [422] * 5
+    assert statuses[5] == 429
+
+
+def test_rate_limit_prefers_cf_connecting_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = create_app(make_settings(env="test", secret_key="k", proxy_count=1))
+    monkeypatch.setattr(auth_service, "authenticate", Mock(side_effect=InvalidCredentials))
+    client = app.test_client()
+    token = csrf_token(client)
+    data = {"email": "a@example.com", "password": "wrong", "csrf_token": token}
+
+    def post(ip: str) -> int:
+        return client.post(
+            "/login",
+            data=data,
+            headers={"CF-Connecting-IP": ip, "X-Forwarded-For": "172.68.1.1"},
+            environ_base={"REMOTE_ADDR": "172.18.0.4"},
+        ).status_code
+
+    statuses = [post("203.0.113.9") for _ in range(6)]
+
+    assert statuses[5] == 429
+
+
+def test_rate_limit_separates_clients_behind_same_edge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two visitors behind the same Cloudflare edge must not share one rate-limit budget."""
+    app = create_app(make_settings(env="test", secret_key="k", proxy_count=1))
+    monkeypatch.setattr(auth_service, "authenticate", Mock(side_effect=InvalidCredentials))
+    client = app.test_client()
+    token = csrf_token(client)
+    data = {"email": "a@example.com", "password": "wrong", "csrf_token": token}
+
+    def post(client_ip: str) -> int:
+        return client.post(
+            "/login",
+            data=data,
+            headers={"X-Forwarded-For": f"{client_ip}, 172.68.1.1"},
+            environ_base={"REMOTE_ADDR": "172.18.0.4"},
+        ).status_code
+
+    first_client = [post("203.0.113.9") for _ in range(5)]
+    other_client = post("198.51.100.7")
+
+    assert first_client == [422] * 5
+    assert other_client == 422
 
 
 # Regressions from review of #45

@@ -24,7 +24,6 @@ from flask import (
 )
 from flask.typing import RouteCallable
 from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from flask_login import LoginManager, UserMixin, current_user, login_user, logout_user
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -277,12 +276,29 @@ def _email_key() -> str:
     return "login-email:" + request.form.get("email", "").strip().lower()[:254]
 
 
+def _client_ip() -> str:
+    """Rate-limit key: the visitor address Cloudflare forwarded to the tunnel.
+
+    With a Cloudflare Tunnel the origin only ever sees `cloudflared`, and the leftmost
+    `X-Forwarded-For` entry is the visitor (Cloudflare appends untrusted client-supplied
+    entries after it; the rightmost entries are Cloudflare's own edge addresses). That makes the
+    leftmost entry spoofable by anyone who can reach the origin directly — impossible here,
+    because the origin publishes no port and only `cloudflared` can reach it. `CF-Connecting-IP`
+    is the same value in a single-IP form and is preferred when present.
+    """
+    connecting_ip = request.headers.get("CF-Connecting-IP", "").strip()
+    if connecting_ip:
+        return connecting_ip
+    forwarded = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    return forwarded or (request.remote_addr or "")
+
+
 def _apply_rate_limits(app: Flask, settings: Settings) -> None:
     storage = "memory://" if settings.env == "test" else settings.redis_url.get_secret_value()
     # One limiter per app (tests build many apps). Falls back to per-process memory if Redis
     # is down, so limits keep working instead of failing open or erroring.
     limiter = Limiter(
-        get_remote_address,
+        _client_ip,
         app=app,
         storage_uri=storage,
         headers_enabled=True,

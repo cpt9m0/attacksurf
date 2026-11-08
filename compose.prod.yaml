@@ -1,0 +1,149 @@
+# Production stack for https://attacksurf.dev (issue #132).
+# Traffic: Cloudflare edge -> Cloudflare Tunnel (cloudflared) -> caddy:80 -> web:5000 (gunicorn).
+# No inbound ports are published: cloudflared dials out, everything else is internal-only.
+# Usage: docs/deployment.md.
+name: attacksurf-prod
+
+x-app: &app
+  build:
+    context: .
+    target: prod
+  image: attacksurf:prod
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  networks: [internal]
+  # Redis and Postgres passwords come from the same secret files the servers use, so the
+  # connection strings never appear in this file or in an env file.
+  secrets: [postgres_password, redis_password]
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  # Publishes the app at attacksurf.dev and www.attacksurf.dev; routes are configured in the
+  # Cloudflare dashboard (remote-managed tunnel), not here.
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.0
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:20241", "run"]
+    environment:
+      TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token
+    secrets: [tunnel_token]
+    security_opt:
+      - no-new-privileges:true
+    networks: [internal]
+    depends_on: [caddy]
+
+  caddy:
+    build:
+      context: deploy
+      dockerfile: Caddy.Dockerfile
+    image: attacksurf-caddy:prod
+    restart: unless-stopped
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in the deploy env file}
+      CF_DNS_API_TOKEN_FILE: /run/secrets/cf_dns_api_token
+    secrets: [cf_dns_api_token]
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+    networks: [internal]
+    depends_on: [web]
+
+  # One-off: `docker compose -f compose.prod.yaml run --rm migrate` on every deploy.
+  migrate:
+    <<: *app
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    env_file: [./deploy/attacksurf.env]
+    environment:
+      ENV: prod
+      PROXY_COUNT: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    <<: *app
+    env_file: [./deploy/attacksurf.env]
+    environment:
+      ENV: prod
+      # One proxy hop: Cloudflare. cloudflared and Caddy are not counted as extra hops for
+      # X-Forwarded-For (Caddy forwards the visitor address it received).
+      PROXY_COUNT: "1"
+      # Literal `$$` keeps Compose from interpolating; the placeholders are replaced from the
+      # mounted secrets by the entrypoint before gunicorn starts (passwords may contain `@`).
+      DATABASE_URL: "postgresql+psycopg://attacksurf:__PGPASS__@postgres:5432/attacksurf"
+      REDIS_URL: "redis://:__REDIS_PASS__@redis:6379/0"
+    entrypoint:
+      - sh
+      - -c
+      - DSN="$${DATABASE_URL//__PGPASS__/$(cat /run/secrets/postgres_password)}"; REDIS_DSN="$${REDIS_URL//__REDIS_PASS__/$(cat /run/secrets/redis_password)}"; export DATABASE_URL="$$DSN" REDIS_URL="$$REDIS_DSN"; exec gunicorn "attacksurf.app:create_app()" --bind 0.0.0.0:5000 --workers 2 --threads 4
+    expose: ["5000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+
+  postgres:
+    image: postgres:18@sha256:3a4264520e121176619f54ff867d12774bc81e95e7b84db58d63bccdb6144b81
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: attacksurf
+      POSTGRES_DB: attacksurf
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U attacksurf -d attacksurf"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    networks: [internal]
+
+  redis:
+    image: redis:8@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6
+    restart: unless-stopped
+    # Redis has no *_FILE convention (that is redis-stack); the password is read from the secret
+    # at start. `exec` keeps the server as PID 1 so it receives stop signals directly.
+    command:
+      - sh
+      - -c
+      - exec redis-server --requirepass "$$(cat /run/secrets/redis_password)" --save "" --appendonly no
+    secrets: [redis_password]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$(cat /run/secrets/redis_password)\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    networks: [internal]
+
+secrets:
+  tunnel_token:
+    file: /etc/attacksurf/tunnel.token
+  cf_dns_api_token:
+    file: /etc/attacksurf/cloudflare-dns-token
+  postgres_password:
+    file: /etc/attacksurf/postgres_password
+  redis_password:
+    file: /etc/attacksurf/redis_password
+
+networks:
+  internal:
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
