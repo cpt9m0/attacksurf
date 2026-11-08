@@ -549,11 +549,11 @@ def test_rate_limit_keys_on_client_ip_behind_cloudflare_tunnel(
     app = create_app(make_settings(env="test", secret_key="k", proxy_count=1))
     monkeypatch.setattr(auth_service, "authenticate", Mock(side_effect=InvalidCredentials))
     client = app.test_client()
-    # cloudflared => Caddy => app: the visitor is the leftmost X-Forwarded-For entry; the
-    # rightmost entries are Cloudflare edge addresses. HTTPS requests also need a same-origin
-    # Referer for Flask-WTF's strict origin check, as a browser sends.
+    # cloudflared => Caddy => app, as Cloudflare sends it: the visitor is the only
+    # X-Forwarded-For entry. HTTPS requests also need a same-origin Referer for Flask-WTF's
+    # strict origin check, as a browser sends.
     headers = {
-        "X-Forwarded-For": "203.0.113.9, 172.68.1.1",
+        "X-Forwarded-For": "203.0.113.9",
         "X-Forwarded-Proto": "https",
         "X-Forwarded-Host": "attacksurf.dev",
         "Referer": "https://attacksurf.dev/login",
@@ -592,6 +592,28 @@ def test_rate_limit_prefers_cf_connecting_ip(monkeypatch: pytest.MonkeyPatch) ->
     assert statuses[5] == 429
 
 
+def test_rate_limit_ignores_forwarding_headers_without_trusted_proxies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With PROXY_COUNT=0 a client could otherwise rotate these headers to evade the limit."""
+    app = create_app(make_settings(env="test", secret_key="k", proxy_count=0))
+    monkeypatch.setattr(auth_service, "authenticate", Mock(side_effect=InvalidCredentials))
+    client = app.test_client()
+    token = csrf_token(client)
+
+    statuses = [
+        client.post(
+            "/login",
+            data={"email": "a@example.com", "password": "wrong", "csrf_token": token},
+            headers={"CF-Connecting-IP": f"203.0.113.{i}", "X-Forwarded-For": f"198.51.100.{i}"},
+            environ_base={"REMOTE_ADDR": "10.0.0.5"},
+        ).status_code
+        for i in range(6)
+    ]
+
+    assert statuses[5] == 429
+
+
 def test_rate_limit_separates_clients_behind_same_edge(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two visitors behind the same Cloudflare edge must not share one rate-limit budget."""
     app = create_app(make_settings(env="test", secret_key="k", proxy_count=1))
@@ -604,7 +626,7 @@ def test_rate_limit_separates_clients_behind_same_edge(monkeypatch: pytest.Monke
         return client.post(
             "/login",
             data=data,
-            headers={"X-Forwarded-For": f"{client_ip}, 172.68.1.1"},
+            headers={"X-Forwarded-For": client_ip},
             environ_base={"REMOTE_ADDR": "172.18.0.4"},
         ).status_code
 

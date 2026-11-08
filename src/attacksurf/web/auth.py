@@ -277,20 +277,20 @@ def _email_key() -> str:
 
 
 def _client_ip() -> str:
-    """Rate-limit key: the visitor address Cloudflare forwarded to the tunnel.
+    """Rate-limit key: the visitor address, using forwarding headers only where they are trusted.
 
-    With a Cloudflare Tunnel the origin only ever sees `cloudflared`, and the leftmost
-    `X-Forwarded-For` entry is the visitor (Cloudflare appends untrusted client-supplied
-    entries after it; the rightmost entries are Cloudflare's own edge addresses). That makes the
-    leftmost entry spoofable by anyone who can reach the origin directly — impossible here,
-    because the origin publishes no port and only `cloudflared` can reach it. `CF-Connecting-IP`
-    is the same value in a single-IP form and is preferred when present.
+    `request.remote_addr` is what `ProxyFix` resolved from `PROXY_COUNT` trusted hops, so when the
+    app is reached directly (`PROXY_COUNT=0`) nothing in a header can influence the key.
+
+    Cloudflare's `CF-Connecting-IP` is a single, unambiguous value, but only a proxy we configured
+    can be trusted to have set it; otherwise a client could rotate it to get a fresh budget per
+    request. With zero configured proxies it is ignored entirely.
     """
-    connecting_ip = request.headers.get("CF-Connecting-IP", "").strip()
-    if connecting_ip:
-        return connecting_ip
-    forwarded = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-    return forwarded or (request.remote_addr or "")
+    if _settings().proxy_count:
+        connecting_ip = request.headers.get("CF-Connecting-IP", "").strip()
+        if connecting_ip:
+            return connecting_ip
+    return request.remote_addr or ""
 
 
 def _apply_rate_limits(app: Flask, settings: Settings) -> None:

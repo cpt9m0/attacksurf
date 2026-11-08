@@ -41,10 +41,16 @@ certificate, which this stack never sees). The app sees one proxy hop (Cloudflar
 ```bash
 sudo install -d -m 700 /etc/attacksurf
 # Each file: one line, nothing else. `install` sets mode 600 and owner root.
-sudo sh -c 'printf %s "$TOKEN" > /etc/attacksurf/tunnel.token'
-sudo sh -c 'printf %s "$(openssl rand -hex 32)" > /etc/attacksurf/postgres_password'
-sudo sh -c 'printf %s "$(openssl rand -hex 32)" > /etc/attacksurf/redis_password'
+# Read the token with `read -rs` so it stays out of the shell history; sudo does not carry the
+# variable over, so pipe it in rather than using `sudo sh -c '... $TOKEN ...'` (that writes "").
+read -rsp 'Tunnel token: ' TOKEN && echo
+printf %s "$TOKEN" | sudo tee /etc/attacksurf/tunnel.token >/dev/null
+unset TOKEN
+# `tr -d '\n'`: `tee` adds a newline, and it would be embedded in the connection URLs.
+openssl rand -hex 32 | tr -d '\n' | sudo tee /etc/attacksurf/postgres_password >/dev/null
+openssl rand -hex 32 | tr -d '\n' | sudo tee /etc/attacksurf/redis_password >/dev/null
 sudo chmod 600 /etc/attacksurf/tunnel.token /etc/attacksurf/postgres_password /etc/attacksurf/redis_password
+sudo wc -c /etc/attacksurf/tunnel.token   # non-zero: an empty file breaks cloudflared
 ```
 
 Passwords are hex because they are embedded in the `DATABASE_URL`/`REDIS_URL` values; a random
