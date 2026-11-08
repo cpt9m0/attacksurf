@@ -1,12 +1,18 @@
-# Parse strictly at startup: a typo or a missing secret must fail the deploy, not surface later.
+# Caddy ingress for the Cloudflare Tunnel entry (issue #132).
+#
+# Cloudflare is the only public endpoint: the tunnel forwards requests to this container as plain
+# HTTP on the internal network, and `cloudflared` itself re-originates TLS to the edge. Caddy
+# therefore neither redirects to HTTPS nor manages a public certificate; it normalizes headers,
+# sets transport-level response headers, and proxies to the app.
 {
-	email {$ACME_EMAIL}
 	admin off
 	log {
 		output stdout
 		format json
 	}
 	servers {
+		# The only callers are cloudflared and (in Caddy logs) loopback. Trusting Cloudflare's
+		# X-Forwarded-For chain from them is how the visitor address reaches the app.
 		trusted_proxies static private_ranges
 		client_ip_headers X-Forwarded-For
 	}
@@ -28,21 +34,18 @@
 		max_size 2MB
 	}
 
-	# Caddy's defaults already forward the visitor IP: with the `client_ip_headers` option
-	# above, an X-Forwarded-For chain from Cloudflare reaches the app with the visitor first.
 	reverse_proxy web:5000
 }
 
-# Cloudflare terminates TLS in front of the tunnel, but the origin still holds a real certificate
-# (DNS-01) so the zone can run Full (strict). Issuance needs only outbound DNS + HTTPS.
-https://attacksurf.dev {
-	import attacksurf
-	tls {$ACME_EMAIL} {
-		dns cloudflare {$CF_DNS_API_TOKEN}
-	}
-}
+:80 {
+	@apex host attacksurf.dev
 
-# Apex is canonical: redirect www before any TLS work for the www name happens.
-http://www.attacksurf.dev {
-	redir https://attacksurf.dev{uri} permanent
+	handle @apex {
+		import attacksurf
+	}
+
+	# Apex is canonical.
+	handle {
+		redir https://attacksurf.dev{uri} permanent
+	}
 }

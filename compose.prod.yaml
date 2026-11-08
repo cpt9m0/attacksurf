@@ -61,13 +61,6 @@ services:
       dockerfile: Caddy.Dockerfile
     image: attacksurf-caddy:prod
     restart: unless-stopped
-    env_file: [./deploy/attacksurf.env]
-    environment:
-      CF_DNS_API_TOKEN_FILE: /run/secrets/cf_dns_api_token
-    secrets: [cf_dns_api_token]
-    volumes:
-      - caddy_data:/data
-      - caddy_config:/config
     security_opt:
       - no-new-privileges:true
     networks: [internal]
@@ -136,8 +129,6 @@ services:
 secrets:
   tunnel_token:
     file: ${SECRETS_DIR:-/etc/attacksurf}/tunnel.token
-  cf_dns_api_token:
-    file: ${SECRETS_DIR:-/etc/attacksurf}/cloudflare-dns-token
   postgres_password:
     file: ${SECRETS_DIR:-/etc/attacksurf}/postgres_password
   redis_password:
@@ -148,5 +139,3 @@ networks:
 
 volumes:
   pgdata:
-  caddy_data:
-  caddy_config:
