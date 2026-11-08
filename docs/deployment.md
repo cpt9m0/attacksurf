@@ -141,7 +141,9 @@ choose ownership verification:
 
 Only the TXT method avoids cache surprises; prefer it.
 
-## Out of scope (still #29)
+## Known gaps on this host
 
-Nightly off-box `pg_dump` and restore test, Sentry, log rotation, GHCR-based deploys, host
-hardening checklist, and moving to a dedicated VPS.
+The stack covers the web app and its database only. **No Celery workers or beat are running**,
+so scans, ownership checks and AI jobs stay queued. Adding `worker-passive`, `worker-ai` and
+`beat` is part of #29, together with backups and monitoring; the `x-app` anchor in
+`compose.prod.yaml` can be reused for their services.

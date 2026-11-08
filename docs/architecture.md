@@ -8,7 +8,7 @@ attacksurf is a **modular monolith**: one Flask codebase, deployed as several pr
 (web, Celery workers, beat) on one VPS with Docker Compose.
 
 ```
-            ┌────────────── Caddy (TLS) ──────────────┐
+            ┌─ Cloudflare edge ─► cloudflared ─► Caddy ─┐   (ADR 0020)
             │                                          │
         ┌───▼────┐   enqueue   ┌────────┐   consume  ┌─▼──────────────┐
 Browser ─► web    ├────────────►│ Redis  ├───────────►│ worker-passive │─► DNS / CT logs / RDAP
@@ -248,8 +248,9 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
 
 ## Deployment
 
-Single VPS: Caddy → gunicorn (web), Celery workers, beat, PostgreSQL, Redis, all in Docker Compose.
-Nightly `pg_dump` off-box. See issue #29.
+Single VPS: Cloudflare Tunnel → Caddy → gunicorn (web), plus PostgreSQL and Redis, all in Docker
+Compose (`compose.prod.yaml`); no inbound ports (ADR 0020, `docs/deployment.md`). Celery workers
+and beat are not part of the production stack yet. Nightly `pg_dump` off-box. See issue #29.
 
 The `Dockerfile` has two targets: `dev` (dev deps, Flask debug server, source bind-mounted by
 `compose.yaml` for hot reload) and `prod` (no dev deps, gunicorn, non-root uid 10001). Base and
