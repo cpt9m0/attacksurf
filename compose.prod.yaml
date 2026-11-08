@@ -111,13 +111,14 @@ services:
     image: redis:8@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6
     restart: unless-stopped
     # The image entrypoint drops privileges to `redis` before exec'ing the server. It must keep
-    # running: replacing it with a shell would leave redis-server as root. The password is read
-    # from the mounted secret in an environment assignment, which the entrypoint ignores, and
-    # expanded by its own shell into the redis-server arguments.
+    # running: replacing it with a shell would leave redis-server as root. The secret is read
+    # into a variable first and exported in a *separate* statement: in `VAR=... exec cmd "$VAR"`
+    # the expansion happens before the assignment, so the value arrives empty and the flag is
+    # dropped (redis then starts without a password).
     entrypoint:
       - sh
       - -c
-      - REDIS_PASSWORD="$$(cat /run/secrets/redis_password)" exec docker-entrypoint.sh redis-server --requirepass "$$REDIS_PASSWORD" --save "" --appendonly no
+      - REDIS_PASSWORD="$$(cat /run/secrets/redis_password)"; export REDIS_PASSWORD; exec docker-entrypoint.sh redis-server --requirepass "$$REDIS_PASSWORD" --save "" --appendonly no
       - --
     secrets: [redis_password]
     healthcheck:
