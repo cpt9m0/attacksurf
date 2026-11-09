@@ -1,9 +1,12 @@
 """Deterministic, no-network plugins. Never imported by production worker startup."""
 
+from uuid import UUID
+
 from attacksurf.domain.assets import AssetType, RelationKind
 from attacksurf.domain.findings import Severity
 from attacksurf.domain.net import HttpBody, ScannerRuntime
 from attacksurf.domain.rules import Rule
+from attacksurf.domain.sandbox import SandboxResult
 from attacksurf.domain.scanners import (
     AssetRef,
     DiscoveredRelation,
@@ -33,7 +36,19 @@ class FixtureGate:
 
     def check(self, ctx: ScanContext, asset: AssetRef, scanner: Scanner) -> ScannerRuntime:
         self.checked.append((ctx, asset, scanner))
-        return ScannerRuntime(StubDns(), StubHttp(self.redirect_allowed))
+        return ScannerRuntime(StubDns(), StubHttp(self.redirect_allowed), FakeSandboxRunner())
+
+
+class FakeSandboxRunner:
+    """Records requests and returns a canned result; no Docker. Grants are checked by the gate."""
+
+    def __init__(self, result: SandboxResult | None = None) -> None:
+        self.result = result or SandboxResult(exit_code=0, stdout=b"{}")
+        self.calls: list[tuple[str, UUID]] = []
+
+    def run(self, analyzer: str, artifact_id: UUID) -> SandboxResult:
+        self.calls.append((analyzer, artifact_id))
+        return self.result
 
 
 class StubDns:

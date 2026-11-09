@@ -6,6 +6,7 @@ import pytest
 
 from attacksurf.domain.assets import AssetType
 from attacksurf.domain.net import HttpBody, ScannerRuntime
+from attacksurf.domain.sandbox import SandboxError
 from attacksurf.domain.scanners import (
     AssetRef,
     ScanContext,
@@ -23,7 +24,7 @@ from attacksurf.infra.scope_guard import (
     _GuardedHttp,
     request_host,
 )
-from tests.scanner_fixtures import FakeCheck
+from tests.scanner_fixtures import FakeCheck, FakeSandboxRunner
 
 
 class StubDns:
@@ -423,3 +424,50 @@ def test_fixture_scanner_runs_and_runtime_closes_its_clients() -> None:
 def test_unconfigured_gate_fails_closed() -> None:
     with pytest.raises(ScopeError, match="disabled"):
         UnconfiguredGate().check(context(), target(), scanner())
+
+
+def sandboxed_guard() -> tuple[ScopeGuard, FakeSandboxRunner]:
+    scope, _ = make_guard()
+    sandbox = FakeSandboxRunner()
+    scope._sandbox = sandbox  # type: ignore[assignment]
+    return scope, sandbox
+
+
+def test_scanner_without_a_sandbox_grant_cannot_run_any_analyzer() -> None:
+    scope, sandbox = sandboxed_guard()
+    runtime = scope.check(context(), target(), scanner())
+
+    with pytest.raises(ScopePolicyError, match="analyzer"):
+        runtime.sandbox.run("fixture.echo", uuid4())
+    assert sandbox.calls == []
+
+
+def test_scanner_cannot_run_an_analyzer_outside_its_grant() -> None:
+    scope, sandbox = sandboxed_guard()
+    granted = scanner(grant=ScannerGrant(sandbox_analyzers=frozenset({"fixture.echo"})))
+    runtime = scope.check(context(), target(), granted)
+
+    with pytest.raises(ScopePolicyError, match="analyzer"):
+        runtime.sandbox.run("fixture.other", uuid4())
+    assert sandbox.calls == []
+
+
+def test_scanner_with_a_grant_reaches_the_runner_with_only_name_and_artifact() -> None:
+    scope, sandbox = sandboxed_guard()
+    granted = scanner(grant=ScannerGrant(sandbox_analyzers=frozenset({"fixture.echo"})))
+    runtime = scope.check(context(), target(), granted)
+    artifact_id = uuid4()
+
+    result = runtime.sandbox.run("fixture.echo", artifact_id)
+
+    assert result is sandbox.result
+    assert sandbox.calls == [("fixture.echo", artifact_id)]
+
+
+def test_granted_scanner_still_fails_closed_when_no_runner_is_wired() -> None:
+    scope, _ = make_guard()
+    granted = scanner(grant=ScannerGrant(sandbox_analyzers=frozenset({"fixture.echo"})))
+    runtime = scope.check(context(), target(), granted)
+
+    with pytest.raises(SandboxError, match="not configured"):
+        runtime.sandbox.run("fixture.echo", uuid4())
