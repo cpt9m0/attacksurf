@@ -54,7 +54,8 @@ services; active checks (target HTTP) require a verified, unexpired ownership pr
 Scanners never touch the network directly. Every run passes `ScopeGuard` first
 (`infra/scope_guard.py`, ADR 0013): the target is validated, ownership is required for active
 checks, and the plugin receives only DNS/HTTP adapters bounded by its frozen `ScannerGrant`
-(allowlisted public data services, or the target after verification; a DNS budget). Declared
+(allowlisted public data services, or the target after verification; a DNS budget; the
+sandbox analyzers it may name, none by default). Declared
 services are re-checked and resolved before the run starts; every DNS answer and HTTP host
 (each request, including every redirect hop) is validated again when used. A scan profile's
 `max_discovered_assets` caps what one root can add, counting against the scan root under a row

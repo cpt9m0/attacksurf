@@ -7,6 +7,8 @@ plugin can only reach what its declared permissions allow.
 from collections.abc import Mapping
 from typing import Protocol
 
+from attacksurf.domain.sandbox import SandboxRunner, UnconfiguredSandboxRunner
+
 
 class DnsError(Exception):
     """A lookup failed (timeout, resolver error). Never carries resolver internals."""
@@ -70,11 +72,14 @@ class SafeHttpClient(Protocol):
 class ScannerRuntime:
     """Run-scoped adapters handed to a plugin after the gate approved it."""
 
-    __slots__ = ("dns", "http")
+    __slots__ = ("dns", "http", "sandbox")
 
-    def __init__(self, dns: DnsResolver, http: SafeHttpClient) -> None:
+    def __init__(
+        self, dns: DnsResolver, http: SafeHttpClient, sandbox: SandboxRunner | None = None
+    ) -> None:
         self.dns = dns
         self.http = http
+        self.sandbox = sandbox or UnconfiguredSandboxRunner()
 
     def close(self) -> None:
         self.http.close()

@@ -33,8 +33,10 @@ class Settings(BaseSettings):
     # Auth (#7). With signup off, only the very first user can still sign up (instance admin).
     allow_signup: bool = True
     session_lifetime_hours: int = Field(default=12, ge=1, le=720)
-    # Reverse proxies in front of the app (Caddy in prod: 1). Decides which X-Forwarded-For
-    # entry is the client IP for rate limiting; leave 0 when the app is reached directly.
+    # Reverse proxies in front of the app. Count trusted hops, not components: Caddy alone = 1;
+    # Cloudflare Tunnel -> Caddy = 1 (cloudflared is not a proxy hop, Cloudflare is); Cloudflare
+    # proxying to Caddy directly = 2. Decides which X-Forwarded-For entry is the client IP for
+    # rate limiting; leave 0 when the app is reached directly.
     proxy_count: int = Field(default=0, ge=0, le=5)
 
     # Instance LLM config (ADR 0019): orgs without their own key use it, capped (#24). Model

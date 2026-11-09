@@ -202,13 +202,14 @@ def test_due_verifications_cover_expired_and_stale_pending_proofs(
     db_session: Session, org: Org, root: Asset
 ) -> None:
     expired = _start(db_session, FakeQueue(db_session), org.id, root.id)
-    verifications.record_check(
-        db_session, expired, (record_value(expired.token),), now=NOW - RECHECK_AFTER
-    )
+    verifications.record_check(db_session, expired, (record_value(expired.token),), now=NOW)
     other_root = record_asset(
         db_session, org.id, AssetType.DOMAIN, "example.net", source=AssetSource.USER
     )
     stale = _start(db_session, FakeQueue(db_session), org.id, other_root.id)
+    # Stamp the failed check explicitly: the default `now` is wall-clock time, which decides
+    # whether this proof is "stale" relative to the fixed NOW+grace used below.
+    verifications.record_check(db_session, stale, (), now=NOW)
 
     due = verifications.due_verifications(db_session, NOW + GRACE_AFTER_FAILURE)
 

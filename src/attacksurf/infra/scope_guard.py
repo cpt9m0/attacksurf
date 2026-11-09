@@ -12,6 +12,7 @@ from uuid import UUID
 
 from attacksurf.domain.assets import AssetType
 from attacksurf.domain.net import DnsResolver, HttpBody, SafeHttpClient, ScannerRuntime
+from attacksurf.domain.sandbox import SandboxResult, SandboxRunner, UnconfiguredSandboxRunner
 from attacksurf.domain.scanners import AssetRef, ScanContext, Scanner, ScannerGate, ScannerGrant
 from attacksurf.domain.scope import (
     HttpPermission,
@@ -59,11 +60,13 @@ class ScopeGuard(ScannerGate):
         http: ScopeHttp,
         ownership: OwnershipChecker,
         classify: Callable[[str], PublicSuffix] = public_suffix.classify,
+        sandbox: SandboxRunner | None = None,
     ) -> None:
         self._dns = dns
         self._http = http
         self._ownership = ownership
         self._classify = classify
+        self._sandbox = sandbox or UnconfiguredSandboxRunner()
 
     def check(self, ctx: ScanContext, asset: AssetRef, scanner: Scanner) -> ScannerRuntime:
         """Validate and authorize one run. Raises `ScopeError`, and the job is then skipped."""
@@ -82,7 +85,8 @@ class ScopeGuard(ScannerGate):
             services=grant.http_hosts,
             check_host=self._check_host,
         )
-        return ScannerRuntime(guarded_dns, http.client_for(guarded_dns))
+        sandbox = _GuardedSandbox(self._sandbox, allowed=grant.sandbox_analyzers)
+        return ScannerRuntime(guarded_dns, http.client_for(guarded_dns), sandbox)
 
     def _check_target(self, asset: AssetRef, scanner: Scanner) -> None:
         if asset.type not in scanner.asset_types:
@@ -129,6 +133,19 @@ class _GuardedDns:
     def resolve_name(self, host: str) -> tuple[str, ...]:
         self._take()
         return tuple(str(address) for address in check_addresses(self._inner.resolve_name(host)))
+
+
+class _GuardedSandbox:
+    """Per-run analyzer allowlist, checked before anything reaches the launcher."""
+
+    def __init__(self, inner: SandboxRunner, *, allowed: frozenset[str]) -> None:
+        self._inner = inner
+        self._allowed = allowed
+
+    def run(self, analyzer: str, artifact_id: UUID) -> SandboxResult:
+        if analyzer not in self._allowed:
+            raise ScopePolicyError("The scanner may not run this analyzer.")
+        return self._inner.run(analyzer, artifact_id)
 
 
 class _GuardedHttp:

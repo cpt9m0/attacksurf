@@ -11,7 +11,9 @@ Read `docs/architecture.md` (scan pipeline section) first.
 - A scanner **detects and returns normalized output**. It never touches the DB, never calls an
   LLM, and never imports a network library (`requests`, `httpx`, sockets, `urllib.request`,
   dnspython resolvers — a test enforces this). I/O goes through `ctx.runtime.dns` /
-  `ctx.runtime.http`, which ScopeGuard already validated and bounded (ADR 0013).
+  `ctx.runtime.http`, which ScopeGuard already validated and bounded (ADR 0013). Sandboxed
+  analyzers go through `ctx.runtime.sandbox.run(analyzer, artifact_id)` and need
+  `ScannerGrant(sandbox_analyzers=...)` (ADR 0016).
 - Passive vs active: if the check sends anything to the target beyond normal public lookups
   (zone transfer, port scan, probing payloads), it is **active** and must declare
   `requires_verification = True` and `ScannerGrant(http=HttpPermission.TARGET)`.

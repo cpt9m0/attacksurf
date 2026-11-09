@@ -88,6 +88,9 @@ uv run flask --app attacksurf run --debug   # http://127.0.0.1:5000
 
 Contributors: also run `uv run pre-commit install` (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
+**Production:** one VPS behind a Cloudflare Tunnel, no inbound ports: see
+[docs/deployment.md](docs/deployment.md).
+
 ## How it works
 
 ```

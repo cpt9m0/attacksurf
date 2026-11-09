@@ -8,6 +8,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ### Added
 - `sandbox-proxy` service: the only holder of the Docker socket, allowing six container actions
   on containers it created and refusing any create request outside the sandbox policy (#84).
+- CD is verified end-to-end: a merge to `main` reaches production within one timer
+  interval, and the running `web` image tag matches the recorded deployed SHA (#29).
+- Pull-based CD: `scripts/deploy.sh` (also `make deploy`) fetches `origin/main`, builds the
+  images tagged with the short SHA, runs `migrate` before replacing `web`, smoke-tests
+  `/healthz` through the ingress and rolls back to the previously deployed SHA on failure; the
+  deployed SHA is recorded in `/var/lib/attacksurf/deployed-sha` (#138).
+- Pull-based CD units (`deploy/systemd/`): `attacksurf-deploy.timer` runs `scripts/deploy.sh`
+  every 3 minutes (±45 s jitter) as root under a `flock`, so a merge to `main` reaches
+  production within one interval with no inbound port, no GitHub secret and no runner; the
+  deployed SHA lands in the journal and in `/var/lib/attacksurf/deployed-sha` (#29).
+- Sandbox port for scanners: `ctx.runtime.sandbox.run(analyzer, artifact_id)`, limited to the
+  analyzers in a plugin's `ScannerGrant` and refused until a runner is configured (#84).
+- Production stack (`compose.prod.yaml`) published through a Cloudflare Tunnel: `cloudflared`,
+  Caddy, gunicorn, PostgreSQL and Redis on a private network with no inbound ports, `www`
+  redirecting to the apex, and a deploy runbook in `docs/deployment.md` (ADR 0020, #132).
 
 ### Fixed
 - Sandbox proxy retains ownership after rejected removals, reclaims capacity after confirmed
@@ -21,6 +36,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 - Proxy settings tests clear all application and proxy environment fields, including the
   documented dev runtime fallback, before constructing settings (#84, PR #135).
 - Proxy environment settings and defaults are documented in `.env.example` (#84).
+- Login and signup rate limits key on the visitor address Cloudflare forwards
+  (`CF-Connecting-IP`, else the leftmost `X-Forwarded-For` entry) instead of the first proxy
+  hop, so visitors behind the tunnel no longer share one budget (#132).
 - LLM endpoint credentials are masked in settings and provider-config representations;
   base URLs remain `SecretStr` through config resolution (#23).
 - The test suite passes on Windows checkouts: `.gitattributes` keeps LF line endings whatever
