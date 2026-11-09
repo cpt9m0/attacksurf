@@ -3,8 +3,9 @@ Description=AttackSurf pull-based deploy (attacksurf.dev)
 Documentation=file:///opt/attacksurf/docs/deployment.md
 # Pull-based CD: the host reaches out, nothing dials in. No GitHub secret, no runner,
 # no inbound port — the timer only runs `scripts/deploy.sh` against origin/main.
-Requires=docker.service
-Wants=network-online.target
+# Wants=, not Requires=: a docker restart must not SIGTERM a deploy halfway through; a deploy
+# that cannot reach docker fails on its own and the next tick retries.
+Wants=network-online.target docker.service
 After=network-online.target docker.service
 
 [Service]
