@@ -7,14 +7,17 @@
 ## Status
 Draft PR #134 (`84-sandbox-port`) adds the port and grants. This branch adds `sandbox_proxy/`:
 the deny-by-default Docker socket guard, its create policy, and an import-linter isolation
-contract. Nothing deploys it yet; compose comes in PR 4 and the images lock in PR 5.
+contract. Removals retain ownership unless Docker confirms success or absence; in-flight
+creates count against the cap. `.env.example` documents every proxy setting and default.
+Nothing deploys it yet; compose comes in PR 4 and the images lock in PR 5.
 
 ## Next step
 Merge #134, then this PR, then build PR 3 (`84-sandbox-launcher`). Merge order: port → proxy →
 launcher → analysis worker (after #133) → CI.
 
 ## Open threads
-- `.env.example` still needs the `SANDBOX_*` proxy settings; agents can't read that file here.
+- Proxy settings are documented in `.env.example`; deployment must explicitly pass them as
+  environment variables without app credentials (the proxy never reads `.env`).
 - The launcher must send exactly what the proxy accepts: see `sandbox_proxy/policy.py` (user
   `65532:65532`, `LogConfig` none, `AutoRemove`, binds under the artifact root). Attach before
   start, and only stdout.

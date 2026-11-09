@@ -10,6 +10,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   on containers it created and refusing any create request outside the sandbox policy (#84).
 
 ### Fixed
+- Sandbox proxy retains ownership after rejected removals and reserves in-flight create
+  capacity atomically, so concurrent requests cannot exceed its container cap (#84, PR #135).
+- Proxy environment settings and defaults are documented in `.env.example` (#84).
 - LLM endpoint credentials are masked in settings and provider-config representations;
   base URLs remain `SecretStr` through config resolution (#23).
 - The test suite passes on Windows checkouts: `.gitattributes` keeps LF line endings whatever

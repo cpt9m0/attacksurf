@@ -5,6 +5,7 @@ import json
 import socketserver
 import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor, wait
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -26,6 +27,10 @@ class FakeDocker(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         super().__init__(path, _FakeDockerHandler)
         self.calls: list[tuple[str, str, dict[str, str], bytes]] = []
         self.next_id = CREATED
+        self.create_status = 201
+        self.remove_status = 204
+        self.create_entered: threading.Event | None = None
+        self.create_release: threading.Event | None = None
 
 
 class _FakeDockerHandler(BaseHTTPRequestHandler):
@@ -39,11 +44,17 @@ class _FakeDockerHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length)
         self.server.calls.append((self.command, self.path, dict(self.headers), body))
         if self.path.endswith("/containers/create"):
-            self._reply(201, json.dumps({"Id": self.server.next_id}).encode())
+            if self.server.create_entered is not None:
+                self.server.create_entered.set()
+            if self.server.create_release is not None:
+                assert self.server.create_release.wait(5)
+            self._reply(self.server.create_status, json.dumps({"Id": self.server.next_id}).encode())
         elif "/attach" in self.path:
             self.wfile.write(b"HTTP/1.1 101 UPGRADED\r\nUpgrade: tcp\r\n\r\ntool-output")
         elif "/wait" in self.path:
             self._reply(200, b'{"StatusCode": 0}')
+        elif self.command == "DELETE":
+            self._reply(self.server.remove_status, b"")
         else:
             self._reply(204, b"")
 
@@ -53,7 +64,8 @@ class _FakeDockerHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if body:
+            self.wfile.write(body)
 
 
 @pytest.fixture
@@ -236,6 +248,37 @@ def test_removed_container_is_forgotten(proxy: int, docker: FakeDocker) -> None:
     assert status == 403
 
 
+@pytest.mark.parametrize("remove_status", [304, 400, 403, 409, 500])
+def test_failed_removal_retains_ownership_and_capacity(
+    proxy: int, docker: FakeDocker, monkeypatch: pytest.MonkeyPatch, remove_status: int
+) -> None:
+    monkeypatch.setattr("attacksurf.sandbox_proxy.server.MAX_TRACKED_CONTAINERS", 1)
+    create(proxy)
+    docker.remove_status = remove_status
+
+    assert call(proxy, "DELETE", f"/containers/{CREATED}")[0] == remove_status
+
+    assert create(proxy)[0] == 429
+    assert call(proxy, "POST", f"/containers/{CREATED}/kill")[0] == 204
+    assert call(proxy, "POST", f"/containers/{CREATED}/wait")[0] == 200
+    docker.remove_status = 204
+    assert call(proxy, "DELETE", f"/containers/{CREATED}?force=1")[0] == 204
+    assert create(proxy)[0] == 201
+
+
+def test_missing_container_removal_releases_capacity(
+    proxy: int, docker: FakeDocker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("attacksurf.sandbox_proxy.server.MAX_TRACKED_CONTAINERS", 1)
+    create(proxy)
+    docker.remove_status = 404
+
+    assert call(proxy, "DELETE", f"/containers/{CREATED}")[0] == 404
+
+    assert call(proxy, "POST", f"/containers/{CREATED}/start")[0] == 403
+    assert create(proxy)[0] == 201
+
+
 def test_attach_passes_the_raw_output_stream_through(proxy: int, docker: FakeDocker) -> None:
     create(proxy)
 
@@ -269,6 +312,54 @@ def test_creates_stop_when_too_many_containers_are_tracked(
 
     assert status == 429
     assert len(docker.calls) == 1
+
+
+def test_inflight_create_reserves_capacity_before_docker_replies(
+    proxy: int, docker: FakeDocker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("attacksurf.sandbox_proxy.server.MAX_TRACKED_CONTAINERS", 1)
+    docker.create_entered = threading.Event()
+    docker.create_release = threading.Event()
+    with ThreadPoolExecutor(max_workers=9) as pool:
+        first = pool.submit(create, proxy)
+        try:
+            assert docker.create_entered.wait(2)
+            competitors = [pool.submit(create, proxy) for _ in range(8)]
+            _, pending = wait(competitors, timeout=2)
+            assert not pending, "Excess creates reached Docker instead of being rejected"
+            assert [future.result()[0] for future in competitors] == [429] * 8
+            assert len(docker.calls) == 1
+        finally:
+            docker.create_release.set()
+        assert first.result()[0] == 201
+    assert create(proxy)[0] == 429
+    assert call(proxy, "DELETE", f"/containers/{CREATED}")[0] == 204
+    assert create(proxy)[0] == 201
+
+
+@pytest.mark.parametrize("failure", ["rejected", "invalid-id", "unavailable"])
+def test_failed_create_releases_reserved_capacity(
+    proxy: int, docker: FakeDocker, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    monkeypatch.setattr("attacksurf.sandbox_proxy.server.MAX_TRACKED_CONTAINERS", 1)
+    socket_path = Path(docker.server_address)  # type: ignore[arg-type]
+    backup = socket_path.with_suffix(".backup")
+    if failure == "rejected":
+        docker.create_status = 500
+    elif failure == "invalid-id":
+        docker.next_id = "not-a-container-id"
+    else:
+        socket_path.rename(backup)
+    try:
+        assert create(proxy)[0] == (500 if failure == "rejected" else 502)
+    finally:
+        if failure == "unavailable":
+            backup.rename(socket_path)
+        docker.create_status = 201
+        docker.next_id = CREATED
+
+    assert create(proxy)[0] == 201
+    assert create(proxy)[0] == 429
 
 
 def test_create_reply_without_a_valid_id_is_not_trusted(proxy: int, docker: FakeDocker) -> None:

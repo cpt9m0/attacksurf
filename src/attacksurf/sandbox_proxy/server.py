@@ -37,11 +37,19 @@ class _TrackedContainers:
 
     def __init__(self) -> None:
         self._ids: set[str] = set()
+        self._pending = 0
         self._lock = threading.Lock()
 
-    def has_room(self) -> bool:
+    def reserve(self) -> bool:
         with self._lock:
-            return len(self._ids) < MAX_TRACKED_CONTAINERS
+            if len(self._ids) + self._pending >= MAX_TRACKED_CONTAINERS:
+                return False
+            self._pending += 1
+            return True
+
+    def release(self) -> None:
+        with self._lock:
+            self._pending -= 1
 
     def add(self, container_id: str) -> None:
         with self._lock:
@@ -153,9 +161,17 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             self._violation("Container is not managed by the sandbox.")
 
     def _forward(self, route: Route, body: bytes) -> None:
-        if route.action == "create" and not self.server.containers.has_room():
+        creating = route.action == "create"
+        if creating and not self.server.containers.reserve():
             self._reply(429, b'{"message": "Too many sandboxes."}')
             return
+        try:
+            self._forward_reserved(route, body)
+        finally:
+            if creating:
+                self.server.containers.release()
+
+    def _forward_reserved(self, route: Route, body: bytes) -> None:
         timeout = RUN_TIMEOUT_SECONDS if route.action == "wait" else DOCKER_TIMEOUT_SECONDS
         connection = _UnixConnection(self.server.docker_socket, timeout)
         method = "DELETE" if route.action == "remove" else "POST"
@@ -184,7 +200,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             containers.add(container_id)
         elif (
             route.action == "remove"
-            and status < HTTPStatus.INTERNAL_SERVER_ERROR
+            and (
+                HTTPStatus.OK <= status < HTTPStatus.MULTIPLE_CHOICES
+                or status == HTTPStatus.NOT_FOUND
+            )
             and route.container_id
         ):
             containers.discard(route.container_id)
