@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Pull-based CD: `scripts/deploy.sh` (also `make deploy`) fetches `origin/main`, builds the
+  images tagged with the short SHA, runs `migrate` before replacing `web`, smoke-tests
+  `/healthz` through the ingress and rolls back to the previously deployed SHA on failure; the
+  deployed SHA is recorded in `/var/lib/attacksurf/deployed-sha` (#138).
 - Sandbox port for scanners: `ctx.runtime.sandbox.run(analyzer, artifact_id)`, limited to the
   analyzers in a plugin's `ScannerGrant` and refused until a runner is configured (#84).
 - Production stack (`compose.prod.yaml`) published through a Cloudflare Tunnel: `cloudflared`,
