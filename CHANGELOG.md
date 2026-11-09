@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Pull-based CD units (`deploy/systemd/`): `attacksurf-deploy.timer` runs `scripts/deploy.sh`
+  every 3 minutes (±45 s jitter) as root under a `flock`, so a merge to `main` reaches
+  production within one interval with no inbound port, no GitHub secret and no runner; the
+  deployed SHA lands in the journal and in `/var/lib/attacksurf/deployed-sha` (#29).
 - Sandbox port for scanners: `ctx.runtime.sandbox.run(analyzer, artifact_id)`, limited to the
   analyzers in a plugin's `ScannerGrant` and refused until a runner is configured (#84).
 - Production stack (`compose.prod.yaml`) published through a Cloudflare Tunnel: `cloudflared`,
