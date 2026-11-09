@@ -1,0 +1,17 @@
+[Unit]
+Description=Run attacksurf-deploy every few minutes (pull-based CD)
+Documentation=file:///opt/attacksurf/docs/deployment.md
+
+[Timer]
+# 2 min after boot, then 3 min after the previous run started. OnUnitActiveSec (not
+# OnCalendar) means a long build delays the next tick instead of stacking runs; the flock
+# in the service is the hard guarantee that two deploys never overlap.
+OnBootSec=2min
+OnUnitActiveSec=3min
+# Jitter so the tick does not sit on a round minute shared with other hosts/jobs.
+RandomizedDelaySec=45s
+AccuracySec=1s
+Unit=attacksurf-deploy.service
+
+[Install]
+WantedBy=timers.target
