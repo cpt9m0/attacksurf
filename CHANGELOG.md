@@ -25,6 +25,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   redirecting to the apex, and a deploy runbook in `docs/deployment.md` (ADR 0020, #132).
 
 ### Fixed
+- Deploying into a checkout owned by another user (the pre-CD copied tree, or a clone made by a
+  person while the timer runs as root) no longer fails with git's "dubious ownership" error:
+  `scripts/deploy.sh` trusts its own `APP_DIR` for its git calls (#29).
 - Sandbox proxy retains ownership after rejected removals, reclaims capacity after confirmed
   automatic removal, and reserves in-flight create capacity atomically, so concurrent requests
   cannot exceed its container cap (#84, PR #135).
