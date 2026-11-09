@@ -6,43 +6,45 @@
 
 ## Status
 PR 1 (shared LLM contract) is merged: [#131](https://github.com/cpt9m0/attacksurf/pull/131),
-squashed as `b7c0a1c`, merged 2026-11-06 by the repo owner. Before merge, two commits were
-added on top of Angela's eight: `10081a5` reconciled the branch with `main` (LLM ADR renumbered
-0014 → 0019, since 0014–0018 were taken by ownership and analysis ADRs) and `d1acef2` fixed a
-credential leak by making LLM base URLs `SecretStr`. #23 stays open.
+squashed as `b7c0a1c`. PR 2 (Anthropic provider, Angela) is in progress on this branch; plan:
+https://claude.ai/artifact/PnixRruj7R2cb7B6gLmvLi (written before the merge; corrections below).
+Title `feat(ai): add anthropic provider`, footer `Refs #23`.
+
+Committed: `04f9e9f` (no SDK retries, `MAX_RETRIES = 0`), `ab30ba8` (`anthropic` 2.3.0; 2.4.0+
+are under two weeks old on 2026-11-09) and step 2, the adapter (`feat(ai): add anthropic
+provider adapter`):
+- `ai/providers/anthropic.py`: `AnthropicProvider(config, *, http_client=None)`; system messages
+  joined into `system=`; `output_config.format` with `anthropic.transform_schema(schema)`; text
+  blocks only (thinking skipped); cached input tokens added to input; `APIStatusError` /
+  `APIConnectionError` mapped through `ai/errors.py` `from None`; base URL always explicit
+  (`DEFAULT_BASE_URL`) so `ANTHROPIC_BASE_URL` can't redirect a key; timeout/retries from
+  `ai/limits.py`.
+- `temperature` removed from the contract (`domain/llm.py`, `FakeLLMProvider`, contract tests,
+  ADR 0019): API version `2026-10-21`, which SDK 2.x sends, rejects sampling params with a 400.
+- import-linter contract: only `attacksurf.ai.providers.**` may import `anthropic`.
+- Tests `tests/unit/ai/providers/test_anthropic.py` (contract + 9 adapter tests) pass; ruff,
+  pyright, lint-imports pass. Full suite not run: Docker Desktop was down (DB tests need it).
 
 ## Next step
-PR 2, Anthropic provider (Angela): branch `23-anthropic-provider`, title
-`feat(ai): add anthropic provider`, footer `Refs #23`. Plan:
-https://claude.ai/artifact/PnixRruj7R2cb7B6gLmvLi (written before the merge; corrections below).
-Done on this branch (uncommitted): `MAX_RETRIES = 0` (ADR 0019 updated; partner to confirm for
-PR 3) and step 1, `anthropic` 2.3.0 added (2.4.0+ are under two weeks old on 2026-11-09).
-Unit tests, ruff, pyright, lint-imports pass; the full suite still needs a run with Docker
-Desktop up (DB tests errored only because Docker was down).
-1. ~~Add the SDK.~~ Its HTTP stack is `httpx2` (not `httpx`): stub with
-   `http_client=httpx2.Client(transport=httpx2.MockTransport(...))`. SDK 2.3.0 sleeps for any
-   `Retry-After` (capped near 49 days), which is why SDK retries stay off.
-2. Read the current Anthropic SDK docs (Context7 / `claude-api` skill) before writing code.
-3. `ai/providers/anthropic.py`: `AnthropicProvider(config)`; system messages via `system=`;
-   structured output via `output_config.format` (JSON schema, no forced tool call); omit
-   `temperature` when `None`; map SDK errors through `ai/errors.py`.
-4. Plug into `tests/unit/ai/contract.ProviderContract` with stubbed HTTP, plus one `llm_live`
-   test against `https://api.meta.ai` using the same schema PR 3 will use.
-
-## Corrections to the plan artifact
-- The LLM decision record is ADR 0019 (`docs/adr/0019-llm-contract-and-config.md`), not 0014.
-- Build the SDK client with `REQUEST_TIMEOUT_SECONDS` (60) and `MAX_RETRIES` (0) from
-  `ai/limits.py`, and also enforce `CALL_DEADLINE_SECONDS` (240) across one whole `complete()`
-  call (both attempts), raising `LLMUnavailable` when it would be exceeded. Tests: a stubbed
-  slow response, and a 429 with a large `Retry-After` failing at once (ADR 0019).
-- `LLMConfig.base_url` is `SecretStr | None` (as are `Settings.llm_base_url` and
-  `OrgLLMConfig.base_url`): call `.get_secret_value()` only when constructing the SDK client.
+Run the full suite with Docker Desktop up (not yet run on this branch), then:
+3. Errors beyond status codes: `stop_reason` `max_tokens` (truncated JSON; the corrective retry
+   can't help), `refusal`, an empty reply, `APIResponseValidationError` and other
+   `anthropic.AnthropicError`s that aren't status/connection errors.
+4. Enforce `CALL_DEADLINE_SECONDS` (240) across one `complete()` call (both attempts), raising
+   `LLMUnavailable`; tests: a stubbed slow response, and a 429 with a large `Retry-After` failing
+   at once (ADR 0019).
+5. `llm_live` test against `https://api.meta.ai` (round-trip `contract.Verdict`); record in ADR
+   0019 or `docs/development.md` that `api_key=` works there (SDK 2.x sends it as
+   `Authorization: Bearer`, the header Meta's `auth_token=` sample produces, so no special case
+   is expected). Then README/CHANGELOG/STATE.
 
 ## Open threads
-- `MAX_RETRIES = 0` decided by Angela on 2026-11-09; the PR 3 partner still needs to agree
-  before this branch merges (their adapter uses the same constant).
+- Both implementers agreed (2026-11-09) to the two contract changes: `MAX_RETRIES = 0` and no
+  `temperature` in `complete()` (the OpenAI-compatible adapter sends none either).
+- AGENTS.md says changing a decision means a new ADR; both changes were recorded in ADR 0019
+  in place (dated) since #23 is still open. Write ADR 0020 instead if the owner prefers.
 - PR 3 (OpenAI-compatible, partner) and PR 4 (`LLMUsage` + factory + AI-off startup warning,
-  Angela; closes #23) are not started.
+  Angela; closes #23) are not started. PR 3 should add `openai` to the import-linter SDK contract.
 - Org-supplied base URLs need ScopeGuard (SSRF) validation in #24 before use.
 - `.env.example` lacks `ALLOW_SIGNUP`, `SESSION_LIFETIME_HOURS` and `PROXY_COUNT` (settings exist
   in `config.py`); small follow-up fix.
@@ -50,10 +52,10 @@ Desktop up (DB tests errored only because Docker was down).
   open by other contributors.
 
 ## Notes for the next agent
-- Meta auth quirk for PR 2: Meta's Anthropic-format sample passes the key as `auth_token=`
-  (Bearer). Try `api_key=` first; if rejected, use `auth_token=` when a custom base URL is set,
-  and record which worked in ADR 0019 or `docs/development.md`. Meta only accepts
-  `tool_choice: "auto"`; Anthropic format base URL `https://api.meta.ai`.
+- SDK 2.3.0 facts: HTTP stack is `httpx2` (stub with `httpx2.MockTransport`); it sleeps for any
+  `Retry-After` (why SDK retries stay off); it still reads `ANTHROPIC_CUSTOM_HEADERS` from the
+  environment (operator-controlled, harmless here). Meta only accepts `tool_choice: "auto"`;
+  Anthropic-format base URL `https://api.meta.ai`.
 - Windows dev machine: Postgres on host port 5433 (git-excluded `compose.override.yaml`).
   Tests: `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@127.0.0.1:5433/attacksurf_test uv run pytest`
   with Docker Desktop running.

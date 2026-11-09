@@ -52,7 +52,6 @@ class SentRequest:
     system: str | None
     messages: tuple[tuple[str, str], ...]  # (role, content), system prompt excluded
     max_tokens: int
-    temperature: float | None  # None: the request carried no temperature at all
     schema: dict[str, Any] | None  # the JSON schema the API was asked to follow
 
 
@@ -115,20 +114,6 @@ class ProviderContract:
         harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=321)
 
         assert harness.sent[0].max_tokens == 321
-
-    def test_unset_temperature_is_left_out(self, harness: ProviderHarness) -> None:
-        harness.reply(VALID)
-
-        harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
-
-        assert harness.sent[0].temperature is None
-
-    def test_given_temperature_is_sent(self, harness: ProviderHarness) -> None:
-        harness.reply(VALID)
-
-        harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256, temperature=0.2)
-
-        assert harness.sent[0].temperature == 0.2
 
     def test_invalid_reply_is_retried_once_with_a_correction(
         self, harness: ProviderHarness

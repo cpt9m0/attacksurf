@@ -171,3 +171,20 @@ forbidden_modules = ["sqlalchemy", "alembic"]
 ignore_imports = ["attacksurf.web.db -> sqlalchemy"]
 # Indirect use through infra is the point; only direct imports are restricted.
 allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "only ai.providers imports an LLM SDK (ADR 0019)"
+type = "forbidden"
+source_modules = [
+    "attacksurf.web",
+    "attacksurf.workers",
+    "attacksurf.services",
+    "attacksurf.domain",
+    "attacksurf.infra",
+    "attacksurf.scanners",
+    "attacksurf.ai",
+]
+forbidden_modules = ["anthropic"]
+ignore_imports = ["attacksurf.ai.providers.** -> anthropic"]
+# Everything reaches a provider through ai.providers; only direct SDK imports are restricted.
+allow_indirect_imports = true

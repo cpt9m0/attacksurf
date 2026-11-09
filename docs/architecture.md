@@ -165,8 +165,10 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 
 ## AI layer
 
-- `LLMProvider` protocol (`domain/llm.py`, ADR 0019) with `AnthropicProvider` and
-  `OpenAICompatProvider` (configurable `base_url`). Official SDKs, no meta-library.
+- `LLMProvider` protocol (`domain/llm.py`, ADR 0019) with `AnthropicProvider`
+  (`ai/providers/anthropic.py`) and `OpenAICompatProvider` (configurable `base_url`). Official
+  SDKs, no meta-library; only `ai/providers/` imports one (an import-linter contract). No
+  sampling settings: models run with their defaults.
 - A provider is built from one `LLMConfig` chosen by `ai/config.resolve_llm_config`: the org's
   own key (and its provider/model/base URL), else the instance `LLM_*` config (capped per org,
   #24), else AI off. Sources never mix; no failover between keys. Model names only from config.

@@ -40,6 +40,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   silently.
 
 ### Changed
+- The LLM contract has no `temperature` any more: Anthropic API version `2026-10-21` (sent by
+  the `anthropic` 2.x SDK) rejects sampling parameters on every model, and nothing used it, so
+  models run with their defaults (ADR 0019, #23).
 - LLM SDK clients no longer retry (`ai/limits.MAX_RETRIES = 0`): Celery's task retry is the
   only retry layer, so errors don't multiply requests or park an `ai` worker in `Retry-After`
   sleeps (ADR 0019, #23).
@@ -54,6 +57,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   survives scan pruning and work outside a scan can be tracked.
 
 ### Added
+- Anthropic provider (`ai/providers/anthropic.py`, #23): Messages API requests with native
+  JSON-schema output, the system prompt split out, thinking blocks ignored, cached input
+  tokens counted as input, SDK errors mapped to `LLMError`s without the response body, and the
+  base URL always passed explicitly so `ANTHROPIC_BASE_URL` can't redirect a key. Passes the
+  shared provider contract against a stubbed API. An import-linter contract keeps LLM SDK
+  imports inside `ai/providers/`.
 - LLM provider contract (#23, ADR 0019): `LLMProvider` protocol, result/usage types and
   `LLMError` subclasses in `domain/llm.py`; shared schema validation with one corrective retry
   (`ai/structured.py`); one HTTP-status error mapping (`ai/errors.py`); `resolve_llm_config`

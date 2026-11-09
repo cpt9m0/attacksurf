@@ -25,7 +25,6 @@ class FakeHarness:
                 system=next((m.content for m in call.messages if m.role == "system"), None),
                 messages=tuple((m.role, m.content) for m in call.messages if m.role != "system"),
                 max_tokens=call.max_tokens,
-                temperature=call.temperature,
                 schema=call.schema.model_json_schema(),
             )
             for call in self.provider.calls

@@ -11,11 +11,15 @@ For v1 the repo owner confirmed that orgs without a key use the operator's insta
 a cap. Development uses Meta's Muse Spark models, which serve both API formats with one key.
 
 ## Decision
-- **Contract in `domain/llm.py`**: `LLMProvider.complete(messages, *, schema, max_tokens,
-  temperature=None) -> LLMResult[T]`. A provider is built from one `LLMConfig`, so the model is
-  not a call argument (unlike #23's sketch): a call cannot pair one source's key with another's
-  model. `schema` is required, since every AI feature validates its output. `temperature=None`
-  sends no temperature at all.
+- **Contract in `domain/llm.py`**: `LLMProvider.complete(messages, *, schema, max_tokens)
+  -> LLMResult[T]`. A provider is built from one `LLMConfig`, so the model is not a call
+  argument (unlike #23's sketch): a call cannot pair one source's key with another's model.
+  `schema` is required, since every AI feature validates its output.
+  **No sampling settings** (decided 2026-11-09, PR 2; the contract first had
+  `temperature=None`): Anthropic API version `2026-10-21`, which the `anthropic` 2.x SDK sends,
+  rejects `temperature`, `top_p` and `top_k` with a 400 on every model, and OpenAI reasoning
+  models reject non-default values too. Nothing called with one, and a setting that works on
+  only one provider would mislead, so adapters send none and the model's defaults apply.
 - **Structured output** uses each API's native JSON-schema format (Anthropic
   `output_config.format`, OpenAI `response_format` `json_schema`), not a forced tool call: Meta
   only accepts `tool_choice: "auto"`. Validation and the one retry live in
