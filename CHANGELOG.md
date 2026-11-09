@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- `sandbox-proxy` service: the only holder of the Docker socket, allowing six container actions
+  on containers it created and refusing any create request outside the sandbox policy (#84).
 - CD is verified end-to-end: a merge to `main` reaches production within one timer
   interval, and the running `web` image tag matches the recorded deployed SHA (#29).
 - Pull-based CD: `scripts/deploy.sh` (also `make deploy`) fetches `origin/main`, builds the
@@ -26,6 +28,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 - Deploying into a checkout owned by another user (the pre-CD copied tree, or a clone made by a
   person while the timer runs as root) no longer fails with git's "dubious ownership" error:
   `scripts/deploy.sh` trusts its own `APP_DIR` for its git calls (#29).
+- Sandbox proxy retains ownership after rejected removals, reclaims capacity after confirmed
+  automatic removal, and reserves in-flight create capacity atomically, so concurrent requests
+  cannot exceed its container cap (#84, PR #135).
+- Unknown Docker-create outcomes retain their reserved slot and receive a proxy-generated
+  name for forced cleanup; failed cleanup (including 404 while creation may still be running)
+  never frees capacity. Subsequent create requests retry reconciliation (#84, PR #135).
+- Legacy Docker API prefixes below v1.30 are denied so clients cannot disable AutoRemove or
+  downgrade removed-wait semantics and bypass the container cap (#84, PR #135).
+- Proxy settings tests clear all application and proxy environment fields, including the
+  documented dev runtime fallback, before constructing settings (#84, PR #135).
+- Proxy environment settings and defaults are documented in `.env.example` (#84).
 - Login and signup rate limits key on the visitor address Cloudflare forwards
   (`CF-Connecting-IP`, else the leftmost `X-Forwarded-For` entry) instead of the first proxy
   hop, so visitors behind the tunnel no longer share one budget (#132).
