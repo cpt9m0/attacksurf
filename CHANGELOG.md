@@ -23,6 +23,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   redirecting to the apex, and a deploy runbook in `docs/deployment.md` (ADR 0020, #132).
 
 ### Fixed
+- Deploying into a checkout owned by another user (the pre-CD copied tree, or a clone made by a
+  person while the timer runs as root) no longer fails with git's "dubious ownership" error:
+  `scripts/deploy.sh` trusts its own `APP_DIR` for its git calls (#29).
 - Login and signup rate limits key on the visitor address Cloudflare forwards
   (`CF-Connecting-IP`, else the leftmost `X-Forwarded-For` entry) instead of the first proxy
   hop, so visitors behind the tunnel no longer share one budget (#132).

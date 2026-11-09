@@ -55,7 +55,10 @@ die() {
   exit 1
 }
 
-git_() { git -C "$APP_DIR" "$@"; }
+# The checkout may be owned by a different user than the one running the deploy: a fresh host is
+# cloned or copied by a person while the timer runs as root, and git then refuses every command
+# with "detected dubious ownership". Trust exactly APP_DIR for these calls, nothing else.
+git_() { git -c safe.directory="$APP_DIR" -C "$APP_DIR" "$@"; }
 compose() { docker compose --project-directory "$APP_DIR" -f "$COMPOSE_PATH" "$@"; }
 
 usage() {
