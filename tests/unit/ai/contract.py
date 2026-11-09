@@ -5,7 +5,8 @@ stubs that provider's HTTP layer (recorded responses, never the network) and tur
 sent into a `SentRequest`. Stubbed failures stand for the final answer after the SDK's own
 retries, so harnesses build their SDK client with retries off. Separately, each adapter's tests
 assert that in production it builds its client with `ai/limits.py`'s timeout and retry count,
-and that a call stops at `CALL_DEADLINE_SECONDS` (large `Retry-After`, slow response).
+and that a call stops at `CALL_DEADLINE_SECONDS` (slow response; a large `Retry-After` fails
+at once).
 """
 
 from dataclasses import dataclass

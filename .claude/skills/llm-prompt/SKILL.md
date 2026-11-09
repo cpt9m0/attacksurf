@@ -16,7 +16,8 @@ description: Add or change an LLM-powered feature or prompt (triage, summaries, 
   output one retry, then raises `LLMOutputError`: catch it and skip gracefully.
 - Tests use `tests.fakes.FakeLLMProvider`; a new provider adapter must pass
   `tests/unit/ai/contract.ProviderContract`, build its SDK client with `ai/limits.py`, and
-  enforce `CALL_DEADLINE_SECONDS` per call (SDK timeouts and `Retry-After` waits don't).
+  enforce `CALL_DEADLINE_SECONDS` per call (the SDK's per-chunk read timeout doesn't). SDK
+  retries stay off (`MAX_RETRIES = 0`): Celery retries the task.
 - `LLMUnavailable` makes Celery retry the whole task: one `complete()` call per task, or cache
   results per finding, so a retry never pays again for calls that already succeeded.
 - Every call records usage (`LLMUsage`) and respects the org's token budget.

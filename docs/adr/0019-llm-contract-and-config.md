@@ -29,17 +29,22 @@ a cap. Development uses Meta's Muse Spark models, which serve both API formats w
   Messages never contain a key, prompt or model output.
 - **Timeouts and retries**: the SDKs default to a 600 s timeout, longer than a Celery task may
   run (`TrackedTask.soft_time_limit` = 300 s), so every adapter passes `ai/limits.py`'s
-  `REQUEST_TIMEOUT_SECONDS` (60 s) and `MAX_RETRIES` (1) to its SDK client. Those don't bound
-  a call's total time: a read timeout limits each chunk's wait, not the whole response, the
-  SDKs sleep for any server `Retry-After`, and PR 3's format fallback adds requests. So each
-  adapter must also enforce `CALL_DEADLINE_SECONDS` (240 s) across one `complete()` call and
-  raise `LLMUnavailable` when it would be exceeded, proven in its own tests with a stubbed large
-  `Retry-After` and a slow response. The shared test only checks that the deadline leaves room
-  under the soft limit; until the adapters enforce it, Celery's soft limit is the backstop.
-  Open for PR 2/PR 3 to agree: `MAX_RETRIES = 0`, leaving all retries to Celery, would remove
-  in-process `Retry-After` sleeps entirely. `LLMUnavailable` is a `TransientJobError`, so
-  Celery retries the *task* with backoff: AI tasks must make one `complete()` call each, or
-  cache results per finding (#25), so a retry doesn't pay again for calls that succeeded.
+  `REQUEST_TIMEOUT_SECONDS` (60 s) and `MAX_RETRIES` (0) to its SDK client.
+  **No SDK retries** (decided 2026-11-09, PR 2/PR 3): `LLMUnavailable` is a
+  `TransientJobError`, so Celery already retries the *task* (3 times, 1/2/4 s backoff with
+  jitter, recorded on the job). SDK retries on top would multiply requests (up to 16 instead of
+  8 per call under errors) and park one of the two `ai` workers in `Retry-After` sleeps. Cost:
+  a brief blip waits for a task retry instead of an instant one, and Celery's backoff ignores
+  `Retry-After`; pass it through as the retry countdown if 429s become frequent.
+  The request timeout still doesn't bound a call's total time: a read timeout limits each
+  chunk's wait, not the whole response, and the corrective retry and PR 3's format fallback
+  add requests. So each adapter must also enforce `CALL_DEADLINE_SECONDS` (240 s) across one
+  `complete()` call and raise `LLMUnavailable` when it would be exceeded, proven in its own
+  tests with a slow response (and a 429 with a large `Retry-After` failing at once). The shared
+  test only checks that the deadline leaves room under the soft limit; until the adapters
+  enforce it, Celery's soft limit is the backstop. AI tasks must make one `complete()` call
+  each, or cache results per finding (#25), so a task retry doesn't pay again for calls that
+  succeeded.
 - **Config resolution** (`ai/config.resolve_llm_config`): the org's own key wins and brings its
   own provider, model and base URL; otherwise the instance config (`LLM_*`) applies if it has
   both a key and a model; otherwise AI is off. Sources never mix, and a failing org key never

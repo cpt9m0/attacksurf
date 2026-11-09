@@ -172,9 +172,9 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   #24), else AI off. Sources never mix; no failover between keys. Model names only from config.
 - Structured output via each API's JSON-schema format; validation plus one corrective retry is
   shared (`ai/structured.complete_structured`). Errors map to `LLMError` subclasses
-  (`ai/errors.py`). Adapters pass `ai/limits.py`'s timeout and retry count to their SDK and
-  enforce its total `CALL_DEADLINE_SECONDS` per call (which leaves room under
-  `TrackedTask.soft_time_limit`); Celery then retries `LLMUnavailable` at task level, so AI
+  (`ai/errors.py`). Adapters pass `ai/limits.py`'s timeout and retry count (0: no SDK retries)
+  to their SDK and enforce its total `CALL_DEADLINE_SECONDS` per call (which leaves room under
+  `TrackedTask.soft_time_limit`); Celery alone retries `LLMUnavailable`, at task level, so AI
   tasks make one call each or cache per finding.
 - Every call: versioned prompt, pydantic output schema, usage recorded, budget enforced, results
   cached by `(prompt_version, model, input hash)`.
