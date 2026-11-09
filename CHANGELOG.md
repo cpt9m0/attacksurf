@@ -5,6 +5,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 
 ## [Unreleased]
 
+### Added
+- `sandbox-proxy` service: the only holder of the Docker socket, allowing six container actions
+  on containers it created and refusing any create request outside the sandbox policy (#84).
+
 ### Fixed
 - LLM endpoint credentials are masked in settings and provider-config representations;
   base URLs remain `SecretStr` through config resolution (#23).

@@ -190,7 +190,7 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 | `ai` | LLM calls | rate-limited per org |
 | `fetch` *(later)* | git smart-HTTP fetches | egress to allowlisted forges through ScopeGuard; no access to `sandbox-launcher`; never parses repository content (ADR 0017) |
 | `active` *(later)* | port/web probes on verified targets | separate network, egress rules |
-| `analysis` *(later)* | code/binary analysis | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
+| `analysis` *(later)* | code/binary analysis (`sandbox_proxy/` is implemented; launcher and worker are not yet) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
 
 - `infra/queue.py`: `create_celery(settings)` (Redis broker + result backend from `REDIS_URL`,
   JSON only, `acks_late` + `reject_on_worker_lost`, prefetch 1, results ignored unless a

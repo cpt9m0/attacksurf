@@ -1,7 +1,7 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from attacksurf.config import get_settings
+from attacksurf.config import SandboxProxySettings, get_settings
 from tests.helpers import PROD_SECRET_KEY, make_settings, settings_from_env
 
 
@@ -145,3 +145,28 @@ def test_auth_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> N
 def test_auth_settings_reject_out_of_range(field: str, value: int) -> None:
     with pytest.raises(ValidationError):
         make_settings(**{field: value})
+
+
+def test_sandbox_proxy_settings_need_no_app_secrets_in_prod() -> None:
+    settings = SandboxProxySettings(env="prod", sandbox_artifact_root="/srv/artifacts")
+
+    assert not hasattr(settings, "secret_key")
+    assert not hasattr(settings, "database_url")
+    assert settings.allowed_runtimes == frozenset({"runsc"})
+
+
+def test_sandbox_proxy_settings_allow_runc_only_when_asked_outside_prod() -> None:
+    settings = SandboxProxySettings(env="dev", sandbox_allow_runc=True)
+
+    assert settings.allowed_runtimes == frozenset({"runsc", "runc"})
+
+
+def test_sandbox_proxy_settings_refuse_runc_in_prod() -> None:
+    with pytest.raises(ValueError, match="runc"):
+        SandboxProxySettings(env="prod", sandbox_allow_runc=True)
+
+
+@pytest.mark.parametrize("root", ["relative/path", "/", "/srv/../etc"])
+def test_sandbox_proxy_settings_refuse_unsafe_artifact_roots(root: str) -> None:
+    with pytest.raises(ValueError, match="artifact root"):
+        SandboxProxySettings(sandbox_artifact_root=root)

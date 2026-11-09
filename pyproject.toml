@@ -157,6 +157,25 @@ source_modules = [
 forbidden_modules = ["attacksurf.web", "attacksurf.workers"]
 
 [[tool.importlinter.contracts]]
+name = "sandbox proxy stays isolated from the app and its credentials"
+type = "forbidden"
+source_modules = ["attacksurf.sandbox_proxy"]
+forbidden_modules = [
+    "attacksurf.web",
+    "attacksurf.workers",
+    "attacksurf.services",
+    "attacksurf.infra",
+    "attacksurf.scanners",
+    "attacksurf.ai",
+    "celery",
+    "flask",
+    "httpx",
+    "psycopg",
+    "redis",
+    "sqlalchemy",
+]
+
+[[tool.importlinter.contracts]]
 name = "database access stays in infra/services (web only via web.db)"
 type = "forbidden"
 source_modules = [
