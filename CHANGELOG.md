@@ -43,6 +43,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 - LLM SDK clients no longer retry (`ai/limits.MAX_RETRIES = 0`): Celery's task retry is the
   only retry layer, so errors don't multiply requests or park an `ai` worker in `Retry-After`
   sleeps (ADR 0019, #23).
+- Dependencies: add the `anthropic` SDK (2.3.0, the newest release at least two weeks old;
+  `jiter` and `opentelemetry-api` pinned back the same way). The scanner network-boundary test
+  also bans its `httpx2`/`httpcore2` HTTP stack and the LLM SDKs (#23).
 - `LLM_MODEL` no longer defaults to a Claude model in code: model names come only from config,
   and an instance without both `LLM_API_KEY` and `LLM_MODEL` has AI off (ADR 0019).
   Developers set the Meta development configuration in their own `.env` (see
