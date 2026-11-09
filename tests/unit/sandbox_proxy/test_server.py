@@ -28,6 +28,7 @@ class FakeDocker(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         self.calls: list[tuple[str, str, dict[str, str], bytes]] = []
         self.next_id = CREATED
         self.create_status = 201
+        self.drop_create_reply = False
         self.remove_status = 204
         self.wait_status = 200
         self.wait_body = b'{"StatusCode": 0}'
@@ -45,7 +46,9 @@ class _FakeDockerHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
         self.server.calls.append((self.command, self.path, dict(self.headers), body))
-        if self.path.endswith("/containers/create"):
+        if self.path.split("?", 1)[0].endswith("/containers/create"):
+            if self.server.drop_create_reply:
+                return
             if self.server.create_entered is not None:
                 self.server.create_entered.set()
             if self.server.create_release is not None:
@@ -123,7 +126,8 @@ def test_valid_create_is_forwarded_and_returns_the_container_id(
 
     assert status == 201
     assert json.loads(body)["Id"] == CREATED
-    assert docker.calls[0][0:2] == ("POST", "/containers/create")
+    assert docker.calls[0][0] == "POST"
+    assert docker.calls[0][1].startswith("/containers/create?name=attacksurf-")
 
 
 def test_unsafe_create_never_reaches_docker(proxy: int, docker: FakeDocker) -> None:
@@ -404,6 +408,27 @@ def test_failed_create_releases_reserved_capacity(
 
     assert create(proxy)[0] == 201
     assert create(proxy)[0] == 429
+
+
+@pytest.mark.parametrize("remove_status", [404, 409, 500])
+def test_uncertain_create_retains_capacity_until_named_cleanup_succeeds(
+    proxy: int, docker: FakeDocker, monkeypatch: pytest.MonkeyPatch, remove_status: int
+) -> None:
+    monkeypatch.setattr("attacksurf.sandbox_proxy.server.MAX_TRACKED_CONTAINERS", 1)
+    docker.drop_create_reply = True
+    docker.remove_status = remove_status
+
+    assert create(proxy)[0] == 502
+    assert create(proxy)[0] == 429
+    assert sum(method == "POST" for method, _, _, _ in docker.calls) == 1
+
+    docker.remove_status = 204
+    docker.drop_create_reply = False
+    assert create(proxy)[0] == 201
+    create_target = docker.calls[0][1]
+    name = create_target.split("?name=", 1)[1]
+    assert name.startswith("attacksurf-")
+    assert ("DELETE", f"/containers/{name}?force=1") == docker.calls[1][:2]
 
 
 def test_create_reply_without_a_valid_id_is_not_trusted(proxy: int, docker: FakeDocker) -> None:

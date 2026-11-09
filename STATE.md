@@ -9,7 +9,9 @@ Draft PR #134 (`84-sandbox-port`) adds the port and grants. This branch adds `sa
 the deny-by-default Docker socket guard, its create policy, and an import-linter isolation
 contract. Removals retain ownership unless Docker confirms success or absence; a successful
 `wait?condition=removed` also reclaims capacity after AutoRemove. In-flight creates count against
-the cap. Proxy settings tests clear the process environment; `.env.example` lists all defaults.
+the cap. Unknown create outcomes keep a reserved slot and a proxy-generated cleanup name;
+subsequent creates retry cleanup, and only confirmed deletion releases uncertain capacity.
+Proxy settings tests clear the environment; `.env.example` lists all defaults.
 Nothing deploys it yet; compose comes in PR 4 and the images lock in PR 5.
 
 ## Next step

@@ -8,6 +8,7 @@ import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, NoReturn
+from uuid import uuid4
 
 import structlog
 
@@ -37,19 +38,29 @@ class _TrackedContainers:
 
     def __init__(self) -> None:
         self._ids: set[str] = set()
-        self._pending = 0
+        self._pending: set[str] = set()
+        self._uncertain: set[str] = set()
         self._lock = threading.Lock()
 
-    def reserve(self) -> bool:
+    def reserve(self, name: str) -> bool:
         with self._lock:
-            if len(self._ids) + self._pending >= MAX_TRACKED_CONTAINERS:
+            if len(self._ids) + len(self._pending) >= MAX_TRACKED_CONTAINERS:
                 return False
-            self._pending += 1
+            self._pending.add(name)
             return True
 
-    def release(self) -> None:
+    def release(self, name: str) -> None:
         with self._lock:
-            self._pending -= 1
+            self._pending.discard(name)
+            self._uncertain.discard(name)
+
+    def uncertain(self, name: str) -> None:
+        with self._lock:
+            self._uncertain.add(name)
+
+    def unresolved(self) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(self._uncertain)
 
     def add(self, container_id: str) -> None:
         with self._lock:
@@ -173,34 +184,71 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             self._violation("Container is not managed by the sandbox.")
 
     def _forward(self, route: Route, body: bytes) -> None:
-        creating = route.action == "create"
-        if creating and not self.server.containers.reserve():
-            self._reply(429, b'{"message": "Too many sandboxes."}')
-            return
-        try:
-            self._forward_reserved(route, body)
-        finally:
-            if creating:
-                self.server.containers.release()
+        name: str | None = None
+        if route.action == "create":
+            for unresolved in self.server.containers.unresolved():
+                self._cleanup_create(unresolved)
+            name = f"attacksurf-{uuid4().hex}"
+            if not self.server.containers.reserve(name):
+                self._reply(429, b'{"message": "Too many sandboxes."}')
+                return
+            route = Route("create", None, f"{route.target}?name={name}")
+        self._forward_reserved(route, body, name)
 
-    def _forward_reserved(self, route: Route, body: bytes) -> None:
+    def _cleanup_create(self, name: str) -> None:
+        """Only proxy-generated names are eligible; unknown outcomes keep their slot.
+
+        A 404 is not proof of absence: a timed-out create may still finish later.
+        Retry cleanup on the next create; release only after confirmed deletion.
+        """
+        connection = _UnixConnection(self.server.docker_socket, DOCKER_TIMEOUT_SECONDS)
+        try:
+            connection.request("DELETE", f"/containers/{name}?force=1", body=b"")
+            response = connection.getresponse()
+            if response.status == HTTPStatus.NO_CONTENT:
+                self.server.containers.release(name)
+        except (OSError, http.client.HTTPException):
+            pass
+        finally:
+            connection.close()
+
+    def _forward_reserved(self, route: Route, body: bytes, name: str | None) -> None:
         timeout = RUN_TIMEOUT_SECONDS if route.action == "wait" else DOCKER_TIMEOUT_SECONDS
         connection = _UnixConnection(self.server.docker_socket, timeout)
         method = "DELETE" if route.action == "remove" else "POST"
-        headers = {"Content-Type": "application/json"} if route.action == "create" else {}
+        headers = {"Content-Type": "application/json"} if name else {}
+        sent = False
         try:
+            connection.connect()
+            sent = True
             connection.request(method, route.target, body=body, headers=headers)
             response = connection.getresponse()
             reply = response.read(MAX_DOCKER_REPLY_BYTES)
         except (OSError, http.client.HTTPException):
+            if name:
+                self._finish_create(name, uncertain=sent)
             self._reply(502, b'{"message": "Docker is unavailable."}')
             return
         finally:
             connection.close()
-        if not self._record(route, response.status, reply):
+        valid = self._record(route, response.status, reply)
+        if name:
+            uncertain = not (
+                (response.status == HTTPStatus.CREATED and valid)
+                or HTTPStatus.BAD_REQUEST <= response.status < HTTPStatus.INTERNAL_SERVER_ERROR
+            )
+            self._finish_create(name, uncertain=uncertain)
+        if not valid:
             self._reply(502, b'{"message": "Docker sent an invalid reply."}')
             return
         self._reply(response.status, reply)
+
+    def _finish_create(self, name: str, *, uncertain: bool) -> None:
+        if uncertain:
+            self.server.containers.uncertain(name)
+            self._cleanup_create(name)
+        else:
+            self.server.containers.release(name)
 
     def _record(self, route: Route, status: int, reply: bytes) -> bool:
         """Update ownership from Docker's answer; False when a create reply can't be trusted."""

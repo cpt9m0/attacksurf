@@ -13,6 +13,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 - Sandbox proxy retains ownership after rejected removals, reclaims capacity after confirmed
   automatic removal, and reserves in-flight create capacity atomically, so concurrent requests
   cannot exceed its container cap (#84, PR #135).
+- Unknown Docker-create outcomes retain their reserved slot and receive a proxy-generated
+  name for forced cleanup; failed cleanup (including 404 while creation may still be running)
+  never frees capacity. Subsequent create requests retry reconciliation (#84, PR #135).
 - Proxy settings tests clear all application and proxy environment fields, including the
   documented dev runtime fallback, before constructing settings (#84, PR #135).
 - Proxy environment settings and defaults are documented in `.env.example` (#84).
