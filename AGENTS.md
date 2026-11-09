@@ -50,6 +50,7 @@ uv sync                                  # install (never pip install)
 cp .env.example .env                     # local config (all settings: src/attacksurf/config.py)
 make up / make down / make test          # dev Compose stack; up builds + migrates before starting apps
 make migrate                             # alembic upgrade head (in compose); new migration: make revision id=0002 m="..."
+sudo make deploy                         # prod, root-only: deploy origin/main (or SHA=<sha>); docs/deployment.md
 uv add <pkg> / uv add --dev <pkg>        # add deps (never edit lockfile by hand)
 uv run flask --app attacksurf run --debug
 uv run pytest                            # tests + coverage (fails under 80%)
