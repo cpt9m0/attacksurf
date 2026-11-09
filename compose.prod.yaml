@@ -10,7 +10,9 @@ x-app: &app
   build:
     context: .
     target: prod
-  image: attacksurf:prod
+  # Tagged per deployed commit by scripts/deploy.sh (WEB_IMAGE); the fallback keeps a hand-run
+  # `docker compose -f compose.prod.yaml build` usable without the deploy script.
+  image: ${WEB_IMAGE:-attacksurf:prod}
   restart: unless-stopped
   security_opt:
     - no-new-privileges:true

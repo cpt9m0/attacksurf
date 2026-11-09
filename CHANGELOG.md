@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Pull-based CD: `scripts/deploy.sh` (also `make deploy`) fetches `origin/main`, builds the
+  images tagged with the short SHA, runs `migrate` before replacing `web`, smoke-tests
+  `/healthz` through the ingress and rolls back to the previously deployed SHA on failure; the
+  deployed SHA is recorded in `/var/lib/attacksurf/deployed-sha` (#138).
 - Pull-based CD units (`deploy/systemd/`): `attacksurf-deploy.timer` runs `scripts/deploy.sh`
   every 3 minutes (±45 s jitter) as root under a `flock`, so a merge to `main` reaches
   production within one interval with no inbound port, no GitHub secret and no runner; the
