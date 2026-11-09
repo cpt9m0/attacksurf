@@ -58,8 +58,8 @@ cat /var/lib/attacksurf/deployed-sha               # what the script says is liv
 docker ps --filter name=attacksurf-prod-web-1 --format '{{.Image}}'
 ```
 
-A run that finds the lock already held logs nothing and exits 0 — that is the overlap guard
-doing its job, not a failed deploy.
+A run that finds the lock already held logs no deploy output (only the `ExecStartPost` line
+with the live SHA) and exits 0 — that is the overlap guard doing its job, not a failed deploy.
 
 ## Operate
 
