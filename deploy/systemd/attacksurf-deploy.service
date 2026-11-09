@@ -1,0 +1,36 @@
+[Unit]
+Description=AttackSurf pull-based deploy (attacksurf.dev)
+Documentation=file:///opt/attacksurf/docs/deployment.md
+# Pull-based CD: the host reaches out, nothing dials in. No GitHub secret, no runner,
+# no inbound port — the timer only runs `scripts/deploy.sh` against origin/main.
+Requires=docker.service
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Root is required twice over: the secrets in /etc/attacksurf/ are mode 600 root-owned,
+# and the docker socket is root-equivalent. Do not add a docker-group user instead.
+User=root
+Group=root
+WorkingDirectory=/opt/attacksurf
+
+# The journal is the deploy log: `journalctl -u attacksurf-deploy` shows the deployed SHA.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=attacksurf-deploy
+
+# One deploy at a time. `flock` makes a second run — a manual `systemctl start`, or a tick
+# that lands while the previous build is still running — exit immediately instead of
+# racing the first one. --conflict-exit-code 0 marks that skip as success, not failure.
+ExecStart=/usr/bin/flock --nonblock --conflict-exit-code 0 /var/lock/attacksurf-deploy.lock /opt/attacksurf/scripts/deploy.sh
+
+# Belt and braces for "what is live": echo the SHA file even if the script's own line is
+# lost. `$$` is a literal `$` — systemd expands `$VAR` itself before the shell sees it.
+ExecStartPost=-/bin/sh -c 'echo "attacksurf-deploy: deployed-sha file: $$(cat /var/lib/attacksurf/deployed-sha 2>/dev/null || echo unknown)"'
+
+# A cold image build on 2 vCPU takes minutes. Do not let systemd kill a deploy halfway
+# through (a half-swapped stack is worse than a late one).
+TimeoutStartSec=30min
+TimeoutStopSec=120s
+Nice=10
