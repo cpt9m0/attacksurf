@@ -113,7 +113,8 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 - A failing scanner fails only its job, not the scan.
 - Implemented framework (ADR 0011/0013): `domain/scanners.py` defines pydantic `ScanOutput`,
   `AssetRef(type, value)`, relations, raw rule findings/evidence, `ScanContext`, the `Scanner`
-  protocol, the frozen `ScannerGrant` and `ScannerRuntime` (validated DNS/HTTP adapters). Plugins
+  protocol, the frozen `ScannerGrant` and `ScannerRuntime` (validated DNS/HTTP adapters and the
+  grant-checked sandbox port from `domain/sandbox.py`). Plugins
   declare `name`, `asset_types`, `queue`, `requires_verification`, `timeout_seconds`
   (0 < timeout <= 240 s) and `grant`, and return `run(ctx, asset) -> ScanOutput`.
 - `scanners/registry.py` supplies `@register_scanner`; import plugin modules explicitly at
