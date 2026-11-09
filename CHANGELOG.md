@@ -60,7 +60,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 - Anthropic provider (`ai/providers/anthropic.py`, #23): Messages API requests with native
   JSON-schema output, the system prompt split out, thinking blocks ignored, cached input
   tokens counted as input, SDK errors mapped to `LLMError`s without the response body, and the
-  base URL always passed explicitly so `ANTHROPIC_BASE_URL` can't redirect a key. Passes the
+  base URL always passed explicitly so `ANTHROPIC_BASE_URL` can't redirect a key. Replies cut
+  off at the token limit, refused, or over the context window fail at once instead of paying
+  for a corrective retry; an unreadable 2xx body is transient; a reply without usage is kept
+  with usage marked unreported; failed calls log status, error type and request ID. Passes the
   shared provider contract against a stubbed API. An import-linter contract keeps LLM SDK
   imports inside `ai/providers/`.
 - LLM provider contract (#23, ADR 0019): `LLMProvider` protocol, result/usage types and

@@ -6,13 +6,25 @@ from typing import Any
 import httpx2
 import pytest
 from pydantic import SecretStr
+from structlog.testing import capture_logs
 
 from attacksurf.ai.limits import MAX_RETRIES, REQUEST_TIMEOUT_SECONDS
 from attacksurf.ai.providers.anthropic import DEFAULT_BASE_URL, AnthropicProvider
-from attacksurf.domain.llm import KeySource, LLMConfig, ProviderKind, TokenUsage
+from attacksurf.domain.jobs import TransientJobError
+from attacksurf.domain.llm import (
+    KeySource,
+    LLMConfig,
+    LLMError,
+    LLMOutputError,
+    LLMRequestError,
+    LLMUnavailable,
+    ProviderKind,
+    TokenUsage,
+)
 from tests.unit.ai.contract import (
     API_KEY,
     CONVERSATION,
+    INVALID,
     VALID,
     ProviderContract,
     SentRequest,
@@ -32,7 +44,14 @@ def _config(base_url: str | None = None) -> LLMConfig:
     )
 
 
-def _message(content: list[dict[str, Any]], usage: dict[str, int]) -> dict[str, Any]:
+USAGE = {"input_tokens": 10, "output_tokens": 5}
+
+
+def _message(
+    content: list[dict[str, Any]],
+    usage: dict[str, int] | None = None,
+    stop_reason: str = "end_turn",
+) -> dict[str, Any]:
     """A Messages API response body, in the shape the API documents."""
     return {
         "id": "msg_test",
@@ -40,15 +59,24 @@ def _message(content: list[dict[str, Any]], usage: dict[str, int]) -> dict[str, 
         "role": "assistant",
         "model": MODEL,
         "content": content,
-        "stop_reason": "end_turn",
+        "stop_reason": stop_reason,
         "stop_sequence": None,
-        "usage": usage,
+        "usage": USAGE if usage is None else usage,
     }
+
+
+def _text(text: str) -> list[dict[str, Any]]:
+    return [{"type": "text", "text": text}]
+
+
+def _error(status: int, error_type: str, message: str) -> httpx2.Response:
+    body = {"type": "error", "error": {"type": error_type, "message": message}}
+    return httpx2.Response(status, json=body, headers={"request-id": "req_test"})
 
 
 class AnthropicHarness:
     def __init__(self, base_url: str | None = None) -> None:
-        self._queue: list[dict[str, Any] | int | None] = []  # body, error status, or no answer
+        self._queue: list[httpx2.Response | None] = []  # None: the connection fails
         self.requests: list[httpx2.Request] = []
         client = httpx2.Client(transport=httpx2.MockTransport(self._answer))
         self.provider = AnthropicProvider(_config(base_url), http_client=client)
@@ -58,20 +86,20 @@ class AnthropicHarness:
         queued = self._queue.pop(0)
         if queued is None:
             raise httpx2.ConnectError("connection refused", request=request)
-        if isinstance(queued, int):
-            error = {"type": "error", "error": {"type": "api_error", "message": "stubbed"}}
-            return httpx2.Response(queued, json=error)
-        return httpx2.Response(200, json=queued)
+        return queued
 
     def reply(self, text: str, *, input_tokens: int = 10, output_tokens: int = 5) -> None:
         usage = {"input_tokens": input_tokens, "output_tokens": output_tokens}
-        self.reply_body(_message([{"type": "text", "text": text}], usage))
+        self.reply_body(_message(_text(text), usage))
 
-    def reply_body(self, body: dict[str, Any]) -> None:
-        self._queue.append(body)
+    def reply_body(self, body: object) -> None:
+        self.respond(httpx2.Response(200, json=body))
+
+    def respond(self, response: httpx2.Response) -> None:
+        self._queue.append(response)
 
     def fail(self, status: int | None) -> None:
-        self._queue.append(status)
+        self._queue.append(None if status is None else _error(status, "api_error", "stubbed"))
 
     def body(self, index: int = 0) -> dict[str, Any]:
         return json.loads(self.requests[index].content)
@@ -161,10 +189,18 @@ def test_schema_is_sent_in_the_strict_form_the_api_accepts(harness: AnthropicHar
     assert "tools" not in harness.body()  # native structured output, no forced tool call
 
 
-def test_only_text_blocks_make_up_the_reply(harness: AnthropicHarness) -> None:
-    thinking = {"type": "thinking", "thinking": "", "signature": "sig"}
-    usage = {"input_tokens": 10, "output_tokens": 5}
-    harness.reply_body(_message([thinking, {"type": "text", "text": VALID}], usage))
+@pytest.mark.parametrize(
+    "other_block",
+    [
+        {"type": "thinking", "thinking": "", "signature": "sig"},
+        {"type": "block_type_from_the_future", "data": 1},
+    ],
+    ids=["thinking", "unknown"],
+)
+def test_only_text_blocks_make_up_the_reply(
+    harness: AnthropicHarness, other_block: dict[str, Any]
+) -> None:
+    harness.reply_body(_message([other_block, *_text(VALID)]))
 
     result = harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
 
@@ -178,11 +214,114 @@ def test_cached_input_tokens_count_as_input(harness: AnthropicHarness) -> None:
         "cache_creation_input_tokens": 100,
         "cache_read_input_tokens": 1000,
     }
-    harness.reply_body(_message([{"type": "text", "text": VALID}], usage))
+    harness.reply_body(_message(_text(VALID), usage))
 
     result = harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
 
     assert result.usage == TokenUsage(input_tokens=1110, output_tokens=5)
+
+
+def test_reply_without_usage_is_kept_with_usage_unreported(harness: AnthropicHarness) -> None:
+    body = _message(_text(VALID))
+    del body["usage"]
+    harness.reply_body(body)
+
+    result = harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+
+    assert result.parsed == Verdict.model_validate_json(VALID)
+    assert result.usage == TokenUsage(reported=False)
+
+
+@pytest.mark.parametrize(
+    ("stop_reason", "error"),
+    [
+        ("max_tokens", LLMOutputError),
+        ("refusal", LLMOutputError),
+        ("model_context_window_exceeded", LLMRequestError),
+    ],
+)
+def test_reply_a_correction_cannot_fix_fails_at_once_with_its_usage(
+    harness: AnthropicHarness, stop_reason: str, error: type[LLMError]
+) -> None:
+    usage = {"input_tokens": 100, "output_tokens": 256}
+    harness.reply_body(_message(_text('{"severity": "hi'), usage, stop_reason=stop_reason))
+
+    with pytest.raises(error) as caught:
+        harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+
+    assert len(harness.requests) == 1  # no paid retry that would end the same way
+    assert caught.value.usage == TokenUsage(input_tokens=100, output_tokens=256)
+    assert not isinstance(caught.value, TransientJobError)
+
+
+def test_cut_off_retry_keeps_the_first_attempts_usage(harness: AnthropicHarness) -> None:
+    harness.reply(INVALID, input_tokens=100, output_tokens=10)
+    usage = {"input_tokens": 130, "output_tokens": 256}
+    harness.reply_body(_message(_text('{"sev'), usage, stop_reason="max_tokens"))
+
+    with pytest.raises(LLMOutputError) as caught:
+        harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+
+    assert caught.value.usage == TokenUsage(input_tokens=230, output_tokens=266)
+
+
+def test_empty_reply_is_retried_without_an_empty_assistant_turn(
+    harness: AnthropicHarness,
+) -> None:
+    # Anthropic rejects an empty assistant text block, so the retry must not send one.
+    harness.reply_body(_message([]))
+    harness.reply(VALID)
+
+    result = harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+
+    assert result.attempts == 2
+    assert [role for role, _ in harness.sent[1].messages] == ["user", "user"]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx2.Response(200, text="<html>login</html>", headers={"content-type": "text/html"}),
+        httpx2.Response(200, json={"unexpected": "shape"}),
+        httpx2.Response(200, json=[1, 2]),
+        httpx2.Response(200, json={"type": "message", "content": None, "usage": USAGE}),
+        httpx2.Response(200, json={"type": "error", "error": {"type": "overloaded_error"}}),
+    ],
+    ids=["html", "other-json", "list", "null-content", "error-body"],
+)
+def test_unreadable_success_response_is_transient(
+    harness: AnthropicHarness, response: httpx2.Response
+) -> None:
+    harness.respond(response)
+
+    with pytest.raises(LLMUnavailable):
+        harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+
+
+def test_overloaded_status_is_transient(harness: AnthropicHarness) -> None:
+    harness.respond(_error(529, "overloaded_error", "Overloaded"))
+
+    with pytest.raises(LLMUnavailable):
+        harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+
+
+def test_rejected_request_is_logged_by_type_without_the_api_message(
+    harness: AnthropicHarness,
+) -> None:
+    harness.respond(_error(400, "invalid_request_error", "echoed: Judge this finding."))
+
+    with capture_logs() as logs, pytest.raises(LLMRequestError):
+        harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+
+    assert logs == [
+        {
+            "event": "llm request failed",
+            "log_level": "warning",
+            "status": 400,
+            "error_type": "invalid_request_error",
+            "request_id": "req_test",
+        }
+    ]
 
 
 def test_client_uses_the_shared_timeout_and_no_sdk_retries() -> None:

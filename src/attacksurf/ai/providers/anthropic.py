@@ -4,13 +4,26 @@ from collections.abc import Sequence
 
 import anthropic
 import httpx2
+import structlog
 from anthropic.types import JSONOutputFormatParam, MessageParam
+from anthropic.types import Message as APIMessage
 from pydantic import BaseModel
 
 from attacksurf.ai.errors import llm_error_for_status
 from attacksurf.ai.limits import MAX_RETRIES, REQUEST_TIMEOUT_SECONDS
 from attacksurf.ai.structured import complete_structured
-from attacksurf.domain.llm import Completion, LLMConfig, LLMResult, Message, TokenUsage
+from attacksurf.domain.llm import (
+    Completion,
+    LLMConfig,
+    LLMOutputError,
+    LLMRequestError,
+    LLMResult,
+    LLMUnavailable,
+    Message,
+    TokenUsage,
+)
+
+log = structlog.get_logger(__name__)
 
 # Always passed explicitly: with no base URL the SDK reads ANTHROPIC_BASE_URL, and an
 # environment variable must not be able to send a key somewhere config didn't choose.
@@ -66,24 +79,66 @@ class AnthropicProvider:
                 messages=[_turn(m) for m in conversation if m.role != "system"],
                 output_config={"format": output_format},
             )
-        # `from None`: the SDK's error carries the response body, which can echo the prompt.
+        # `from None`, and only the error type logged: the SDK's error carries the response
+        # body, which can echo the prompt.
         except anthropic.APIStatusError as exc:
+            log.warning(
+                "llm request failed",
+                status=exc.status_code,
+                error_type=_error_type(exc.body),
+                request_id=exc.request_id,
+            )
             raise llm_error_for_status(exc.status_code) from None
-        except anthropic.APIConnectionError:
+        except anthropic.APIConnectionError as exc:
+            log.warning("llm provider unreachable", error=type(exc).__name__)
             raise llm_error_for_status(None) from None
+        return _completion(response)
+
+
+def _completion(response: APIMessage) -> Completion:
+    """The reply's text and usage, or the error a retry with a correction couldn't fix."""
+    try:
         # Thinking blocks (always on for some models) come back alongside the reply; skip them.
         text = "".join(block.text for block in response.content if block.type == "text")
-        usage = response.usage
-        return Completion(
-            text,
-            TokenUsage(
-                # Cached input tokens are reported apart from `input_tokens`; all count to caps.
-                input_tokens=usage.input_tokens
-                + (usage.cache_creation_input_tokens or 0)
-                + (usage.cache_read_input_tokens or 0),
-                output_tokens=usage.output_tokens,
-            ),
-        )
+    except (AttributeError, TypeError):
+        # The SDK doesn't validate a 2xx body: a proxy's HTML page or a malformed JSON reply
+        # arrives as an object without the fields of a message.
+        log.warning("llm reply unreadable", body_type=type(response).__name__)
+        raise LLMUnavailable("The AI provider sent a reply that could not be read.") from None
+    usage = _usage(response)
+    stop_reason = getattr(response, "stop_reason", None)
+    if stop_reason == "max_tokens":
+        raise LLMOutputError("The AI reply was cut off at its token limit.", usage=usage)
+    if stop_reason == "model_context_window_exceeded":
+        raise LLMRequestError("The request is too long for the AI model.", usage=usage)
+    if stop_reason == "refusal":
+        raise LLMOutputError("The AI model declined to answer.", usage=usage)
+    return Completion(text, usage)
+
+
+def _usage(response: APIMessage) -> TokenUsage:
+    # Read defensively for the same reason, and an Anthropic-format endpoint may omit usage.
+    usage = getattr(response, "usage", None)
+    input_tokens = getattr(usage, "input_tokens", None)
+    output_tokens = getattr(usage, "output_tokens", None)
+    if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
+        return TokenUsage(reported=False)
+    # Cached input tokens are reported apart from `input_tokens`; all of them count to caps.
+    cached = _count(getattr(usage, "cache_creation_input_tokens", None)) + _count(
+        getattr(usage, "cache_read_input_tokens", None)
+    )
+    return TokenUsage(input_tokens=input_tokens + cached, output_tokens=output_tokens)
+
+
+def _count(value: object) -> int:
+    return value if isinstance(value, int) else 0
+
+
+def _error_type(body: object) -> str | None:
+    """The API's error type (e.g. `invalid_request_error`), never its message."""
+    error = body.get("error") if isinstance(body, dict) else None
+    kind = error.get("type") if isinstance(error, dict) else None
+    return kind if isinstance(kind, str) else None
 
 
 def _turn(message: Message) -> MessageParam:

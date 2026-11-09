@@ -13,7 +13,9 @@ description: Add or change an LLM-powered feature or prompt (triage, summaries, 
   Never import a provider SDK outside `ai/providers/`; never hardcode a model name.
   API keys and base URLs stay `SecretStr`; unwrap them only when constructing the SDK client.
 - Every call has a **pydantic output schema**; `ai/structured.complete_structured` gives invalid
-  output one retry, then raises `LLMOutputError`: catch it and skip gracefully.
+  output one retry, then raises `LLMOutputError`: catch it and skip gracefully. A reply cut off
+  at `max_tokens` raises it at once; on models that always think, thinking counts toward
+  `max_tokens`, so size it with room to spare.
 - Tests use `tests.fakes.FakeLLMProvider`; a new provider adapter must pass
   `tests/unit/ai/contract.ProviderContract`, build its SDK client with `ai/limits.py`, and
   enforce `CALL_DEADLINE_SECONDS` per call (the SDK's per-chunk read timeout doesn't). SDK

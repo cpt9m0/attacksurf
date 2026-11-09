@@ -30,7 +30,13 @@ a cap. Development uses Meta's Muse Spark models, which serve both API formats w
   timeout still reports the first attempt's tokens), so failed calls are recorded and capped too.
 - **Errors**: `LLMError` (a `JobError`) with `LLMUnavailable` (transient), `LLMAuthError`,
   `LLMRequestError`, `LLMOutputError`. One status mapping, `ai/errors.llm_error_for_status`.
-  Messages never contain a key, prompt or model output.
+  Messages never contain a key, prompt or model output. Replies a correction can't fix fail at
+  once with that attempt's usage, instead of paying for a retry that would end the same way: cut
+  off at the token limit or refused → `LLMOutputError`, context window exceeded →
+  `LLMRequestError` (Anthropic `stop_reason`; OpenAI's `finish_reason` `length` /
+  `content_filter` is the equivalent). A 2xx body that isn't a reply (a proxy's page) →
+  `LLMUnavailable`. Adapters log a failed call's status, error type and request ID, never the
+  response body, and raise `from None` so the SDK error (which carries it) isn't chained.
 - **Timeouts and retries**: the SDKs default to a 600 s timeout, longer than a Celery task may
   run (`TrackedTask.soft_time_limit` = 300 s), so every adapter passes `ai/limits.py`'s
   `REQUEST_TIMEOUT_SECONDS` (60 s) and `MAX_RETRIES` (0) to its SDK client.
