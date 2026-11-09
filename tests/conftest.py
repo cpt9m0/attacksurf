@@ -6,7 +6,7 @@ from flask.testing import FlaskClient
 from pydantic import SecretStr
 
 from attacksurf import create_app
-from attacksurf.config import Settings
+from attacksurf.config import SandboxProxySettings, Settings
 from attacksurf.workers import runtime
 from tests.helpers import llm_live_skip_reason, make_settings
 
@@ -24,8 +24,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
-    """Unset every variable Settings reads, for tests that exercise env loading."""
-    for name in Settings.model_fields:
+    """Unset every variable read by application or proxy settings for env-loading tests."""
+    for name in Settings.model_fields.keys() | SandboxProxySettings.model_fields.keys():
         monkeypatch.delenv(name.upper(), raising=False)
     return monkeypatch
 

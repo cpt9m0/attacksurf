@@ -35,6 +35,7 @@ src/attacksurf/   application code (src layout, import name `attacksurf`)
   infra/          logging (structlog + request IDs), db, queue (Celery), storage, scope_guard,
                   dns, public_suffix, safe http client, crypto
   workers/        Celery task entrypoints (thin, call services)
+  sandbox_proxy/  Docker socket guard (ADR 0016); isolated from the app by import-linter
 tests/            pytest; mirrors src/attacksurf/ structure (unit/, integration/, e2e/)
 docs/             architecture, ADRs, development, security, conventions
 ```
