@@ -19,8 +19,11 @@ the unit installation.
 
 ## Prerequisites
 
-1. `/opt/attacksurf` holds the repository checkout (`scripts/deploy.sh` executable inside it)
-   and `deploy/attacksurf.env` symlinks to `/etc/attacksurf/attacksurf.env`.
+1. `/opt/attacksurf` holds the repository checkout and `deploy/attacksurf.env` symlinks to
+   `/etc/attacksurf/attacksurf.env`. `scripts/deploy.sh` must exist and be executable: the
+   script bootstraps its own git checkout, but it cannot fetch itself, so on a host where
+   `/opt/attacksurf` is still a copied tree copy it once before enabling the timer
+   (`sudo install -D -m 755 scripts/deploy.sh /opt/attacksurf/scripts/deploy.sh`).
 2. `docker.service` is running and `docker compose -f /opt/attacksurf/compose.prod.yaml ps`
    shows a healthy stack.
 3. Branch protection and required CI checks are on for `main`: a timer deploys whatever lands
