@@ -8,8 +8,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ### Added
 - Sandbox port for scanners: `ctx.runtime.sandbox.run(analyzer, artifact_id)`, limited to the
   analyzers in a plugin's `ScannerGrant` and refused until a runner is configured (#84).
+- Production stack (`compose.prod.yaml`) published through a Cloudflare Tunnel: `cloudflared`,
+  Caddy, gunicorn, PostgreSQL and Redis on a private network with no inbound ports, `www`
+  redirecting to the apex, and a deploy runbook in `docs/deployment.md` (ADR 0020, #132).
 
 ### Fixed
+- Login and signup rate limits key on the visitor address Cloudflare forwards
+  (`CF-Connecting-IP`, else the leftmost `X-Forwarded-For` entry) instead of the first proxy
+  hop, so visitors behind the tunnel no longer share one budget (#132).
 - LLM endpoint credentials are masked in settings and provider-config representations;
   base URLs remain `SecretStr` through config resolution (#23).
 - The test suite passes on Windows checkouts: `.gitattributes` keeps LF line endings whatever

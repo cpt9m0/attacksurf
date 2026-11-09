@@ -121,9 +121,14 @@ All settings live in `src/attacksurf/config.py` and are read from environment va
 `ENV=prod` refuses to start without a random `SECRET_KEY` of ≥ 32 characters. Never commit `.env`.
 
 Auth settings: `ALLOW_SIGNUP` (default `true`; when `false` only the first user can sign up),
-`SESSION_LIFETIME_HOURS` (default 12), `PROXY_COUNT` (reverse proxies in front of the app; 0 in
-dev, 1 behind Caddy). Login/signup rate limits use Redis (`REDIS_URL`) and fall back to memory if
-it is down. Open http://127.0.0.1:5000, sign up; the first account owns a new org.
+`SESSION_LIFETIME_HOURS` (default 12), `PROXY_COUNT` (trusted proxy hops in front of the app).
+`PROXY_COUNT` counts hops, not components: 0 in dev, 1 behind Caddy, and also 1 behind the
+production Cloudflare Tunnel (Cloudflare → `cloudflared` → Caddy → app; `cloudflared` does not
+add a hop). Set it to 2 only if Cloudflare proxies directly to Caddy without a tunnel. Rate
+limits key on the visitor address Cloudflare forwards (`CF-Connecting-IP`, else the leftmost
+`X-Forwarded-For` entry), and use Redis (`REDIS_URL`) with an in-memory fallback. Open
+http://127.0.0.1:5000, sign up; the first account owns a new org. Production setup:
+[deployment.md](deployment.md).
 
 ### AI provider (instance key)
 

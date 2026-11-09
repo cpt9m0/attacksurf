@@ -10,6 +10,9 @@ MVP stage, cost-sensitive, possibly a SaaS later.
 Deploy everything with Docker Compose on one VPS behind Caddy (automatic TLS). Nightly
 `pg_dump` off-box.
 
+The public entry point was revisited in ADR 0020: the instance is published through a
+Cloudflare Tunnel rather than Caddy's own public TLS listener.
+
 ## Consequences
 - Cheap and simple. Single point of failure, accepted for the MVP.
 - Sandboxing for future code/binary analysis uses gVisor (`runsc`) and Docker network policies on
