@@ -29,6 +29,8 @@ class FakeDocker(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         self.next_id = CREATED
         self.create_status = 201
         self.remove_status = 204
+        self.wait_status = 200
+        self.wait_body = b'{"StatusCode": 0}'
         self.create_entered: threading.Event | None = None
         self.create_release: threading.Event | None = None
 
@@ -52,7 +54,7 @@ class _FakeDockerHandler(BaseHTTPRequestHandler):
         elif "/attach" in self.path:
             self.wfile.write(b"HTTP/1.1 101 UPGRADED\r\nUpgrade: tcp\r\n\r\ntool-output")
         elif "/wait" in self.path:
-            self._reply(200, b'{"StatusCode": 0}')
+            self._reply(self.server.wait_status, self.server.wait_body)
         elif self.command == "DELETE":
             self._reply(self.server.remove_status, b"")
         else:
@@ -234,7 +236,7 @@ def test_own_container_can_be_started_waited_killed_and_removed(
     create(proxy)
 
     assert call(proxy, "POST", f"/containers/{CREATED}/start")[0] == 204
-    assert call(proxy, "POST", f"/containers/{CREATED}/wait?condition=removed")[0] == 200
+    assert call(proxy, "POST", f"/containers/{CREATED}/wait?condition=not-running")[0] == 200
     assert call(proxy, "POST", f"/containers/{CREATED}/kill?signal=SIGKILL")[0] == 204
     assert call(proxy, "DELETE", f"/containers/{CREATED}?force=1")[0] == 204
 
@@ -277,6 +279,48 @@ def test_missing_container_removal_releases_capacity(
 
     assert call(proxy, "POST", f"/containers/{CREATED}/start")[0] == 403
     assert create(proxy)[0] == 201
+
+
+def test_removed_wait_releases_ownership_and_capacity(
+    proxy: int, docker: FakeDocker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("attacksurf.sandbox_proxy.server.MAX_TRACKED_CONTAINERS", 1)
+    create(proxy)
+
+    assert call(proxy, "POST", f"/containers/{CREATED}/wait?condition=removed")[0] == 200
+
+    assert call(proxy, "POST", f"/containers/{CREATED}/start")[0] == 403
+    assert create(proxy)[0] == 201
+
+
+@pytest.mark.parametrize(
+    ("query", "status", "body"),
+    [
+        ("", 200, b'{"StatusCode": 0}'),
+        ("?condition=not-running", 200, b'{"StatusCode": 0}'),
+        ("?condition=next-exit", 200, b'{"StatusCode": 0}'),
+        ("?condition=removed", 500, b"{}"),
+        ("?condition=removed", 200, b'{"Error": {"Message": "wait failed"}}'),
+        ("?condition=removed", 200, b"not json"),
+    ],
+)
+def test_wait_without_confirmed_removal_retains_ownership(
+    *,
+    proxy: int,
+    docker: FakeDocker,
+    monkeypatch: pytest.MonkeyPatch,
+    query: str,
+    status: int,
+    body: bytes,
+) -> None:
+    monkeypatch.setattr("attacksurf.sandbox_proxy.server.MAX_TRACKED_CONTAINERS", 1)
+    create(proxy)
+    docker.wait_status, docker.wait_body = status, body
+
+    assert call(proxy, "POST", f"/containers/{CREATED}/wait{query}")[0] == status
+
+    assert create(proxy)[0] == 429
+    assert call(proxy, "POST", f"/containers/{CREATED}/kill")[0] == 204
 
 
 def test_attach_passes_the_raw_output_stream_through(proxy: int, docker: FakeDocker) -> None:

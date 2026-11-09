@@ -101,6 +101,18 @@ def _created_id(reply: bytes) -> str | None:
     return None
 
 
+def _wait_succeeded(reply: bytes) -> bool:
+    try:
+        parsed = json.loads(reply)
+    except ValueError:
+        return False
+    return (
+        isinstance(parsed, dict)
+        and type(parsed.get("StatusCode")) is int
+        and not parsed.get("Error")
+    )
+
+
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result = dict(pairs)
     if len(result) != len(pairs):
@@ -199,6 +211,12 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 return False
             containers.add(container_id)
         elif (
+            route.action == "wait"
+            and route.target.endswith("?condition=removed")
+            and status == HTTPStatus.OK
+            and _wait_succeeded(reply)
+            and route.container_id
+        ) or (
             route.action == "remove"
             and (
                 HTTPStatus.OK <= status < HTTPStatus.MULTIPLE_CHOICES

@@ -5,6 +5,11 @@ from attacksurf.config import SandboxProxySettings, get_settings
 from tests.helpers import PROD_SECRET_KEY, make_settings, settings_from_env
 
 
+@pytest.fixture(autouse=True)
+def _clean_settings_environment(clean_env: pytest.MonkeyPatch) -> None:
+    """Direct proxy constructors must not inherit operator settings."""
+
+
 def test_settings_defaults_to_dev() -> None:
     settings = make_settings()
 
