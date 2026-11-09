@@ -27,8 +27,10 @@ MAX_FILE_BYTES = 8 * 1024**3
 _DIGEST = re.compile(r"([^@\s:]+(:\d+)?(/[^@\s:]+)*@)?sha256:[0-9a-f]{64}")
 _SEGMENT = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")
 _SCRATCH_SIZE = re.compile(r"size=([1-9][0-9]{0,18})")
+# Before API 1.30 Docker ignores the removed-wait condition; before 1.25 it disables
+# AutoRemove. Accept only canonical modern v1 versions (unversioned uses daemon defaults).
 _CONTAINER_PATH = re.compile(
-    r"(?P<version>/v[0-9]+\.[0-9]+)?/containers/"
+    r"(?P<version>/v1\.(?:3[0-9]|[4-9][0-9]))?/containers/"
     r"(?:create|(?P<id>[0-9a-f]{64})(?:/(?P<verb>start|wait|attach|kill))?)"
 )
 

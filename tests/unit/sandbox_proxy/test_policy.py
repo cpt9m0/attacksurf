@@ -204,6 +204,8 @@ def test_malformed_create_body_is_rejected(body: object) -> None:
     [
         ("POST", "/containers/create", "create"),
         ("POST", "/v1.47/containers/create", "create"),
+        ("POST", "/v1.30/containers/create", "create"),
+        ("POST", f"/v1.30/containers/{CONTAINER}/wait?condition=removed", "wait"),
         ("POST", f"/containers/{CONTAINER}/start", "start"),
         ("POST", f"/containers/{CONTAINER}/wait?condition=removed", "wait"),
         ("POST", f"/containers/{CONTAINER}/attach?stream=1&stdout=1", "attach"),
@@ -245,6 +247,14 @@ def test_allowed_docker_calls_are_recognized(method: str, target: str, action: s
 def test_other_docker_calls_are_denied(method: str, target: str) -> None:
     with pytest.raises(PolicyViolation):
         classify_request(method, target)
+
+
+@pytest.mark.parametrize("version", ["0.99", "1.0", "1.24", "1.25", "1.29", "01.029"])
+@pytest.mark.parametrize("action", ["create", "wait"])
+def test_legacy_api_versions_cannot_weaken_container_lifecycle(version: str, action: str) -> None:
+    suffix = "create" if action == "create" else f"{CONTAINER}/wait?condition=removed"
+    with pytest.raises(PolicyViolation):
+        classify_request("POST", f"/v{version}/containers/{suffix}")
 
 
 def test_load_images_reads_digests_and_finds_the_osv_image(tmp_path: Path) -> None:

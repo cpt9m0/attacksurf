@@ -11,7 +11,8 @@ contract. Removals retain ownership unless Docker confirms success or absence; a
 `wait?condition=removed` also reclaims capacity after AutoRemove. In-flight creates count against
 the cap. Unknown create outcomes keep a reserved slot and a proxy-generated cleanup name;
 subsequent creates retry cleanup, and only confirmed deletion releases uncertain capacity.
-Proxy settings tests clear the environment; `.env.example` lists all defaults.
+Proxy settings tests clear the environment; `.env.example` lists all defaults. Legacy Docker
+API prefixes below v1.30 are denied to preserve AutoRemove and removed-wait semantics.
 Nothing deploys it yet; compose comes in PR 4 and the images lock in PR 5.
 
 ## Next step

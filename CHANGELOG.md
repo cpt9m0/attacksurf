@@ -16,6 +16,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 - Unknown Docker-create outcomes retain their reserved slot and receive a proxy-generated
   name for forced cleanup; failed cleanup (including 404 while creation may still be running)
   never frees capacity. Subsequent create requests retry reconciliation (#84, PR #135).
+- Legacy Docker API prefixes below v1.30 are denied so clients cannot disable AutoRemove or
+  downgrade removed-wait semantics and bypass the container cap (#84, PR #135).
 - Proxy settings tests clear all application and proxy environment fields, including the
   documented dev runtime fallback, before constructing settings (#84, PR #135).
 - Proxy environment settings and defaults are documented in `.env.example` (#84).
