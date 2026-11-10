@@ -68,6 +68,26 @@ jobs:
       - name: pytest (coverage gate 80%)
         run: uv run --python ${{ matrix.python }} pytest
 
+  web-e2e:
+    name: web-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
+      # --no-cov: a marker-selected suite cannot meet the whole-app 80% gate; `test` keeps it.
+      - name: Layout tests
+        run: RUN_WEB_E2E=1 uv run pytest tests/e2e/web -m web_e2e --no-cov
+
   secrets:
     name: secrets
     runs-on: ubuntu-latest

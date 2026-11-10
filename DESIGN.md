@@ -70,7 +70,7 @@ All severity colors must reach 4.5:1 contrast for text on their badge background
 | `--radius-sm/md/lg` | TBD |
 | `--shadow-sm/md` | TBD |
 | Borders, focus ring, opacity | `--border-width`, `--border-width-accent`, `--focus-ring-width/-offset`, `--opacity-disabled` (placeholders) |
-| Layout widths | `--content-max-width`, `--nav-width`, `--auth-card-width`, `--field-min-width`, `--filter-min-width`, `--meta-column-min-width` (placeholders) |
+| Layout widths | `--content-max-width`, `--nav-width`, `--auth-card-width`, `--user-menu-min-width`, `--field-min-width`, `--filter-min-width`, `--meta-column-min-width` (placeholders) |
 | Line heights, weights, icons | `--line-height-body/-heading/-badge`, `--font-weight-semibold/-bold`, `--icon-size`, `--icon-size-lg`, `--measure` (placeholders) |
 
 `app.css` uses only these variables (a test rejects raw colors); the only raw dimension is the
@@ -79,7 +79,9 @@ All severity colors must reach 4.5:1 contrast for text on their badge background
 ## 4. Layout
 
 - App shell: top bar (logo, org, user menu, theme toggle) + left nav (Dashboard, Assets, Scans,
-  Findings, Settings) + content area. Collapses to a top menu on mobile.
+  Findings, Settings) + content area. Collapses to a top menu on mobile. On phones (≤ 48rem) the
+  top bar is two rows — brand + theme toggle, then user menu + Log out — with the email truncated
+  (`title` keeps the full text), and the nav row scrolls horizontally inside itself.
 - Footer: "Source code" link (required by AGPL §13).
 - Max content width: `--content-max-width` (placeholder 72rem). Data tables may go full width.
 - Templates: `layouts/base.html` (shell), `layouts/fragment.html` (HTMX partial), pages in

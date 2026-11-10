@@ -94,15 +94,21 @@ pre,
 .topbar {
   grid-area: top;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-3) var(--space-4);
   padding: var(--space-3) var(--space-5);
   background: var(--color-surface);
   border-bottom: var(--border-width) solid var(--color-border);
+  /* Grid items default to min-width: auto; the shell must never exceed the viewport. */
+  min-width: 0;
 }
 
 .brand {
   display: inline-flex;
+  /* Pushes the controls right; with flex-wrap this is also what keeps the brand on its own row
+     at phone width instead of squeezing the user menu to nothing. */
+  margin-right: auto;
   align-items: center;
   gap: var(--space-2);
   font-weight: var(--font-weight-bold);
@@ -111,19 +117,30 @@ pre,
 }
 
 .topbar-actions {
-  margin-left: auto;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--space-3);
+  min-width: 0;
 }
 
 .user-menu {
   color: var(--color-text-muted);
   font-size: var(--text-sm);
+  /* An email is one unbreakable word: let it shrink and ellipsize rather than widen the bar.
+     The full text stays available through the `title` attribute; the floor is what makes the
+     bar wrap to a second row instead of squeezing the email to nothing. */
+  flex: 1 1 auto;
+  min-width: var(--user-menu-min-width);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidenav {
   grid-area: nav;
+  /* Same grid-item rule as .content (#13): the nav scrolls inside itself on mobile. */
+  min-width: 0;
   padding: var(--space-4) var(--space-3);
   background: var(--color-surface);
   border-right: var(--border-width) solid var(--color-border);
@@ -186,6 +203,16 @@ pre,
       "foot" auto / 1fr;
   }
 
+  /* Phone: brand + theme toggle on one row, user menu + Log out on the next, so the email keeps
+     a readable width. `.topbar-actions` takes a whole row of its own. */
+  .topbar {
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .topbar-actions {
+    flex: 1 1 100%;
+  }
+
   .sidenav {
     border-right: 0;
     border-bottom: var(--border-width) solid var(--color-border);
@@ -195,6 +222,13 @@ pre,
 
   .sidenav ul {
     flex-direction: row;
+    min-width: 0;
+  }
+
+  /* Items keep their size and the row scrolls, instead of squeezing the labels. */
+  .sidenav a {
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   .content {
@@ -451,6 +485,8 @@ table.data th {
 
 .topbar-actions form {
   margin: 0;
+  /* Only the user menu gives way when the bar is narrow. */
+  flex: 0 0 auto;
 }
 
 .form {

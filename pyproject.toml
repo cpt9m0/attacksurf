@@ -101,6 +101,7 @@ addopts = "-ra --strict-markers --cov=attacksurf --cov-report=term-missing --cov
 markers = [
     "worker: needs the running Compose workers (RUN_WORKER_TESTS=1)",
     "llm_live: calls a real LLM provider with the LLM_* settings (RUN_LLM_TESTS=1); never in CI",
+    "web_e2e: renders real pages in Chromium (RUN_WEB_E2E=1 + `uv run playwright install chromium`)",
 ]
 
 [tool.coverage.run]
@@ -116,6 +117,7 @@ exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "\\.\\.\\."]
 dev = [
     "celery-types>=0.26.0",
     "import-linter>=2.15",
+    "playwright>=1.64.1,<1.65",
     "pre-commit>=4.6.2",
     "pyright>=1.1.414",
     "pytest>=9.1.1",
