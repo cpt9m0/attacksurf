@@ -27,6 +27,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ### Fixed
 - The app shell fits a phone viewport: the top bar wraps and truncates the user menu (full text
   in `title`) and the mobile nav row scrolls inside itself instead of widening the page (#114).
+- The `playwright` dev dependency is pinned to 1.64.1 (`>=1.64.1,<1.65`), the newest release
+  that satisfies the two-week dependency-age policy, instead of the day-old 1.65.0 (#114).
 - Deploying into a checkout owned by another user (the pre-CD copied tree, or a clone made by a
   person while the timer runs as root) no longer fails with git's "dubious ownership" error:
   `scripts/deploy.sh` trusts its own `APP_DIR` for its git calls (#29).
