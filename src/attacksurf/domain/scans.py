@@ -7,6 +7,10 @@ class ScanError(ValueError):
     """Invalid scan request, safe for the web layer to display."""
 
 
+class ScanCancelled(ScanError):
+    """Output arrived for a scan that was cancelled: it is dropped, never written."""
+
+
 class ScanStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"

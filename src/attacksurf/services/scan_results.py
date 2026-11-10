@@ -17,9 +17,11 @@ from attacksurf.domain.findings import finding_fingerprint
 from attacksurf.domain.ids import uuid7
 from attacksurf.domain.rules import RULES, Rule, get_rule
 from attacksurf.domain.scanners import AssetRef, RawFinding, ScanOutput
+from attacksurf.domain.scans import ScanCancelled
 from attacksurf.infra.db.models import Asset, Evidence, Finding, Scan
 from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.services.assets import record_asset, record_relation
+from attacksurf.services.scans import TERMINAL
 
 
 def persist_scan_output(
@@ -40,10 +42,23 @@ def persist_scan_output(
     what this run adds), so a huge zone can't be crawled in chunks across rescans. Relations
     and findings about dropped names are skipped: they are not attached to another asset, and
     exceeding the cap never fails the job.
+
+    Raises `ScanCancelled` for a cancelled scan and `AssetNotFound` when the scan's root is
+    archived (ADR 0021). An archived root is checked under the root row's `FOR UPDATE` lock, the
+    one `archive_root_domain` takes, so an archive either commits before this call starts
+    writing or waits out these writes and deactivates whatever they created.
     """
     asset = get_scoped(session, Asset, asset_id, scan.org_id)
     if asset is None:
         raise AssetNotFound("Asset not found.")
+    if scan.status in TERMINAL:
+        raise ScanCancelled("Scan was cancelled.")
+    root = session.scalars(
+        scoped(Asset, scan.org_id).where(Asset.id == scan.root_asset_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).one_or_none()
+    if root is None or not root.is_active:
+        raise AssetNotFound("Root asset is archived.")
     refs = {(asset.type, asset.value): asset.id}
     # Every name the plugin reported is a valid reference, including ones the cap will drop
     # (a reference to a name it never reported is still a plugin bug and fails the job).
@@ -175,14 +190,10 @@ def _admit(
     what the count must use: a check on a discovered subdomain would otherwise see zero children
     and hand out a fresh allowance for every subdomain.
 
-    The root row is locked `FOR NO KEY UPDATE` before counting, so overlapping scans of the same
-    root (each locked only on its own `Scan`) can't both read the same count and each admit the
-    full allowance. Key-share locks taken by `record_asset` for the child inserts don't conflict,
-    so this serializes admissions without blocking them.
+    `persist_scan_output` already holds the root's `FOR UPDATE` lock for the whole write, so
+    overlapping scans of the same root (each locked only on its own `Scan`) can't both read the
+    same count and each admit the full allowance.
     """
-    session.scalars(
-        scoped(Asset, org_id).where(Asset.id == root_id).with_for_update(key_share=False)
-    ).one()
     candidates = tuple(
         ref
         for ref in output.assets

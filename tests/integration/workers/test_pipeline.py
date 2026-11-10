@@ -1,8 +1,10 @@
+from datetime import UTC, datetime
 from threading import Event
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from celery.backends.cache import CacheBackend
+from sqlalchemy import update
 from sqlalchemy.orm import Session, sessionmaker
 
 from attacksurf.domain.assets import AssetNotFound
@@ -20,7 +22,8 @@ from attacksurf.domain.scans import JobStatus, ScanStatus
 from attacksurf.infra.db.models import Asset, AssetRelation, Evidence, Finding, Job, Scan
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.infra.events import InProcessDispatcher
-from attacksurf.services import jobs, scans
+from attacksurf.services import assets as assets_service
+from attacksurf.services import jobs, scanner_jobs, scans
 from attacksurf.workers import runtime
 from attacksurf.workers.app import app
 from attacksurf.workers.tasks import pipeline
@@ -374,3 +377,112 @@ def test_failure_callback_is_idempotent_and_cancels_queued_work(
     parent = db_session.get(Scan, pending.scan_id)
     assert parent is not None
     assert parent.status == ScanStatus.FAILED
+
+
+def _started_scan(session: Session, name: str) -> tuple[Scan, Job]:
+    root = make_scan(session, name)
+    scan = scans.start_scan(
+        session,
+        FakeQueue(session),
+        org_id=root.org_id,
+        root_asset_id=root.root_asset_id,
+        profile="fixture",
+        registry=fixture_registry(),
+        profiles=PROFILES,
+    )
+    kickoff = session.scalars(scoped(Job, scan.org_id).where(Job.scan_id == scan.id)).one()
+    return scan, kickoff
+
+
+def _scanner_blocks_while_root_is_archived(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run the real plugin, but archive the root before its output is persisted.
+
+    Stands in for an archive that commits while the scanner is still doing I/O: the same
+    window in production, without touching the session from the scanner's daemon thread.
+    """
+    real = scanner_jobs.run_scanner
+
+    def archive_then_return(scanner: object, ctx: ScanContext, asset: AssetRef) -> ScanOutput:
+        scan = session.get(Scan, ctx.scan_id)
+        assert scan is not None
+        assets_service.archive_root_domain(session, scan.org_id, scan.root_asset_id, actor_id=None)
+        return real(scanner, ctx, asset)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(scanner_jobs, "run_scanner", archive_then_return)
+
+
+def test_archiving_during_discovery_leaves_no_active_assets_or_findings(
+    db_session: Session,
+    pipeline_env: InProcessDispatcher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scan, kickoff = _started_scan(db_session, "archived")
+    _scanner_blocks_while_root_is_archived(db_session, monkeypatch)
+
+    pipeline.discover.apply(kwargs={"org_id": str(scan.org_id), "job_id": str(kickoff.id)})
+
+    db_session.expire_all()
+    assert scan.status == ScanStatus.CANCELLED
+    assert db_session.scalars(scoped(Finding, scan.org_id)).all() == []
+    discovered = db_session.scalars(
+        scoped(Asset, scan.org_id).where(Asset.parent_id == scan.root_asset_id)
+    ).all()
+    assert [asset for asset in discovered if asset.is_active] == []
+
+
+def test_archiving_during_checks_records_no_findings_and_keeps_the_scan_cancelled(
+    db_session: Session,
+    pipeline_env: InProcessDispatcher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _check_job(db_session)
+    _scanner_blocks_while_root_is_archived(db_session, monkeypatch)
+
+    pipeline.scan.apply(kwargs={"org_id": str(job.org_id), "job_id": str(job.id)})
+
+    db_session.expire_all()
+    assert db_session.scalars(scoped(Finding, job.org_id)).all() == []
+    assert job.status in {JobStatus.SKIPPED, JobStatus.CANCELLED}
+    parent = db_session.get(Scan, job.scan_id)
+    assert parent is not None
+    assert parent.status == ScanStatus.CANCELLED
+
+
+def test_persist_writes_nothing_for_an_archived_root_even_if_the_scan_reads_running(
+    db_session: Session,
+    pipeline_env: InProcessDispatcher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The status check can lose a race with a concurrent archive; the root check must not."""
+    job = _check_job(db_session)
+    real_persist = scanner_jobs.persist_scan_output
+    scan_id = job.scan_id
+
+    def archive_then_persist(*args: object, **kwargs: object) -> list[FindingCreated]:
+        # Same row order the real race produces; the scan row is left RUNNING on purpose.
+        db_session.execute(
+            update(Asset)
+            .where(Asset.id == job.asset_id)
+            .values(is_active=False, deactivated_at=datetime.now(UTC))
+        )
+        db_session.execute(update(Scan).where(Scan.id == scan_id).values(status=ScanStatus.RUNNING))
+        return real_persist(*args, **kwargs)  # type: ignore[no-any-return]
+
+    real_load = scans.load_job_scan
+
+    def load_stale_status(session: Session, org_id: UUID, job_id: UUID) -> tuple[Job, Scan]:
+        loaded = real_load(session, org_id, job_id)
+        loaded[1].status = ScanStatus.RUNNING  # the status re-check misses the archive
+        return loaded
+
+    monkeypatch.setattr(scanner_jobs, "load_job_scan", load_stale_status)
+    monkeypatch.setattr(scanner_jobs, "persist_scan_output", archive_then_persist)
+
+    pipeline.scan.apply(kwargs={"org_id": str(job.org_id), "job_id": str(job.id)})
+
+    db_session.expire_all()
+    assert db_session.scalars(scoped(Finding, job.org_id)).all() == []
+    assert job.status == JobStatus.FAILED
+    assert job.error == "AssetNotFound"  # type only: not a JobError (ADR 0010)

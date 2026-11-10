@@ -5,13 +5,14 @@ import pytest
 from sqlalchemy import Engine, delete
 from sqlalchemy.orm import Session
 
-from attacksurf.domain.assets import AssetType
+from attacksurf.domain.assets import AssetNotFound, AssetType
 from attacksurf.domain.findings import FindingStatus, Severity
 from attacksurf.domain.rules import Rule
 from attacksurf.domain.scanners import AssetRef, RawEvidence, RawFinding, ScanOutput
-from attacksurf.domain.scans import ScanStatus, ScanTrigger
+from attacksurf.domain.scans import ScanCancelled, ScanStatus, ScanTrigger
 from attacksurf.infra.db.models import Asset, Evidence, Finding, Job, Org, Scan
 from attacksurf.infra.db.tenancy import scoped
+from attacksurf.services.assets import archive_root_domain
 from attacksurf.services.scan_results import persist_scan_output
 from tests.integration.factories import make_scan
 
@@ -253,3 +254,36 @@ def test_admission_locks_the_root_so_overlapping_scans_cannot_overspend(
             cleanup.execute(delete(Asset).where(Asset.org_id == org_id))
             cleanup.execute(delete(Org).where(Org.id == org_id))
             cleanup.commit()
+
+
+def test_persist_refuses_output_for_a_cancelled_scan(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    scan.status = ScanStatus.CANCELLED
+    output = ScanOutput(findings=(RawFinding(rule_id=RULE.id),))
+
+    with pytest.raises(ScanCancelled):
+        persist_scan_output(db_session, scan, scan.root_asset_id, output, catalog=catalog)
+
+    assert db_session.scalars(scoped(Finding, scan.org_id)).all() == []
+
+
+def test_persist_refuses_output_under_an_archived_root(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    archive_root_domain(db_session, scan.org_id, scan.root_asset_id, actor_id=None)
+    # The root's state alone must stop the write, even if this scan's cancellation was missed.
+    db_session.refresh(scan)
+    scan.status = ScanStatus.RUNNING
+    output = ScanOutput(
+        assets=(AssetRef(type=AssetType.SUBDOMAIN, value="www.acme.example"),),
+        findings=(RawFinding(rule_id=RULE.id),),
+    )
+
+    with pytest.raises(AssetNotFound):
+        persist_scan_output(db_session, scan, scan.root_asset_id, output, catalog=catalog)
+
+    assert db_session.scalars(scoped(Finding, scan.org_id)).all() == []
+    assert len(db_session.scalars(scoped(Asset, scan.org_id)).all()) == 1  # just the root

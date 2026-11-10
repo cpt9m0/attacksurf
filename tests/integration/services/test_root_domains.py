@@ -12,7 +12,8 @@ from attacksurf.domain.assets import (
     InvalidAssetValue,
 )
 from attacksurf.domain.ids import uuid7
-from attacksurf.infra.db.models import Asset, AuditLog, Org, User
+from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger
+from attacksurf.infra.db.models import Asset, AuditLog, Job, Org, Scan, User
 from attacksurf.services.assets import add_root_domain, archive_root_domain, record_asset
 
 
@@ -48,6 +49,26 @@ def _child(session: Session, org: Org, root: Asset, value: str) -> Asset:
         source=AssetSource.DISCOVERED,
         parent_id=root.id,
     )
+
+
+def _scan(session: Session, root: Asset, status: ScanStatus) -> Scan:
+    scan = Scan(
+        org_id=root.org_id,
+        root_asset_id=root.id,
+        profile="dns_passive",
+        status=status,
+        triggered_by=ScanTrigger.USER,
+    )
+    session.add(scan)
+    session.flush()
+    return scan
+
+
+def _job(session: Session, scan: Scan, status: JobStatus) -> Job:
+    job = Job(org_id=scan.org_id, scan_id=scan.id, stage="check", status=status, scanner="fixture")
+    session.add(job)
+    session.flush()
+    return job
 
 
 def test_add_root_domain_stores_normalized_user_root(db_session: Session, org: Org) -> None:
@@ -137,7 +158,7 @@ def test_archive_deactivates_root_and_its_discovered_assets_only(
     assert _audit(db_session, org)[-1] == (
         "asset.root_archived",
         str(root.id),
-        {"value": "example.com", "children": 1},
+        {"value": "example.com", "children": 1, "scans_cancelled": 0},
     )
 
 
@@ -153,7 +174,11 @@ def test_archive_keeps_already_inactive_children_deactivation_time(
 
     db_session.refresh(gone)
     assert gone.deactivated_at == gone.last_seen
-    assert _audit(db_session, org)[-1][2] == {"value": "example.com", "children": 0}
+    assert _audit(db_session, org)[-1][2] == {
+        "value": "example.com",
+        "children": 0,
+        "scans_cancelled": 0,
+    }
 
 
 def test_archiving_an_archived_root_changes_nothing(db_session: Session, org: Org) -> None:
@@ -209,3 +234,84 @@ def test_archive_rejects_another_orgs_root(db_session: Session, org: Org) -> Non
 def test_archive_rejects_unknown_ids(db_session: Session, org: Org) -> None:
     with pytest.raises(AssetNotFound):
         archive_root_domain(db_session, org.id, uuid7(), actor_id=None)
+
+
+@pytest.mark.parametrize("status", [ScanStatus.QUEUED, ScanStatus.RUNNING])
+def test_archive_cancels_the_roots_queued_and_running_scans(
+    db_session: Session, org: Org, status: ScanStatus
+) -> None:
+    root = add_root_domain(db_session, org.id, "example.com", actor_id=None)
+    scan = _scan(db_session, root, status)
+    other_root = add_root_domain(db_session, org.id, "example.org", actor_id=None)
+    other = _scan(db_session, other_root, ScanStatus.RUNNING)
+
+    archive_root_domain(db_session, org.id, root.id, actor_id=None)
+
+    db_session.expire_all()
+    assert scan.status is ScanStatus.CANCELLED
+    assert scan.finished_at is not None
+    assert scan.finished_at >= (scan.started_at or scan.created_at)
+    assert other.status is ScanStatus.RUNNING
+
+
+def test_archive_leaves_completed_scans_untouched(db_session: Session, org: Org) -> None:
+    root = add_root_domain(db_session, org.id, "example.com", actor_id=None)
+    done = _scan(db_session, root, ScanStatus.COMPLETED)
+
+    archive_root_domain(db_session, org.id, root.id, actor_id=None)
+
+    db_session.refresh(done)
+    assert done.status is ScanStatus.COMPLETED
+
+
+def test_archive_cancels_the_unfinished_jobs_of_cancelled_scans(
+    db_session: Session, org: Org
+) -> None:
+    root = add_root_domain(db_session, org.id, "example.com", actor_id=None)
+    scan = _scan(db_session, root, ScanStatus.RUNNING)
+    queued = _job(db_session, scan, JobStatus.QUEUED)
+    running = _job(db_session, scan, JobStatus.RUNNING)
+    finished = _job(db_session, scan, JobStatus.COMPLETED)
+
+    archive_root_domain(db_session, org.id, root.id, actor_id=None)
+
+    for job in (queued, running):
+        db_session.refresh(job)
+        assert job.status is JobStatus.CANCELLED
+        assert job.error == "Root domain was archived."
+        assert job.finished_at is not None
+    db_session.refresh(finished)
+    assert finished.status is JobStatus.COMPLETED
+
+
+def test_archive_audits_each_cancelled_scan(db_session: Session, org: Org) -> None:
+    root = add_root_domain(db_session, org.id, "example.com", actor_id=None)
+    scan = _scan(db_session, root, ScanStatus.RUNNING)
+
+    archive_root_domain(db_session, org.id, root.id, actor_id=None)
+
+    # Both entries land in one transaction; FKs order them arbitrarily, so compare unordered.
+    assert sorted(map(repr, _audit(db_session, org)[-2:])) == sorted(
+        map(
+            repr,
+            [
+                (
+                    "asset.root_archived",
+                    str(root.id),
+                    {"value": "example.com", "children": 0, "scans_cancelled": 1},
+                ),
+                ("scan.cancelled", str(scan.id), {"reason": "root_archived"}),
+            ],
+        )
+    )
+
+
+def test_archive_without_scans_writes_no_cancellation(db_session: Session, org: Org) -> None:
+    root = add_root_domain(db_session, org.id, "example.com", actor_id=None)
+
+    archive_root_domain(db_session, org.id, root.id, actor_id=None)
+
+    assert [action for action, *_ in _audit(db_session, org)] == [
+        "asset.root_added",
+        "asset.root_archived",
+    ]

@@ -4,7 +4,7 @@
 `record_relation` are building blocks: they don't commit; the use case that calls them does.
 """
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -23,9 +23,10 @@ from attacksurf.domain.assets import (
     normalize_hostname,
 )
 from attacksurf.domain.ids import uuid7
+from attacksurf.domain.scans import JobStatus, ScanStatus
 from attacksurf.domain.scope import ScopeError, check_public_hostname
 from attacksurf.infra import public_suffix
-from attacksurf.infra.db.models import Asset, AssetRelation
+from attacksurf.infra.db.models import Asset, AssetRelation, Job, Scan
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services.audit import audit
 
@@ -64,9 +65,12 @@ def archive_root_domain(
 ) -> Asset:
     """Mark a root domain and everything discovered under it inactive, and commit.
 
-    Findings and scan history are kept; `start_scan` refuses inactive roots. Archiving an
-    archived root changes nothing. Raises `AssetNotFound` unless `asset_id` is one of the
-    org's root domains.
+    Findings and scan history are kept; `start_scan` refuses inactive roots. Scans of the root
+    that are queued or running are cancelled in the same transaction, so they show as
+    `cancelled` in their history, and so do their unfinished jobs. Nothing is revoked in Celery:
+    worker tasks that are already queued or running see the cancelled scan or the inactive root
+    and drop their output instead of writing it (ADR 0021). Archiving an archived root changes
+    nothing. Raises `AssetNotFound` unless `asset_id` is one of the org's root domains.
     """
     root = session.scalars(
         scoped(Asset, org_id).where(Asset.id == asset_id).with_for_update()
@@ -87,6 +91,7 @@ def archive_root_domain(
         .returning(Asset.id),
         execution_options={"synchronize_session": "fetch"},
     ).all()
+    cancelled = _cancel_scans(session, org_id, root.id)
     audit(
         session,
         org_id,
@@ -94,10 +99,64 @@ def archive_root_domain(
         actor_id=actor_id,
         target_type="asset",
         target_id=str(root.id),
-        details={"value": root.value, "children": len(archived) - 1},
+        details={
+            "value": root.value,
+            "children": len(archived) - 1,
+            "scans_cancelled": len(cancelled),
+        },
     )
+    for scan_id in cancelled:
+        audit(
+            session,
+            org_id,
+            "scan.cancelled",
+            actor_id=actor_id,
+            target_type="scan",
+            target_id=str(scan_id),
+            details={"reason": "root_archived"},
+        )
     session.commit()
     return root
+
+
+def _cancel_scans(session: Session, org_id: UUID, root_id: UUID) -> Sequence[UUID]:
+    """Cancel the root's queued/running scans and their unfinished jobs, without committing.
+
+    Returned IDs are the scans cancelled by this call. A scan cancelled while still queued gets
+    `started_at` from the database clock too: the schema keeps `finished_at >= started_at`.
+    """
+    cancelled = session.scalars(
+        update(Scan)
+        .where(
+            Scan.org_id == org_id,
+            Scan.root_asset_id == root_id,
+            Scan.status.in_((ScanStatus.QUEUED, ScanStatus.RUNNING)),
+        )
+        .values(
+            status=ScanStatus.CANCELLED,
+            started_at=func.coalesce(Scan.started_at, func.now()),
+            finished_at=func.now(),
+        )
+        .returning(Scan.id),
+        execution_options={"synchronize_session": "fetch"},
+    ).all()
+    if not cancelled:
+        return []
+    session.execute(
+        update(Job)
+        .where(
+            Job.org_id == org_id,
+            Job.scan_id.in_(cancelled),
+            Job.status.in_((JobStatus.QUEUED, JobStatus.RUNNING)),
+        )
+        .values(
+            status=JobStatus.CANCELLED,
+            error="Root domain was archived.",
+            finished_at=func.now(),
+        ),
+        execution_options={"synchronize_session": "fetch"},
+    )
+    return cancelled
 
 
 def _scannable_hostname(raw: str) -> str:
