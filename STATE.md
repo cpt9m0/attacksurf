@@ -40,7 +40,12 @@ Codex review round 2 found two more, both fixed:
   `dispatch_stage` now cancels a non-terminal scan it finds under an inactive root and skips its
   own job (`_abandon_stage`), instead of returning silently and leaving the scan `queued`.
 
-Verified: `pytest` 1212 passed, 19 skipped (all opt-in suites); ruff check/format, pyright
+Codex review round 3: two concurrent archives both held the root key-share and then deadlocked
+upgrading to `FOR UPDATE`. The archive now validates with a plain read and takes the root lock
+once in `_lock_root`. Rule to keep: **no transaction reads the root locked and later upgrades
+that lock** (covers persists, archives, and mixes).
+
+Verified: `pytest` 1213 passed, 19 skipped (all opt-in suites); ruff check/format, pyright
 (`src` + `tests`), lint-imports clean. Docs synced: ADR 0021 (lock order + timestamps), ADR 0010,
 `architecture.md`, `security.md`, `CHANGELOG.md`, `STATE.md`.
 

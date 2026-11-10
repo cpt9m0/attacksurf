@@ -30,20 +30,16 @@ Celery tasks (ADR 0010/0011).
   a cancelled scan never writes assets, relations, findings or evidence. Orchestration checks the
   root too: `dispatch_stage` and `finalize_scan` do nothing for an inactive root, so an archived
   scan neither fans out checks nor completes.
-- **One lock order, taken the same way on both sides.** Both paths lock the scan rows first and
-  the root second: persistence already holds its scan row (`load_job_scan`) before it reads the
-  root, and `archive_root_domain` cancels the root's scans before taking the root's lock. Taking
-  the root first in the archive instead deadlocks against a worker persisting at that moment, and
-  Postgres aborts one of them (found in review, #148). So `persist_scan_output` reads the root
-  `FOR KEY SHARE`, which never conflicts with the archive's key-share pre-read and cannot form a
-  cycle. Either persistence commits first and the archive's update deactivates everything it
-  created, or the archive commits first and the persist drops its output. Whichever starts first,
-  the two never deadlock.
-- **Each transaction takes the root lock once, never as an upgrade.** The discovery cap counts
-  the root's children, so that path takes `FOR UPDATE` from the start instead of reading
-  key-share and upgrading: two persists upgrading would each wait on the other's key-share and
-  deadlock with no archive running (also found in review, #148). The root lock is therefore
-  either key-share or exclusive for the whole transaction, chosen before the first write.
+- **One lock order, and the root lock is taken once.** Every path that can touch a root's scans
+  locks the scan rows first and the root second; that is the order `run_check` already had
+  (`load_job_scan`, then persistence). `archive_root_domain` validates with a plain read, cancels
+  the scans, and only then locks the root `FOR UPDATE`. `persist_scan_output` reads the root
+  `FOR KEY SHARE`, or takes `FOR UPDATE` from the start when the discovery cap needs it. No path
+  reads the root under one lock and later upgrades it: two transactions doing that wait on each
+  other's shared lock and Postgres aborts one, whether the two are persists, archives, or an
+  archive and a persist (all three found in review, #148). Either persistence commits first and
+  the archive's update deactivates everything it created, or the archive commits first and the
+  persist drops its output.
 - **Nothing is left `queued` when the archive misses a scan.** `start_scan` can insert a scan
   after the archive's cancellation ran (it read an active root, then the archive committed).
   `dispatch_stage` therefore cancels a non-terminal scan it finds under an inactive root instead

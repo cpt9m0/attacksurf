@@ -72,9 +72,9 @@ def archive_root_domain(
     and drop their output instead of writing it (ADR 0021). Archiving an archived root changes
     nothing. Raises `AssetNotFound` unless `asset_id` is one of the org's root domains.
     """
-    current = session.scalars(
-        scoped(Asset, org_id).where(Asset.id == asset_id).with_for_update(read=True, key_share=True)
-    ).one_or_none()
+    # A plain read: any lock here would later be upgraded by `_lock_root`, and two archives
+    # holding it key-share would deadlock upgrading (same rule as persistence, ADR 0021).
+    current = session.scalars(scoped(Asset, org_id).where(Asset.id == asset_id)).one_or_none()
     if current is None or current.type != AssetType.DOMAIN or current.parent_id is not None:
         raise AssetNotFound("Asset not found.")
     if not current.is_active:

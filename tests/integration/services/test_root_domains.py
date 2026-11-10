@@ -1,5 +1,7 @@
 """Use cases: adding and archiving root domains."""
 
+import threading
+
 import pytest
 from sqlalchemy import Engine, delete, select, text
 from sqlalchemy.orm import Session
@@ -367,6 +369,60 @@ def test_cancelling_never_sets_finished_before_a_worker_start_time(
         worker.rollback()
         archive.close()
         worker.close()
+        with Session(db_engine) as cleanup:
+            cleanup.execute(delete(AuditLog).where(AuditLog.org_id == org_id))
+            cleanup.execute(delete(Job).where(Job.org_id == org_id))
+            cleanup.execute(delete(Scan).where(Scan.org_id == org_id))
+            cleanup.execute(delete(Asset).where(Asset.org_id == org_id))
+            cleanup.execute(delete(Org).where(Org.id == org_id))
+            cleanup.commit()
+
+
+def test_concurrent_archives_of_one_root_do_not_deadlock(db_engine: Engine) -> None:
+    """Regression: both archives held the root key-share, then deadlocked upgrading to write.
+
+    Two admins archiving the same root at once must see one archive run and the other find it
+    already archived, never a deadlock (the root has no scans here, so nothing else is involved).
+    """
+    with Session(db_engine) as setup:
+        org = Org(name="twice", slug="twice")
+        setup.add(org)
+        setup.flush()
+        root = add_root_domain(setup, org.id, "twice.example.com", actor_id=None)
+        setup.commit()
+        org_id, root_id = org.id, root.id
+
+    ready = threading.Barrier(2)  # both archive requests are in flight together
+    errors: list[BaseException] = []
+
+    def archive() -> None:
+        session = Session(db_engine)
+        try:
+            session.get(Org, org_id)  # the request transaction opens before the archive
+            ready.wait(timeout=10)
+            archive_root_domain(session, org_id, root_id, actor_id=None)
+        except BaseException as exc:
+            errors.append(exc)
+            session.rollback()
+        finally:
+            session.close()
+
+    try:
+        threads = [threading.Thread(target=archive, daemon=True) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+            assert not thread.is_alive()
+        assert errors == [], f"deadlock or failure: {errors}"
+
+        with Session(db_engine) as check:
+            archived = check.scalars(
+                select(AuditLog).where(AuditLog.action == "asset.root_archived")
+            ).all()
+            assert len(archived) == 1  # the second archive changed nothing
+            assert check.get(Asset, root_id).is_active is False  # type: ignore[union-attr]
+    finally:
         with Session(db_engine) as cleanup:
             cleanup.execute(delete(AuditLog).where(AuditLog.org_id == org_id))
             cleanup.execute(delete(Job).where(Job.org_id == org_id))
