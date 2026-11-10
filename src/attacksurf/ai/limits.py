@@ -11,7 +11,8 @@ each chunk of a response, not the whole response, and one `complete()` call can 
 requests (the corrective retry, PR 3's format fallback). So each adapter (PR 2, PR 3) must also
 enforce `CALL_DEADLINE_SECONDS` across one `complete()` call and raise `LLMUnavailable` when it
 would be exceeded. Its tests prove that with a stubbed slow response, and that a 429 with a
-large `Retry-After` fails at once instead of sleeping.
+large `Retry-After` fails at once instead of sleeping. `ai/providers/anthropic.py` shows one
+way: a per-request timeout capped at the time left, and a thread abandoned at the deadline.
 """
 
 REQUEST_TIMEOUT_SECONDS = 60.0  # one HTTP request; reasoning models need tens of seconds

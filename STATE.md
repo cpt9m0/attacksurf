@@ -25,19 +25,23 @@ provider adapter`):
 - Tests `tests/unit/ai/providers/test_anthropic.py` (contract + 9 adapter tests) pass; ruff,
   pyright, lint-imports pass. Full suite not run: Docker Desktop was down (DB tests need it).
 
-Step 3 done (uncommitted): `stop_reason` `max_tokens` / `refusal` → `LLMOutputError`,
+Step 3: `stop_reason` `max_tokens` / `refusal` → `LLMOutputError`,
 `model_context_window_exceeded` → `LLMRequestError`, all at once with that attempt's usage (no
 corrective retry); an unreadable 2xx body (the SDK doesn't validate it: HTML, wrong JSON, null
 content) → `LLMUnavailable`; missing usage → `TokenUsage(reported=False)`; failed calls log
 status, error type and request ID only. Rule recorded in ADR 0019 (Errors) for PR 3 to mirror.
 110 AI tests pass (715 unit); ruff, pyright, lint-imports pass.
 
+Step 3 is committed (`8d1f38e`). Step 4 done (uncommitted): one deadline per `complete()`; each
+request gets `timeout=min(REQUEST_TIMEOUT_SECONDS, time left)`, none starts once time is up,
+and `_finish_within` runs the request in a daemon thread (context vars copied) abandoned at the
+deadline, since no httpx2 timeout bounds a whole response. Tests: stalled response, retry gets
+only the time left, no request after the deadline, 429 with `Retry-After: 600` fails at once
+(115 AI tests, about 3 s; stable over 5 runs). ADR 0019 and `ai/limits.py` describe it.
+
 ## Next step
-Commit step 3 (`feat(ai): handle anthropic replies a retry can't fix`, `Refs #23`). Run the
-full suite with Docker Desktop up (not yet run on this branch), then:
-4. Enforce `CALL_DEADLINE_SECONDS` (240) across one `complete()` call (both attempts), raising
-   `LLMUnavailable`; tests: a stubbed slow response, and a 429 with a large `Retry-After` failing
-   at once (ADR 0019).
+Commit step 4 (`feat(ai): stop anthropic calls at the call deadline`, `Refs #23`). Run the full
+suite with Docker Desktop up (not yet run on this branch), then:
 5. `llm_live` test against `https://api.meta.ai` (round-trip `contract.Verdict`); record in ADR
    0019 or `docs/development.md` that `api_key=` works there (SDK 2.x sends it as
    `Authorization: Bearer`, the header Meta's `auth_token=` sample produces, so no special case

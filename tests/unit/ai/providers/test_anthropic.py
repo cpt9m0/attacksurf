@@ -1,6 +1,9 @@
 """The Anthropic adapter against a stubbed Messages API (never the network)."""
 
 import json
+import threading
+import time
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import httpx2
@@ -8,7 +11,8 @@ import pytest
 from pydantic import SecretStr
 from structlog.testing import capture_logs
 
-from attacksurf.ai.limits import MAX_RETRIES, REQUEST_TIMEOUT_SECONDS
+from attacksurf.ai.limits import CALL_DEADLINE_SECONDS, MAX_RETRIES, REQUEST_TIMEOUT_SECONDS
+from attacksurf.ai.providers import anthropic as anthropic_provider
 from attacksurf.ai.providers.anthropic import DEFAULT_BASE_URL, AnthropicProvider
 from attacksurf.domain.jobs import TransientJobError
 from attacksurf.domain.llm import (
@@ -76,7 +80,8 @@ def _error(status: int, error_type: str, message: str) -> httpx2.Response:
 
 class AnthropicHarness:
     def __init__(self, base_url: str | None = None) -> None:
-        self._queue: list[httpx2.Response | None] = []  # None: the connection fails
+        # None: the connection fails; a callable answers when it returns (a slow server).
+        self._queue: list[httpx2.Response | Callable[[], httpx2.Response] | None] = []
         self.requests: list[httpx2.Request] = []
         client = httpx2.Client(transport=httpx2.MockTransport(self._answer))
         self.provider = AnthropicProvider(_config(base_url), http_client=client)
@@ -86,7 +91,13 @@ class AnthropicHarness:
         queued = self._queue.pop(0)
         if queued is None:
             raise httpx2.ConnectError("connection refused", request=request)
-        return queued
+        return queued() if callable(queued) else queued
+
+    def respond_slowly(self, answer: Callable[[], httpx2.Response]) -> None:
+        self._queue.append(answer)
+
+    def read_timeout(self, index: int) -> float:
+        return self.requests[index].extensions["timeout"]["read"]
 
     def reply(self, text: str, *, input_tokens: int = 10, output_tokens: int = 5) -> None:
         usage = {"input_tokens": input_tokens, "output_tokens": output_tokens}
@@ -329,3 +340,92 @@ def test_client_uses_the_shared_timeout_and_no_sdk_retries() -> None:
 
     assert provider._client.timeout == REQUEST_TIMEOUT_SECONDS
     assert provider._client.max_retries == MAX_RETRIES
+
+
+def test_request_with_time_to_spare_gets_the_full_request_timeout(
+    harness: AnthropicHarness,
+) -> None:
+    harness.reply(VALID)
+
+    harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+
+    assert harness.read_timeout(0) == REQUEST_TIMEOUT_SECONDS
+
+
+@pytest.fixture
+def release() -> Iterator[threading.Event]:
+    """Holds stalled stub responses until the test ends, so no stub thread outlives it."""
+    event = threading.Event()
+    yield event
+    event.set()
+
+
+def _stalled(release: threading.Event) -> Callable[[], httpx2.Response]:
+    def answer() -> httpx2.Response:
+        release.wait(timeout=30)
+        return httpx2.Response(200, json=_message(_text(VALID)))
+
+    return answer
+
+
+def test_slow_response_is_abandoned_at_the_call_deadline(
+    harness: AnthropicHarness, release: threading.Event, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Per-read timeouts can't catch a server that trickles bytes; the call deadline does.
+    monkeypatch.setattr(anthropic_provider, "CALL_DEADLINE_SECONDS", 0.2)
+    harness.respond_slowly(_stalled(release))
+    started = time.monotonic()
+
+    with pytest.raises(LLMUnavailable) as caught:
+        harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+
+    assert time.monotonic() - started < 5
+    assert isinstance(caught.value, TransientJobError)
+
+
+def test_corrective_retry_gets_only_the_time_left(
+    harness: AnthropicHarness, release: threading.Event, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(anthropic_provider, "CALL_DEADLINE_SECONDS", 1.0)
+
+    def slow_invalid() -> httpx2.Response:
+        time.sleep(0.5)
+        return httpx2.Response(200, json=_message(_text(INVALID)))
+
+    harness.respond_slowly(slow_invalid)
+    harness.respond_slowly(_stalled(release))
+    started = time.monotonic()
+
+    with pytest.raises(LLMUnavailable) as caught:
+        harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+
+    assert time.monotonic() - started < 5
+    assert len(harness.requests) == 2
+    assert harness.read_timeout(1) < 0.6  # what was left, not a fresh 60 s
+    assert caught.value.usage == TokenUsage(input_tokens=10, output_tokens=5)
+
+
+def test_no_request_starts_once_the_deadline_has_passed(
+    harness: AnthropicHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = iter([0.0, CALL_DEADLINE_SECONDS + 1])  # the deadline is set, then time is up
+    monkeypatch.setattr(anthropic_provider, "monotonic", lambda: next(clock))
+
+    with pytest.raises(LLMUnavailable):
+        harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+
+    assert harness.requests == []
+
+
+def test_rate_limit_with_a_long_retry_after_fails_at_once(harness: AnthropicHarness) -> None:
+    # The SDK would sleep for any Retry-After if it retried; with retries off it doesn't wait.
+    response = _error(429, "rate_limit_error", "Rate limited")
+    response.headers["retry-after"] = "600"
+    harness.respond(response)
+    started = time.monotonic()
+
+    with pytest.raises(LLMUnavailable):
+        harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+
+    assert time.monotonic() - started < 5
+    assert len(harness.requests) == 1

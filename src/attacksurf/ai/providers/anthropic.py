@@ -1,6 +1,9 @@
 """`LLMProvider` for the Anthropic Messages API, and Meta's endpoint in that format (ADR 0019)."""
 
-from collections.abc import Sequence
+import contextvars
+import threading
+from collections.abc import Callable, Sequence
+from time import monotonic
 
 import anthropic
 import httpx2
@@ -10,7 +13,7 @@ from anthropic.types import Message as APIMessage
 from pydantic import BaseModel
 
 from attacksurf.ai.errors import llm_error_for_status
-from attacksurf.ai.limits import MAX_RETRIES, REQUEST_TIMEOUT_SECONDS
+from attacksurf.ai.limits import CALL_DEADLINE_SECONDS, MAX_RETRIES, REQUEST_TIMEOUT_SECONDS
 from attacksurf.ai.structured import complete_structured
 from attacksurf.domain.llm import (
     Completion,
@@ -58,9 +61,11 @@ class AnthropicProvider:
             "type": "json_schema",
             "schema": anthropic.transform_schema(schema),
         }
+        # One deadline for every attempt, so the corrective retry gets only the time left.
+        deadline = monotonic() + CALL_DEADLINE_SECONDS
 
         def send(conversation: Sequence[Message]) -> Completion:
-            return self._send(conversation, output_format, max_tokens)
+            return self._send(conversation, output_format, max_tokens, deadline)
 
         return complete_structured(send, messages, schema)
 
@@ -69,16 +74,25 @@ class AnthropicProvider:
         conversation: Sequence[Message],
         output_format: JSONOutputFormatParam,
         max_tokens: int,
+        deadline: float,
     ) -> Completion:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise _too_slow()
         system = "\n\n".join(m.content for m in conversation if m.role == "system")
-        try:
-            response = self._client.messages.create(
+
+        def request() -> APIMessage:
+            return self._client.messages.create(
                 model=self._model,
                 max_tokens=max_tokens,
                 system=system or anthropic.omit,
                 messages=[_turn(m) for m in conversation if m.role != "system"],
                 output_config={"format": output_format},
+                timeout=min(REQUEST_TIMEOUT_SECONDS, remaining),
             )
+
+        try:
+            response = _finish_within(remaining, request)
         # `from None`, and only the error type logged: the SDK's error carries the response
         # body, which can echo the prompt.
         except anthropic.APIStatusError as exc:
@@ -93,6 +107,40 @@ class AnthropicProvider:
             log.warning("llm provider unreachable", error=type(exc).__name__)
             raise llm_error_for_status(None) from None
         return _completion(response)
+
+
+def _finish_within[R](seconds: float, call: Callable[[], R]) -> R:
+    """`call()`'s result, or `LLMUnavailable` once `seconds` have passed.
+
+    The SDK's timeouts bound each wait for data, not a whole response (a server can keep one
+    alive by trickling bytes), so the request runs in its own thread and is abandoned at the
+    deadline; its own timeouts end it later. Context variables are copied so its logs keep
+    the job's context.
+    """
+    outcome: list[R] = []
+    failure: list[BaseException] = []
+    done = threading.Event()
+
+    def run() -> None:
+        try:
+            outcome.append(call())
+        except BaseException as exc:  # handed to the caller's thread below
+            failure.append(exc)
+        finally:
+            done.set()
+
+    context = contextvars.copy_context()
+    threading.Thread(target=context.run, args=(run,), name="llm-request", daemon=True).start()
+    if not done.wait(seconds):
+        raise _too_slow()
+    if failure:
+        raise failure[0]
+    return outcome[0]
+
+
+def _too_slow() -> LLMUnavailable:
+    log.warning("llm call deadline exceeded", deadline_seconds=CALL_DEADLINE_SECONDS)
+    return LLMUnavailable("The AI provider took too long to answer. Try again later.")
 
 
 def _completion(response: APIMessage) -> Completion:

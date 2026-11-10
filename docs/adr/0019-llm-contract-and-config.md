@@ -51,8 +51,12 @@ a cap. Development uses Meta's Muse Spark models, which serve both API formats w
   add requests. So each adapter must also enforce `CALL_DEADLINE_SECONDS` (240 s) across one
   `complete()` call and raise `LLMUnavailable` when it would be exceeded, proven in its own
   tests with a slow response (and a 429 with a large `Retry-After` failing at once). The shared
-  test only checks that the deadline leaves room under the soft limit; until the adapters
-  enforce it, Celery's soft limit is the backstop. AI tasks must make one `complete()` call
+  test only checks that the deadline leaves room under the soft limit; Celery's soft limit stays
+  the backstop. The Anthropic adapter (PR 2) gives each request `min(REQUEST_TIMEOUT_SECONDS,
+  time left)`, starts none once the time is up, and runs each request in its own thread that
+  it abandons at the deadline: no client timeout bounds a whole response (a server can keep
+  one alive by trickling bytes). The abandoned request ends on its own timeouts and may still
+  be billed. AI tasks must make one `complete()` call
   each, or cache results per finding (#25), so a task retry doesn't pay again for calls that
   succeeded.
 - **Config resolution** (`ai/config.resolve_llm_config`): the org's own key wins and brings its
