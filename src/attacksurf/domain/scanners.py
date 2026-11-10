@@ -90,6 +90,7 @@ class ScanOutput(OutputModel):
 
 
 _HOSTNAME = re.compile(r"(?=.{1,253}$)([a-z0-9_-]{1,63}\.)*[a-z0-9-]{1,63}")
+_ANALYZER_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,7 @@ class ScannerGrant:
     http: HttpPermission = HttpPermission.NONE
     http_hosts: frozenset[str] = frozenset()  # public data services the scanner may query
     dns_lookups: int = 0  # cap on resolver calls per run
+    sandbox_analyzers: frozenset[str] = frozenset()  # analyzers the plugin may run (ADR 0016)
 
     def __post_init__(self) -> None:
         if self.http is HttpPermission.SERVICES and not self.http_hosts:
@@ -110,6 +112,9 @@ class ScannerGrant:
         for host in self.http_hosts:
             if not _HOSTNAME.fullmatch(host) or "." not in host:
                 raise ValueError("invalid http host")
+        for analyzer in self.sandbox_analyzers:
+            if not _ANALYZER_NAME.fullmatch(analyzer):
+                raise ValueError("invalid analyzer name")
 
 
 @dataclass(frozen=True)

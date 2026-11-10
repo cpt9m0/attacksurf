@@ -1,4 +1,6 @@
 import os
+import time
+from collections.abc import Callable
 
 import pytest
 from flask import Flask
@@ -6,9 +8,15 @@ from flask.testing import FlaskClient
 from pydantic import SecretStr
 
 from attacksurf import create_app
-from attacksurf.config import Settings
+from attacksurf.config import SandboxProxySettings, Settings
+from attacksurf.domain.accounts import Role
+from attacksurf.domain.ids import uuid7
+from attacksurf.services import auth as auth_service
+from attacksurf.services.auth import SessionUser
 from attacksurf.workers import runtime
 from tests.helpers import llm_live_skip_reason, make_settings
+
+type LoginAs = Callable[[FlaskClient, SessionUser], None]
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -24,8 +32,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
-    """Unset every variable Settings reads, for tests that exercise env loading."""
-    for name in Settings.model_fields:
+    """Unset every variable read by application or proxy settings for env-loading tests."""
+    for name in Settings.model_fields.keys() | SandboxProxySettings.model_fields.keys():
         monkeypatch.delenv(name.upper(), raising=False)
     return monkeypatch
 
@@ -43,6 +51,26 @@ def app(settings: Settings) -> Flask:
 @pytest.fixture
 def client(app: Flask) -> FlaskClient:
     return app.test_client()
+
+
+def make_session_user(role: Role = Role.OWNER, email: str = "alice@example.com") -> SessionUser:
+    return SessionUser(user_id=uuid7(), email=email, org_id=uuid7(), org_name="Acme", role=role)
+
+
+@pytest.fixture
+def login_as(monkeypatch: pytest.MonkeyPatch) -> LoginAs:
+    """Log a client in as a fake user: the identity lookup is patched, no database needed."""
+    users: dict[object, SessionUser] = {}
+    monkeypatch.setattr(auth_service, "load_session_user", lambda _session, uid: users.get(uid))
+
+    def _login(client: FlaskClient, user: SessionUser) -> None:
+        users[user.user_id] = user
+        with client.session_transaction() as sess:
+            sess["_user_id"] = str(user.user_id)
+            sess["_fresh"] = True
+            sess["auth_at"] = int(time.time())
+
+    return _login
 
 
 def pytest_configure(config: pytest.Config) -> None:

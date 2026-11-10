@@ -24,7 +24,6 @@ from flask import (
 )
 from flask.typing import RouteCallable
 from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from flask_login import LoginManager, UserMixin, current_user, login_user, logout_user
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -277,12 +276,29 @@ def _email_key() -> str:
     return "login-email:" + request.form.get("email", "").strip().lower()[:254]
 
 
+def _client_ip() -> str:
+    """Rate-limit key: the visitor address, using forwarding headers only where they are trusted.
+
+    `request.remote_addr` is what `ProxyFix` resolved from `PROXY_COUNT` trusted hops, so when the
+    app is reached directly (`PROXY_COUNT=0`) nothing in a header can influence the key.
+
+    Cloudflare's `CF-Connecting-IP` is a single, unambiguous value, but only a proxy we configured
+    can be trusted to have set it; otherwise a client could rotate it to get a fresh budget per
+    request. With zero configured proxies it is ignored entirely.
+    """
+    if _settings().proxy_count:
+        connecting_ip = request.headers.get("CF-Connecting-IP", "").strip()
+        if connecting_ip:
+            return connecting_ip
+    return request.remote_addr or ""
+
+
 def _apply_rate_limits(app: Flask, settings: Settings) -> None:
     storage = "memory://" if settings.env == "test" else settings.redis_url.get_secret_value()
     # One limiter per app (tests build many apps). Falls back to per-process memory if Redis
     # is down, so limits keep working instead of failing open or erroring.
     limiter = Limiter(
-        get_remote_address,
+        _client_ip,
         app=app,
         storage_uri=storage,
         headers_enabled=True,

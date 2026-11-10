@@ -33,8 +33,10 @@ class Settings(BaseSettings):
     # Auth (#7). With signup off, only the very first user can still sign up (instance admin).
     allow_signup: bool = True
     session_lifetime_hours: int = Field(default=12, ge=1, le=720)
-    # Reverse proxies in front of the app (Caddy in prod: 1). Decides which X-Forwarded-For
-    # entry is the client IP for rate limiting; leave 0 when the app is reached directly.
+    # Reverse proxies in front of the app. Count trusted hops, not components: Caddy alone = 1;
+    # Cloudflare Tunnel -> Caddy = 1 (cloudflared is not a proxy hop, Cloudflare is); Cloudflare
+    # proxying to Caddy directly = 2. Decides which X-Forwarded-For entry is the client IP for
+    # rate limiting; leave 0 when the app is reached directly.
     proxy_count: int = Field(default=0, ge=0, le=5)
 
     # Instance LLM config (ADR 0019): orgs without their own key use it, capped (#24). Model
@@ -70,6 +72,37 @@ class Settings(BaseSettings):
     @property
     def is_prod(self) -> bool:
         return self.env == "prod"
+
+
+class SandboxProxySettings(BaseSettings):
+    """`sandbox-proxy` only (ADR 0016). Separate so that process never holds app secrets.
+
+    Environment only, no `.env`: the root-equivalent service must not pick up a stray file.
+    """
+
+    model_config = SettingsConfigDict(env_ignore_empty=True, extra="ignore")
+
+    env: Literal["dev", "test", "prod"] = "dev"
+    sandbox_artifact_root: str = "/var/lib/attacksurf/artifacts"
+    sandbox_images_lock: str = "sandbox-images.lock"
+    sandbox_docker_socket: str = "/var/run/docker.sock"
+    sandbox_proxy_host: str = "0.0.0.0"  # noqa: S104 - reachable only on an internal network
+    sandbox_proxy_port: int = Field(default=8790, ge=1, le=65535)
+    sandbox_allow_runc: bool = False  # dev/CI hosts without gVisor; refused in prod
+
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        if self.env == "prod" and self.sandbox_allow_runc:
+            raise ValueError("SANDBOX_ALLOW_RUNC (runc) is not allowed when ENV=prod")
+        root = self.sandbox_artifact_root
+        if not root.startswith("/") or root == "/" or ".." in root.split("/"):
+            raise ValueError("the sandbox artifact root must be an absolute path below /")
+        self.sandbox_artifact_root = root.rstrip("/")
+        return self
+
+    @property
+    def allowed_runtimes(self) -> frozenset[str]:
+        return frozenset({"runsc", "runc"} if self.sandbox_allow_runc else {"runsc"})
 
 
 @lru_cache

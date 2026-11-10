@@ -1,0 +1,50 @@
+# Caddy ingress for the Cloudflare Tunnel entry (issue #132).
+#
+# Cloudflare is the only public endpoint: the tunnel forwards requests to this container as plain
+# HTTP on the internal network, and `cloudflared` itself re-originates TLS to the edge. Caddy
+# therefore neither redirects to HTTPS nor manages a public certificate; it normalizes headers,
+# sets transport-level response headers, and proxies to the app.
+{
+	admin off
+	log {
+		output stdout
+		format json
+	}
+	servers {
+		# The only callers are cloudflared and (in Caddy logs) loopback. Trusting Cloudflare's
+		# X-Forwarded-For chain from them is how the visitor address reaches the app.
+		trusted_proxies static private_ranges
+		client_ip_headers X-Forwarded-For
+	}
+}
+
+:80 {
+	# Access log: the visitor address in `client_ip` proves the forwarding chain works.
+	log {
+		output stdout
+		format json
+	}
+
+	# Apex is canonical.
+	@www host www.attacksurf.dev
+	handle @www {
+		redir https://attacksurf.dev{uri} permanent
+	}
+
+	encode zstd gzip
+
+	# The app sets its own CSP and clickjacking headers; these are the transport-level ones.
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	# Uploads are not accepted yet; bound the body early so garbage never reaches the app.
+	request_body {
+		max_size 2MB
+	}
+
+	reverse_proxy web:5000
+}

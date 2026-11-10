@@ -121,9 +121,14 @@ All settings live in `src/attacksurf/config.py` and are read from environment va
 `ENV=prod` refuses to start without a random `SECRET_KEY` of ≥ 32 characters. Never commit `.env`.
 
 Auth settings: `ALLOW_SIGNUP` (default `true`; when `false` only the first user can sign up),
-`SESSION_LIFETIME_HOURS` (default 12), `PROXY_COUNT` (reverse proxies in front of the app; 0 in
-dev, 1 behind Caddy). Login/signup rate limits use Redis (`REDIS_URL`) and fall back to memory if
-it is down. Open http://127.0.0.1:5000, sign up; the first account owns a new org.
+`SESSION_LIFETIME_HOURS` (default 12), `PROXY_COUNT` (trusted proxy hops in front of the app).
+`PROXY_COUNT` counts hops, not components: 0 in dev, 1 behind Caddy, and also 1 behind the
+production Cloudflare Tunnel (Cloudflare → `cloudflared` → Caddy → app; `cloudflared` does not
+add a hop). Set it to 2 only if Cloudflare proxies directly to Caddy without a tunnel. Rate
+limits key on the visitor address Cloudflare forwards (`CF-Connecting-IP`, else the leftmost
+`X-Forwarded-For` entry), and use Redis (`REDIS_URL`) with an in-memory fallback. Open
+http://127.0.0.1:5000, sign up; the first account owns a new org. Production setup:
+[deployment.md](deployment.md).
 
 ### AI provider (instance key)
 
@@ -212,7 +217,12 @@ pyright and pytest versions come from `uv.lock`.
   still has CRLF files: with no uncommitted work, rewrite them once from Git Bash with
   `git ls-files -z | xargs -0 rm -f && git checkout -- .` (untracked files such as `.env` stay).
 - Layout: `tests/unit/`, `tests/integration/` (DB, Celery; fixtures `db_engine`, `db_session`),
-  `tests/e2e/` (against the running stack, e.g. `make test-worker`; Playwright later).
+  `tests/e2e/` (against the running stack, e.g. `make test-worker`). Browser layout tests live in
+  `tests/e2e/web/` (marker `web_e2e`): they render the real pages to disk and measure them in
+  Chromium with no server and no database, so they run after
+  `uv run playwright install chromium` with
+  `RUN_WEB_E2E=1 uv run pytest tests/e2e/web -m web_e2e --no-cov` (CI runs the same command in
+  the `web-e2e` job).
 - Celery tasks in tests: `task.apply(kwargs=...)` runs them in-process; patch
   `workers.runtime.session_factory` to share the test's connection
   (`tests/integration/workers/test_tracked_task.py`).
@@ -247,7 +257,7 @@ This project is built mostly by AI coding agents. The setup:
 |---|---|---|
 | context7 | current library docs | optional `CONTEXT7_API_KEY` (higher rate limits) |
 | brave-search | web search | requires `BRAVE_API_KEY` ([get one](https://brave.com/search/api/)) |
-| playwright | browser testing of the UI | none (`npx`) |
+| playwright | browser testing of the UI | dev dependency (`uv add --dev playwright`) |
 
 Export the keys in your shell (or in your cloud environment's secrets); never commit them.
 Other agents (Codex, Cursor, ...) read `AGENTS.md` directly; configure the same MCP servers in

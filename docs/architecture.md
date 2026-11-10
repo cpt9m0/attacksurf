@@ -8,7 +8,7 @@ attacksurf is a **modular monolith**: one Flask codebase, deployed as several pr
 (web, Celery workers, beat) on one VPS with Docker Compose.
 
 ```
-            ┌────────────── Caddy (TLS) ──────────────┐
+            ┌─ Cloudflare edge ─► cloudflared ─► Caddy ─┐   (ADR 0020)
             │                                          │
         ┌───▼────┐   enqueue   ┌────────┐   consume  ┌─▼──────────────┐
 Browser ─► web    ├────────────►│ Redis  ├───────────►│ worker-passive │─► DNS / CT logs / RDAP
@@ -113,7 +113,8 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 - A failing scanner fails only its job, not the scan.
 - Implemented framework (ADR 0011/0013): `domain/scanners.py` defines pydantic `ScanOutput`,
   `AssetRef(type, value)`, relations, raw rule findings/evidence, `ScanContext`, the `Scanner`
-  protocol, the frozen `ScannerGrant` and `ScannerRuntime` (validated DNS/HTTP adapters). Plugins
+  protocol, the frozen `ScannerGrant` and `ScannerRuntime` (validated DNS/HTTP adapters and the
+  grant-checked sandbox port from `domain/sandbox.py`). Plugins
   declare `name`, `asset_types`, `queue`, `requires_verification`, `timeout_seconds`
   (0 < timeout <= 240 s) and `grant`, and return `run(ctx, asset) -> ScanOutput`.
 - `scanners/registry.py` supplies `@register_scanner`; import plugin modules explicitly at
@@ -192,7 +193,7 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 | `ai` | LLM calls | rate-limited per org |
 | `fetch` *(later)* | git smart-HTTP fetches | egress to allowlisted forges through ScopeGuard; no access to `sandbox-launcher`; never parses repository content (ADR 0017) |
 | `active` *(later)* | port/web probes on verified targets | separate network, egress rules |
-| `analysis` *(later)* | code/binary analysis | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
+| `analysis` *(later)* | code/binary analysis (`sandbox_proxy/` is implemented; launcher and worker are not yet) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
 
 - `infra/queue.py`: `create_celery(settings)` (Redis broker + result backend from `REDIS_URL`,
   JSON only, `acks_late` + `reject_on_worker_lost`, prefetch 1, results ignored unless a
@@ -250,8 +251,9 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
 
 ## Deployment
 
-Single VPS: Caddy → gunicorn (web), Celery workers, beat, PostgreSQL, Redis, all in Docker Compose.
-Nightly `pg_dump` off-box. See issue #29.
+Single VPS: Cloudflare Tunnel → Caddy → gunicorn (web), plus PostgreSQL and Redis, all in Docker
+Compose (`compose.prod.yaml`); no inbound ports (ADR 0020, `docs/deployment.md`). Celery workers
+and beat are not part of the production stack yet. Nightly `pg_dump` off-box. See issue #29.
 
 The `Dockerfile` has two targets: `dev` (dev deps, Flask debug server, source bind-mounted by
 `compose.yaml` for hot reload) and `prod` (no dev deps, gunicorn, non-root uid 10001). Base and

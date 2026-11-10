@@ -5,9 +5,49 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 
 ## [Unreleased]
 
+### Added
+- `sandbox-proxy` service: the only holder of the Docker socket, allowing six container actions
+  on containers it created and refusing any create request outside the sandbox policy (#84).
+- CD is verified end-to-end: a merge to `main` reaches production within one timer
+  interval, and the running `web` image tag matches the recorded deployed SHA (#29).
+- Pull-based CD: `scripts/deploy.sh` (also `make deploy`) fetches `origin/main`, builds the
+  images tagged with the short SHA, runs `migrate` before replacing `web`, smoke-tests
+  `/healthz` through the ingress and rolls back to the previously deployed SHA on failure; the
+  deployed SHA is recorded in `/var/lib/attacksurf/deployed-sha` (#138).
+- Pull-based CD units (`deploy/systemd/`): `attacksurf-deploy.timer` runs `scripts/deploy.sh`
+  every 3 minutes (±45 s jitter) as root under a `flock`, so a merge to `main` reaches
+  production within one interval with no inbound port, no GitHub secret and no runner; the
+  deployed SHA lands in the journal and in `/var/lib/attacksurf/deployed-sha` (#29).
+- Sandbox port for scanners: `ctx.runtime.sandbox.run(analyzer, artifact_id)`, limited to the
+  analyzers in a plugin's `ScannerGrant` and refused until a runner is configured (#84).
+- Production stack (`compose.prod.yaml`) published through a Cloudflare Tunnel: `cloudflared`,
+  Caddy, gunicorn, PostgreSQL and Redis on a private network with no inbound ports, `www`
+  redirecting to the apex, and a deploy runbook in `docs/deployment.md` (ADR 0020, #132).
+
 ### Fixed
-- Two due-verification tests recorded checks at the real time instead of the test clock, so one
-  failed from about 2026-11-07 and the other passed without testing anything (#14).
+- The archived-roots due-verification test recorded its check at the real time instead of the
+  test clock, so it passed without testing the archive filter (#14).
+- The app shell fits a phone viewport: the top bar wraps and truncates the user menu (full text
+  in `title`) and the mobile nav row scrolls inside itself instead of widening the page (#114).
+- The `playwright` dev dependency is pinned to 1.64.1 (`>=1.64.1,<1.65`), the newest release
+  that satisfies the two-week dependency-age policy, instead of the day-old 1.65.0 (#114).
+- Deploying into a checkout owned by another user (the pre-CD copied tree, or a clone made by a
+  person while the timer runs as root) no longer fails with git's "dubious ownership" error:
+  `scripts/deploy.sh` trusts its own `APP_DIR` for its git calls (#29).
+- Sandbox proxy retains ownership after rejected removals, reclaims capacity after confirmed
+  automatic removal, and reserves in-flight create capacity atomically, so concurrent requests
+  cannot exceed its container cap (#84, PR #135).
+- Unknown Docker-create outcomes retain their reserved slot and receive a proxy-generated
+  name for forced cleanup; failed cleanup (including 404 while creation may still be running)
+  never frees capacity. Subsequent create requests retry reconciliation (#84, PR #135).
+- Legacy Docker API prefixes below v1.30 are denied so clients cannot disable AutoRemove or
+  downgrade removed-wait semantics and bypass the container cap (#84, PR #135).
+- Proxy settings tests clear all application and proxy environment fields, including the
+  documented dev runtime fallback, before constructing settings (#84, PR #135).
+- Proxy environment settings and defaults are documented in `.env.example` (#84).
+- Login and signup rate limits key on the visitor address Cloudflare forwards
+  (`CF-Connecting-IP`, else the leftmost `X-Forwarded-For` entry) instead of the first proxy
+  hop, so visitors behind the tunnel no longer share one budget (#132).
 - LLM endpoint credentials are masked in settings and provider-config representations;
   base URLs remain `SecretStr` through config resolution (#23).
 - The test suite passes on Windows checkouts: `.gitattributes` keeps LF line endings whatever

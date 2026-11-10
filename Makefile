@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose
 
-.PHONY: help up down logs ps build shell test test-worker check migrate revision
+.PHONY: help up down logs ps build shell test test-worker check migrate revision deploy
 
 help: ## Show available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -46,3 +46,10 @@ migrate: ## Apply database migrations (alembic upgrade head)
 revision: ## New migration from model changes: make revision id=0002 m="add assets"
 	@test -n "$(id)" -a -n "$(m)" || { echo 'usage: make revision id=0002 m="add assets"'; exit 1; }
 	uv run alembic revision --autogenerate --rev-id $(id) -m "$(m)"
+
+# Production (pull-based CD; see docs/deployment.md). Root-only: the script reads the
+# /etc/attacksurf secrets and drives the Docker daemon. attacksurf-deploy.service calls
+# scripts/deploy.sh directly, not this target, so the timer never depends on make.
+deploy: ## Deploy prod to origin/main (or SHA=<commit>) — needs root
+	@test "$$(id -u)" = 0 || { echo "error: deploy must run as root: sudo make deploy$(if $(SHA), SHA=$(SHA),)"; exit 1; }
+	./scripts/deploy.sh $(SHA)
