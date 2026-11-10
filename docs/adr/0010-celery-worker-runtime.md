@@ -21,6 +21,8 @@ not read the environment.
   ignored). `services.jobs.create_job` commits the row before sending the task. `TrackedTask`
   records `running → completed / failed` (`queued` again on retry), skips redelivered tasks of
   finished jobs, and never overwrites a cancellation (row lock, fresh read).
+- **Cancellation:** cancelling a scan is a database write (a terminal scan status, ADR 0021); no
+  Celery revoke is sent. Queued/running tasks still run once and see the terminal state.
 - **Failures:** only `TransientJobError` is retried by Celery; a database outage around the
   lifecycle writes is retried too. `Job.attempts` counts deliveries and caps them at
   `max_retries + 2`, so a task that keeps killing its worker (`acks_late` +

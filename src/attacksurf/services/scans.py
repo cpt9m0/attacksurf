@@ -37,7 +37,10 @@ def start_scan(
     registry.validate(selected)
     if not selected.discover and not selected.checks:
         raise ScanError("profile has no scanners")
-    root = get_scoped(session, Asset, root_asset_id, org_id)
+    root = session.scalars(
+        scoped(Asset, org_id).where(Asset.id == root_asset_id),
+        execution_options={"populate_existing": True},  # a committed archive must not be missed
+    ).one_or_none()
     if root is None or root.parent_id is not None or not root.is_active:
         raise AssetNotFound("Root asset not found.")
     if root.type != AssetType.DOMAIN:
@@ -78,8 +81,9 @@ def dispatch_stage(
     profiles: Mapping[str, ScanProfile],
 ) -> None:
     job, scan = load_job_scan(session, org_id, job_id)
-    if scan.status in TERMINAL:
-        session.rollback()
+    if scan.status in TERMINAL or not _root_active(session, org_id, scan):
+        _abandon_stage(session, org_id, job)
+        session.commit()
         return
     if scan.started_at is None:
         scan.started_at = func.now()
@@ -153,6 +157,40 @@ def _task(
     return JobTask(task_name, scan.org_id, row.id)
 
 
+def _root_active(session: Session, org_id: UUID, scan: Scan) -> bool:
+    """Fresh read: an archive may have committed after this task loaded the scan.
+
+    A cancelled scan normally shows its own status; checking the root too means a scan whose
+    cancellation somehow missed still can't fan out or complete against an archived root.
+    """
+    root = session.scalars(
+        scoped(Asset, org_id).where(Asset.id == scan.root_asset_id),
+        execution_options={"populate_existing": True},
+    ).one_or_none()
+    return root is not None and root.is_active
+
+
+def _abandon_stage(session: Session, org_id: UUID, job: Job) -> None:
+    """A stage that must not run. Skip its job, and cancel a scan whose cancellation was missed.
+
+    The root is archived or the scan is already terminal (ADR 0021). Cancelling here keeps a scan
+    the archive missed from staying `queued` forever; committing the skip ends the stage, so
+    `finalize` can complete. Queued work of the batch is left to `finalize`, which skips and
+    closes anything still queued when the chord delivers it.
+    """
+    scan = session.scalars(
+        scoped(Scan, org_id).where(Scan.id == job.scan_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).one()
+    if scan.status not in TERMINAL:
+        scan.status = ScanStatus.CANCELLED
+        scan.started_at = func.coalesce(scan.started_at, func.clock_timestamp())
+        scan.finished_at = func.clock_timestamp()
+    job.status = JobStatus.SKIPPED
+    job.error = "Scan is no longer running."
+    job.finished_at = func.now()
+
+
 def load_job_scan(session: Session, org_id: UUID, job_id: UUID) -> tuple[Job, Scan]:
     """Tenant-scoped building block: lock the scan in the caller's transaction, no commit."""
     job = get_scoped(session, Job, job_id, org_id)
@@ -167,7 +205,7 @@ def load_job_scan(session: Session, org_id: UUID, job_id: UUID) -> tuple[Job, Sc
 
 def finalize_scan(session: Session, org_id: UUID, job_id: UUID, events: EventDispatcher) -> None:
     _, scan = load_job_scan(session, org_id, job_id)
-    if scan.status in TERMINAL:
+    if scan.status in TERMINAL or not _root_active(session, org_id, scan):
         session.rollback()
         return
     pending = session.scalars(
