@@ -1,3 +1,4 @@
+import contextlib
 import threading
 import time
 from datetime import timedelta
@@ -390,4 +391,64 @@ def test_archive_started_before_a_persist_deadlocks_neither(
         archive.rollback()
         worker.close()
         archive.close()
+        _forget(db_engine, org_id)
+
+
+def test_concurrent_capped_persists_do_not_deadlock_on_the_root(
+    db_engine: Engine, catalog: dict[str, Rule]
+) -> None:
+    """Regression: a key-share read of the root followed by `FOR UPDATE` deadlocked persists.
+
+    Every persist took the root key-share and then tried to upgrade it for the cap, so each
+    waited on the others' key-share and Postgres aborted some. The cap path must lock once.
+    """
+    with Session(db_engine) as setup:
+        scan = make_scan(setup, "capped")
+        setup.commit()
+        org_id, scan_id, root_id = scan.org_id, scan.id, scan.root_asset_id
+
+    loads = threading.Barrier(3)  # every worker has its scan row before anyone locks the root
+    errors: list[BaseException] = []
+    admitted: list[int] = []
+
+    def persist(name: str) -> None:
+        session = Session(db_engine)
+        try:
+            scan = session.get(Scan, scan_id)
+            assert scan is not None
+            loads.wait(timeout=10)
+            persist_scan_output(
+                session,
+                scan,
+                root_id,
+                ScanOutput(assets=(AssetRef(type=AssetType.SUBDOMAIN, value=name),)),
+                catalog=catalog,
+                discovered_limit=1,
+            )
+            session.commit()
+            admitted.append(1)
+        except BaseException as exc:
+            errors.append(exc)
+            with contextlib.suppress(threading.BrokenBarrierError):
+                loads.abort()
+            session.rollback()
+        finally:
+            session.close()
+
+    try:
+        threads = [
+            threading.Thread(target=persist, args=("www.capped.example",), daemon=True)
+            for _ in range(3)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+            assert not thread.is_alive()
+
+        assert errors == [], f"deadlock or failure: {errors}"
+        with Session(db_engine) as check:
+            children = check.scalars(select(Asset.value).where(Asset.parent_id == root_id)).all()
+        assert children == ["www.capped.example"]  # inserted once, cap respected
+    finally:
         _forget(db_engine, org_id)

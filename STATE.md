@@ -32,7 +32,15 @@ Codex review on PR #148 (round 1) found two real races in the first version; bot
   the request began could exceed `finished_at` and roll back the archive. Cancellation now uses
   `clock_timestamp()`, jobs `greatest(started_at, clock_timestamp())`.
 
-Verified: `pytest` 1210 passed, 19 skipped (all opt-in suites); ruff check/format, pyright
+Codex review round 2 found two more, both fixed:
+- **Lock upgrade:** the cap path read the root `FOR KEY SHARE` and then upgraded to `FOR UPDATE`,
+  so overlapping capped persists deadlocked each other. Each transaction now takes the root
+  lock exactly once (key-share, or `FOR UPDATE` up front when `discovered_limit` is set).
+- **Stuck `queued`:** `start_scan` can insert a scan after the archive's cancellation ran.
+  `dispatch_stage` now cancels a non-terminal scan it finds under an inactive root and skips its
+  own job (`_abandon_stage`), instead of returning silently and leaving the scan `queued`.
+
+Verified: `pytest` 1212 passed, 19 skipped (all opt-in suites); ruff check/format, pyright
 (`src` + `tests`), lint-imports clean. Docs synced: ADR 0021 (lock order + timestamps), ADR 0010,
 `architecture.md`, `security.md`, `CHANGELOG.md`, `STATE.md`.
 

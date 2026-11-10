@@ -36,10 +36,19 @@ Celery tasks (ADR 0010/0011).
   the root first in the archive instead deadlocks against a worker persisting at that moment, and
   Postgres aborts one of them (found in review, #148). So `persist_scan_output` reads the root
   `FOR KEY SHARE`, which never conflicts with the archive's key-share pre-read and cannot form a
-  cycle; it upgrades to `FOR UPDATE` only for the cap counting (`_admit`), which is the sole place
-  that needs the root's write lock. Either persistence commits first and the archive's update
-  deactivates everything it created, or the archive commits first and the persist drops its
-  output. Whichever starts first, the two never deadlock.
+  cycle. Either persistence commits first and the archive's update deactivates everything it
+  created, or the archive commits first and the persist drops its output. Whichever starts first,
+  the two never deadlock.
+- **Each transaction takes the root lock once, never as an upgrade.** The discovery cap counts
+  the root's children, so that path takes `FOR UPDATE` from the start instead of reading
+  key-share and upgrading: two persists upgrading would each wait on the other's key-share and
+  deadlock with no archive running (also found in review, #148). The root lock is therefore
+  either key-share or exclusive for the whole transaction, chosen before the first write.
+- **Nothing is left `queued` when the archive misses a scan.** `start_scan` can insert a scan
+  after the archive's cancellation ran (it read an active root, then the archive committed).
+  `dispatch_stage` therefore cancels a non-terminal scan it finds under an inactive root instead
+  of returning quietly; otherwise the kickoff job completes and the scan never leaves `queued`.
+  The stage's own job is skipped so `finalize` can still complete the scan.
 - **Timestamps never move backwards.** Cancellation writes `clock_timestamp()`, the real time of
   the update, never `now()`: `now()` is the archive transaction's start, so a worker that
   committed `started_at` after the request began would otherwise trip `finished_after_started`

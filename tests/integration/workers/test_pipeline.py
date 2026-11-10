@@ -486,3 +486,24 @@ def test_persist_writes_nothing_for_an_archived_root_even_if_the_scan_reads_runn
     assert db_session.scalars(scoped(Finding, job.org_id)).all() == []
     assert job.status == JobStatus.FAILED
     assert job.error == "AssetNotFound"  # type only: not a JobError (ADR 0010)
+
+
+def test_dispatch_of_a_scan_the_archive_missed_does_not_leave_it_queued(
+    db_session: Session,
+    pipeline_env: InProcessDispatcher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the archive committed between `start_scan`'s read and the insert, so its
+    cancellation never saw the scan. Dispatching used to return silently, leaving it `queued`.
+    """
+    scan, kickoff = _started_scan(db_session, "missed")
+    real_root_active = scans._root_active
+    monkeypatch.setattr(scans, "_root_active", lambda *args: False)  # the root was archived
+
+    pipeline.discover.apply(kwargs={"org_id": str(scan.org_id), "job_id": str(kickoff.id)})
+
+    db_session.expire_all()
+    assert real_root_active(db_session, scan.org_id, scan)  # this test archived nothing
+    assert scan.status == ScanStatus.CANCELLED
+    assert scan.finished_at is not None
+    assert kickoff.status == JobStatus.SKIPPED

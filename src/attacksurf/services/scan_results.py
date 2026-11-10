@@ -44,16 +44,21 @@ def persist_scan_output(
     exceeding the cap never fails the job.
 
     Raises `ScanCancelled` for a cancelled scan and `AssetNotFound` when the scan's root is
-    archived (ADR 0021). The archive check and the writes take locks in the same order as
-    `archive_root_domain` (scan rows, then the root): the root is only read key-share here, which
-    never conflicts with the archive's own lock, and the caller already holds the scan row lock.
+    archived (ADR 0021). Locks are taken in the order `archive_root_domain` uses (scan rows, then
+    the root): the caller already holds the scan row lock. The root is read `FOR KEY SHARE`,
+    which never conflicts with the archive, or locked `FOR UPDATE` once when the cap needs it.
     """
     asset = get_scoped(session, Asset, asset_id, scan.org_id)
     if asset is None:
         raise AssetNotFound("Asset not found.")
     if scan.status in TERMINAL:
         raise ScanCancelled("Scan was cancelled.")
-    _check_root_archived(session, scan)
+    # One root lock, taken once: key-share normally, the write lock only for the cap. Taking an
+    # exclusive lock here after a key-share one would deadlock concurrent persists (no upgrade).
+    if discovered_limit is not None:
+        _writable_root(session, scan)
+    else:
+        _check_root_archived(session, scan)
     refs = {(asset.type, asset.value): asset.id}
     # Every name the plugin reported is a valid reference, including ones the cap will drop
     # (a reference to a name it never reported is still a plugin bug and fails the job).
@@ -61,8 +66,6 @@ def persist_scan_output(
     _validate_references(output, declared, catalog)
     admitted: set[tuple[AssetType, str]] | None = None
     if discovered_limit is not None:
-        # The cap counts the root's children, so it alone takes the root's write lock.
-        _writable_root(session, scan)
         keep = _admit(
             session, scan.org_id, scan.root_asset_id, asset, output, limit=discovered_limit
         )
@@ -133,10 +136,11 @@ def _check_root_archived(session: Session, scan: Scan) -> Asset:
 
 
 def _writable_root(session: Session, scan: Scan) -> Asset:
-    """Lock the root `FOR UPDATE` for writes under it, after the caller locked its scan rows.
+    """Lock the root `FOR UPDATE`, after the caller locked its scan rows (the cap path only).
 
-    An archive that committed between the earlier key-share check and this lock is caught here;
-    one that arrives later waits for this transaction and then deactivates what it wrote.
+    One exclusive lock, never an upgrade from the key-share read: two persists upgrading it
+    would block on each other and deadlock. An archive that arrives later waits for this
+    transaction and then deactivates what it wrote.
     """
     root = session.scalars(
         scoped(Asset, scan.org_id).where(Asset.id == scan.root_asset_id).with_for_update(),

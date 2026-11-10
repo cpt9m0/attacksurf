@@ -82,7 +82,8 @@ def dispatch_stage(
 ) -> None:
     job, scan = load_job_scan(session, org_id, job_id)
     if scan.status in TERMINAL or not _root_active(session, org_id, scan):
-        session.rollback()
+        _abandon_stage(session, org_id, job)
+        session.commit()
         return
     if scan.started_at is None:
         scan.started_at = func.now()
@@ -167,6 +168,27 @@ def _root_active(session: Session, org_id: UUID, scan: Scan) -> bool:
         execution_options={"populate_existing": True},
     ).one_or_none()
     return root is not None and root.is_active
+
+
+def _abandon_stage(session: Session, org_id: UUID, job: Job) -> None:
+    """A stage that must not run. Skip its job, and cancel a scan whose cancellation was missed.
+
+    The root is archived or the scan is already terminal (ADR 0021). Cancelling here keeps a scan
+    the archive missed from staying `queued` forever; committing the skip ends the stage, so
+    `finalize` can complete. Queued work of the batch is left to `finalize`, which skips and
+    closes anything still queued when the chord delivers it.
+    """
+    scan = session.scalars(
+        scoped(Scan, org_id).where(Scan.id == job.scan_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).one()
+    if scan.status not in TERMINAL:
+        scan.status = ScanStatus.CANCELLED
+        scan.started_at = func.coalesce(scan.started_at, func.clock_timestamp())
+        scan.finished_at = func.clock_timestamp()
+    job.status = JobStatus.SKIPPED
+    job.error = "Scan is no longer running."
+    job.finished_at = func.now()
 
 
 def load_job_scan(session: Session, org_id: UUID, job_id: UUID) -> tuple[Job, Scan]:
