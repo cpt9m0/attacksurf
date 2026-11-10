@@ -25,6 +25,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   redirecting to the apex, and a deploy runbook in `docs/deployment.md` (ADR 0020, #132).
 
 ### Fixed
+- Pyright and pytest pass on Windows again: pyright checks as Linux (where the app runs), and
+  the sandbox proxy server tests, which need Unix sockets, skip on Windows (#84).
 - The archived-roots due-verification test recorded its check at the real time instead of the
   test clock, so it passed without testing the archive filter (#14).
 - The app shell fits a phone viewport: the top bar wraps and truncates the user menu (full text

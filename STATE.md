@@ -19,13 +19,11 @@ pinned the failing one itself (#133); this branch still pins the archived-roots 
 passed without testing the archive filter.
 
 ## Next step
-1. Commit the merge and push. On the merged tree, ruff and `lint-imports` pass, and pytest passes
-   (1204 passed, 16 skipped, coverage 91.5%) with `tests/unit/sandbox_proxy/test_server.py`
-   ignored. On Windows, the push hook stops at that file:
-   - It is main's sandbox proxy test (#84) and uses `socketserver.UnixStreamServer`, which
-     doesn't exist on Windows. Pyright reports the same 4 errors there.
-   - Fix it in its own commit or PR (skip that module when `sys.platform == "win32"`), or push
-     from WSL. Never `--no-verify`.
+1. Commit the Windows fix and push. Main is merged in (`b89b11e`). Uncommitted:
+   - `[tool.pyright] pythonPlatform = "Linux"`, so main's sandbox proxy Unix-socket code
+     type-checks on Windows.
+   - `tests/unit/sandbox_proxy/test_server.py` skips on Windows; CI still runs it.
+   - ruff, pyright and pytest pass (1204 passed, 17 skipped, coverage 92.9%).
 2. Open the draft PR: title `feat(ai): add anthropic provider`, footer `Refs #23` (#23 stays
    open until PR 4), every section of the PR template filled. About 420 changed lines excluding
    tests and `uv.lock` (about 210 of them code), slightly over the ~400 guideline: say so.

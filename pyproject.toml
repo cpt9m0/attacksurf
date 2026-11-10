@@ -94,6 +94,8 @@ ignore = ["PLR0913"]
 [tool.pyright]
 include = ["src", "tests"]
 pythonVersion = "3.12"
+# Production and CI are Linux; check Unix-only code (sandbox proxy sockets) the same way on any dev OS.
+pythonPlatform = "Linux"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
