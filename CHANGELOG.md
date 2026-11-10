@@ -66,7 +66,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   with usage marked unreported; failed calls log status, error type and request ID. A whole
   `complete()` call stops at `CALL_DEADLINE_SECONDS`, even against a server that trickles
   bytes, and the corrective retry gets only the time left. Passes the
-  shared provider contract against a stubbed API. An import-linter contract keeps LLM SDK
+  shared provider contract against a stubbed API, and an opt-in `llm_live` test against Meta's
+  Anthropic-format endpoint (`tests/e2e/test_anthropic_live.py`). An import-linter contract keeps LLM SDK
   imports inside `ai/providers/`.
 - LLM provider contract (#23, ADR 0019): `LLMProvider` protocol, result/usage types and
   `LLMError` subclasses in `domain/llm.py`; shared schema validation with one corrective retry

@@ -143,6 +143,14 @@ LLM_API_KEY=...                              # your own key, only in .env
 `muse-spark-1.3-contributor` is cheaper because Meta may train on everything you send and get
 back: use it only with test fixtures, never with scan results of real domains.
 
+The same key works in the Anthropic format. Environment variables override `.env`, so you can
+switch formats for one command, e.g. the Anthropic adapter's live test:
+
+```bash
+LLM_PROVIDER=anthropic LLM_BASE_URL=https://api.meta.ai RUN_LLM_TESTS=1 \
+    uv run pytest tests/e2e/test_anthropic_live.py -m llm_live --no-cov
+```
+
 ## Everyday commands
 
 | Task | Command |

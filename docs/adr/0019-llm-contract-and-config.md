@@ -81,7 +81,12 @@ a cap. Development uses Meta's Muse Spark models, which serve both API formats w
   set.
 - **Development** uses Meta (`https://api.meta.ai` for the Anthropic format,
   `https://api.meta.ai/v1` for the OpenAI format). `muse-spark-1.3-contributor` lets Meta train
-  on prompts and replies, so it is for fixtures only, never real scan data.
+  on prompts and replies, so it is for fixtures only, never real scan data. Verified live on
+  2026-11-09 (`tests/e2e/test_anthropic_live.py`, `muse-spark-1.3-contributor`): the
+  Anthropic adapter's plain `api_key=` works there (SDK 2.x sends it as `Authorization: Bearer`,
+  the header Meta's `auth_token=` sample produces), `output_config.format` is honored on the
+  first attempt, and usage is reported. A one-sentence reply cost 564 output tokens, since
+  thinking counts toward `max_tokens`.
 
 ## Consequences
 - Both adapters only translate messages, schema and errors; validation, retries and usage
