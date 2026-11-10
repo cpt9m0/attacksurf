@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Fixed
+- Two due-verification tests recorded checks at the real time instead of the test clock, so one
+  failed from about 2026-11-07 and the other passed without testing anything (#14).
 - LLM endpoint credentials are masked in settings and provider-config representations;
   base URLs remain `SecretStr` through config resolution (#23).
 - The test suite passes on Windows checkouts: `.gitattributes` keeps LF line endings whatever

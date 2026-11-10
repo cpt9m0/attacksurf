@@ -21,10 +21,12 @@ schema honored first try, usage reported); ADR 0019, `docs/development.md` and C
 it. Unit tests (720), ruff, pyright, lint-imports pass.
 
 ## Next step
-1. Commit step 5 (`test(ai): add live anthropic-format test against meta`, `Refs #23`).
-2. Start Docker Desktop and run the full suite (DB tests not yet run on this branch):
-   `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@127.0.0.1:5433/attacksurf_test uv run pytest`
-3. Push and open a draft PR: title `feat(ai): add anthropic provider`, footer `Refs #23`
+Step 5 is committed (`de523e8`). The full suite passes (1054 passed, 4 opt-in skips) after
+`test(security): pin the clock in due-verification tests`: two tests in
+`tests/integration/services/test_verifications.py` called `record_check` without `now=NOW`, so
+one failed on `main` from about 2026-11-07 (blocking every push) and the other passed vacuously.
+Tell the repo owner `main` is affected; mention the commit in the PR.
+1. Push and open a draft PR: title `feat(ai): add anthropic provider`, footer `Refs #23`
    (#23 stays open until PR 4), every section of the PR template filled. About 435 changed lines
    excluding tests and `uv.lock` (about 200 of them code, the rest docs), so slightly over the
    ~400 guideline: say so in the PR.
