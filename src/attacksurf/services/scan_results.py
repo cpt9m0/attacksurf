@@ -17,9 +17,11 @@ from attacksurf.domain.findings import finding_fingerprint
 from attacksurf.domain.ids import uuid7
 from attacksurf.domain.rules import RULES, Rule, get_rule
 from attacksurf.domain.scanners import AssetRef, RawFinding, ScanOutput
+from attacksurf.domain.scans import ScanCancelled
 from attacksurf.infra.db.models import Asset, Evidence, Finding, Scan
 from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.services.assets import record_asset, record_relation
+from attacksurf.services.scans import TERMINAL
 
 
 def persist_scan_output(
@@ -40,10 +42,23 @@ def persist_scan_output(
     what this run adds), so a huge zone can't be crawled in chunks across rescans. Relations
     and findings about dropped names are skipped: they are not attached to another asset, and
     exceeding the cap never fails the job.
+
+    Raises `ScanCancelled` for a cancelled scan and `AssetNotFound` when the scan's root is
+    archived (ADR 0021). Locks are taken in the order `archive_root_domain` uses (scan rows, then
+    the root): the caller already holds the scan row lock. The root is read `FOR KEY SHARE`,
+    which never conflicts with the archive, or locked `FOR UPDATE` once when the cap needs it.
     """
     asset = get_scoped(session, Asset, asset_id, scan.org_id)
     if asset is None:
         raise AssetNotFound("Asset not found.")
+    if scan.status in TERMINAL:
+        raise ScanCancelled("Scan was cancelled.")
+    # One root lock, taken once: key-share normally, the write lock only for the cap. Taking an
+    # exclusive lock here after a key-share one would deadlock concurrent persists (no upgrade).
+    if discovered_limit is not None:
+        _writable_root(session, scan)
+    else:
+        _check_root_archived(session, scan)
     refs = {(asset.type, asset.value): asset.id}
     # Every name the plugin reported is a valid reference, including ones the cap will drop
     # (a reference to a name it never reported is still a plugin bug and fails the job).
@@ -98,6 +113,42 @@ def persist_scan_output(
             events.append(FindingCreated(scan.org_id, scan.id, finding_id))
         _upsert_evidence(session, scan, finding_id, raw, seen)
     return events
+
+
+def _check_root_archived(session: Session, scan: Scan) -> Asset:
+    """Fresh read of the scan's root; raises `AssetNotFound` unless it is active.
+
+    `FOR KEY SHARE`, not `FOR UPDATE`: the caller already holds the scan row lock, and
+    `archive_root_domain` takes rows scan-then-root, so waiting for the root's write lock here
+    could deadlock against an archive that is waiting for this scan. Key-share still makes the
+    archive's `UPDATE` of the root wait, so the rows next to this read's writes can't vanish
+    under it.
+    """
+    root = session.scalars(
+        scoped(Asset, scan.org_id)
+        .where(Asset.id == scan.root_asset_id)
+        .with_for_update(read=True, key_share=True),
+        execution_options={"populate_existing": True},
+    ).one_or_none()
+    if root is None or not root.is_active:
+        raise AssetNotFound("Root asset is archived.")
+    return root
+
+
+def _writable_root(session: Session, scan: Scan) -> Asset:
+    """Lock the root `FOR UPDATE`, after the caller locked its scan rows (the cap path only).
+
+    One exclusive lock, never an upgrade from the key-share read: two persists upgrading it
+    would block on each other and deadlock. An archive that arrives later waits for this
+    transaction and then deactivates what it wrote.
+    """
+    root = session.scalars(
+        scoped(Asset, scan.org_id).where(Asset.id == scan.root_asset_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).one_or_none()
+    if root is None or not root.is_active:
+        raise AssetNotFound("Root asset is archived.")
+    return root
 
 
 def _validate_references(
@@ -175,14 +226,10 @@ def _admit(
     what the count must use: a check on a discovered subdomain would otherwise see zero children
     and hand out a fresh allowance for every subdomain.
 
-    The root row is locked `FOR NO KEY UPDATE` before counting, so overlapping scans of the same
-    root (each locked only on its own `Scan`) can't both read the same count and each admit the
-    full allowance. Key-share locks taken by `record_asset` for the child inserts don't conflict,
-    so this serializes admissions without blocking them.
+    `persist_scan_output` already holds the root's `FOR UPDATE` lock for the whole write, so
+    overlapping scans of the same root (each locked only on its own `Scan`) can't both read the
+    same count and each admit the full allowance.
     """
-    session.scalars(
-        scoped(Asset, org_id).where(Asset.id == root_id).with_for_update(key_share=False)
-    ).one()
     candidates = tuple(
         ref
         for ref in output.assets

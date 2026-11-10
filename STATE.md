@@ -6,8 +6,9 @@
 
 ## Status
 PR 1 (shared LLM contract) is merged: [#131](https://github.com/cpt9m0/attacksurf/pull/131).
-PR 2 (Anthropic provider, Angela) is code-complete and pushed (`45faf84`); `origin/main`
-(`811c8c2`) is being merged in (conflicts in `CHANGELOG.md` and `STATE.md` resolved). Plan:
+PR 2 (Anthropic provider, Angela) is code-complete and in review. `origin/main` (`da70e1e`,
+archiving cancels scans, ADR 0021) is being merged in, with the `CHANGELOG.md` and `STATE.md`
+conflicts resolved. Plan:
 https://claude.ai/artifact/PnixRruj7R2cb7B6gLmvLi (outdated on ADR number, retry count and
 `temperature`: ADR 0019 is the source of truth).
 
@@ -16,24 +17,24 @@ adapter + `temperature` removed from the contract + import-linter SDK contract �
 replies a retry can't fix · `48fa361` call deadline · `de523e8` live test (passed against
 `https://api.meta.ai` on 2026-11-09) · `45faf84` clock pin in due-verification tests. `main`
 pinned the failing one itself (#133); this branch still pins the archived-roots test, which
-passed without testing the archive filter.
+passed without testing the archive filter. `84c58b3`: pyright checks as Linux and the
+sandbox proxy server tests skip on Windows, so pushes from Windows pass the hooks.
 
 ## Next step
-1. Commit the Windows fix and push. Main is merged in (`b89b11e`). Uncommitted:
-   - `[tool.pyright] pythonPlatform = "Linux"`, so main's sandbox proxy Unix-socket code
-     type-checks on Windows.
-   - `tests/unit/sandbox_proxy/test_server.py` skips on Windows; CI still runs it.
-   - ruff, pyright and pytest pass (1204 passed, 17 skipped, coverage 92.9%).
-2. Open the draft PR: title `feat(ai): add anthropic provider`, footer `Refs #23` (#23 stays
-   open until PR 4), every section of the PR template filled. About 420 changed lines excluding
-   tests and `uv.lock` (about 210 of them code), slightly over the ~400 guideline: say so.
+1. Commit the merge of `da70e1e` and push.
+2. Review feedback: the reviewer asked for a superseding ADR instead of editing ADR 0019 in
+   place. Write `docs/adr/0022-...` with "no sampling settings" and "no SDK retries" (reasons
+   and trade-offs moved from 0019). Restore those two 0019 paragraphs to their merged wording
+   plus a "Superseded in part by ADR 0022" note. Keep 0019's error-handling and deadline
+   additions, which fill in what 0019 already required. Update the links in
+   `docs/architecture.md`, the `llm-prompt` skill and CHANGELOG.
+3. PR size: about 420 changed lines excluding tests and `uv.lock` (about 210 of them code),
+   slightly over the ~400 guideline; the PR description says so.
 
 ## Open threads
 - #23:
   - Both implementers agreed (2026-11-09) to `MAX_RETRIES = 0` and no `temperature` in
-    `complete()`. ADR 0019 records both in place (dated). AGENTS.md says a changed decision
-    gets a new ADR, so write ADR 0021 instead if the repo owner prefers (0020 is the Cloudflare
-    Tunnel).
+    `complete()`; moving into ADR 0022 (next step 2).
   - PR 3 (OpenAI-compatible, partner): mirror ADR 0019's rules (no SDK retries, no sampling
     params, `finish_reason` `length`/`content_filter` fail at once, deadline per call) and add
     `openai` to the import-linter SDK contract in `pyproject.toml`.
@@ -61,7 +62,10 @@ passed without testing the archive filter.
   - The exposed tunnel/API credentials recorded in #133 still need rotation.
 - `.env.example` lacks `ALLOW_SIGNUP`, `SESSION_LIFETIME_HOURS` and `PROXY_COUNT` (the settings
   exist in `config.py`).
-- Follow-ups: #115–#117.
+- Scans (ADR 0021): a user-facing "cancel scan" would reuse `services.assets._cancel_scans` and
+  the persistence guards; not built. Lock rule to keep: scan rows before the root, and no
+  transaction reads the root locked and later upgrades that lock.
+- Follow-ups: #115, #117.
 
 ## Notes for the next agent
 - SDK 2.3.0:

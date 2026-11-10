@@ -27,7 +27,7 @@
       {%- set effect = "It becomes inactive and is no longer scanned." %}
     {%- endif %}
     {{ confirm_dialog("archive", "Archive", "Archive " ~ asset.value ~ "?",
-        effect ~ " Findings and scan history are kept; adding the domain again restores it.",
+        effect ~ " Scans in progress are cancelled. Findings and scan history are kept; adding the domain again restores it.",
         url_for("ui.archive_asset", asset_id=asset.id), "Archive domain") }}
   </div>
   {%- endif %}

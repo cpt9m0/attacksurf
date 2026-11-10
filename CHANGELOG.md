@@ -29,6 +29,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   the sandbox proxy server tests, which need Unix sockets, skip on Windows (#84).
 - The archived-roots due-verification test recorded its check at the real time instead of the
   test clock, so it passed without testing the archive filter (#14).
+- Archiving a root domain now cancels its queued and running scans in the same transaction, and
+  they show as `cancelled` in the scan history. Nothing under an archived root becomes active or
+  produces a new finding afterwards, whatever stage the scan was in: persistence drops output for
+  a cancelled scan or an archived root (ADR 0021, #116).
 - The app shell fits a phone viewport: the top bar wraps and truncates the user menu (full text
   in `title`) and the mobile nav row scrolls inside itself instead of widening the page (#114).
 - The `playwright` dev dependency is pinned to 1.64.1 (`>=1.64.1,<1.65`), the newest release

@@ -1,7 +1,9 @@
 """Use cases: adding and archiving root domains."""
 
+import threading
+
 import pytest
-from sqlalchemy import select
+from sqlalchemy import Engine, delete, select, text
 from sqlalchemy.orm import Session
 
 from attacksurf.domain.assets import (
@@ -12,7 +14,8 @@ from attacksurf.domain.assets import (
     InvalidAssetValue,
 )
 from attacksurf.domain.ids import uuid7
-from attacksurf.infra.db.models import Asset, AuditLog, Org, User
+from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger
+from attacksurf.infra.db.models import Asset, AuditLog, Job, Org, Scan, User
 from attacksurf.services.assets import add_root_domain, archive_root_domain, record_asset
 
 
@@ -48,6 +51,26 @@ def _child(session: Session, org: Org, root: Asset, value: str) -> Asset:
         source=AssetSource.DISCOVERED,
         parent_id=root.id,
     )
+
+
+def _scan(session: Session, root: Asset, status: ScanStatus) -> Scan:
+    scan = Scan(
+        org_id=root.org_id,
+        root_asset_id=root.id,
+        profile="dns_passive",
+        status=status,
+        triggered_by=ScanTrigger.USER,
+    )
+    session.add(scan)
+    session.flush()
+    return scan
+
+
+def _job(session: Session, scan: Scan, status: JobStatus) -> Job:
+    job = Job(org_id=scan.org_id, scan_id=scan.id, stage="check", status=status, scanner="fixture")
+    session.add(job)
+    session.flush()
+    return job
 
 
 def test_add_root_domain_stores_normalized_user_root(db_session: Session, org: Org) -> None:
@@ -137,7 +160,7 @@ def test_archive_deactivates_root_and_its_discovered_assets_only(
     assert _audit(db_session, org)[-1] == (
         "asset.root_archived",
         str(root.id),
-        {"value": "example.com", "children": 1},
+        {"value": "example.com", "children": 1, "scans_cancelled": 0},
     )
 
 
@@ -153,7 +176,11 @@ def test_archive_keeps_already_inactive_children_deactivation_time(
 
     db_session.refresh(gone)
     assert gone.deactivated_at == gone.last_seen
-    assert _audit(db_session, org)[-1][2] == {"value": "example.com", "children": 0}
+    assert _audit(db_session, org)[-1][2] == {
+        "value": "example.com",
+        "children": 0,
+        "scans_cancelled": 0,
+    }
 
 
 def test_archiving_an_archived_root_changes_nothing(db_session: Session, org: Org) -> None:
@@ -209,3 +236,197 @@ def test_archive_rejects_another_orgs_root(db_session: Session, org: Org) -> Non
 def test_archive_rejects_unknown_ids(db_session: Session, org: Org) -> None:
     with pytest.raises(AssetNotFound):
         archive_root_domain(db_session, org.id, uuid7(), actor_id=None)
+
+
+@pytest.mark.parametrize("status", [ScanStatus.QUEUED, ScanStatus.RUNNING])
+def test_archive_cancels_the_roots_queued_and_running_scans(
+    db_session: Session, org: Org, status: ScanStatus
+) -> None:
+    root = add_root_domain(db_session, org.id, "example.com", actor_id=None)
+    scan = _scan(db_session, root, status)
+    other_root = add_root_domain(db_session, org.id, "example.org", actor_id=None)
+    other = _scan(db_session, other_root, ScanStatus.RUNNING)
+
+    archive_root_domain(db_session, org.id, root.id, actor_id=None)
+
+    db_session.expire_all()
+    assert scan.status is ScanStatus.CANCELLED
+    assert scan.finished_at is not None
+    assert scan.finished_at >= (scan.started_at or scan.created_at)
+    assert other.status is ScanStatus.RUNNING
+
+
+def test_archive_leaves_completed_scans_untouched(db_session: Session, org: Org) -> None:
+    root = add_root_domain(db_session, org.id, "example.com", actor_id=None)
+    done = _scan(db_session, root, ScanStatus.COMPLETED)
+
+    archive_root_domain(db_session, org.id, root.id, actor_id=None)
+
+    db_session.refresh(done)
+    assert done.status is ScanStatus.COMPLETED
+
+
+def test_archive_cancels_the_unfinished_jobs_of_cancelled_scans(
+    db_session: Session, org: Org
+) -> None:
+    root = add_root_domain(db_session, org.id, "example.com", actor_id=None)
+    scan = _scan(db_session, root, ScanStatus.RUNNING)
+    queued = _job(db_session, scan, JobStatus.QUEUED)
+    running = _job(db_session, scan, JobStatus.RUNNING)
+    finished = _job(db_session, scan, JobStatus.COMPLETED)
+
+    archive_root_domain(db_session, org.id, root.id, actor_id=None)
+
+    for job in (queued, running):
+        db_session.refresh(job)
+        assert job.status is JobStatus.CANCELLED
+        assert job.error == "Root domain was archived."
+        assert job.finished_at is not None
+    db_session.refresh(finished)
+    assert finished.status is JobStatus.COMPLETED
+
+
+def test_archive_audits_each_cancelled_scan(db_session: Session, org: Org) -> None:
+    root = add_root_domain(db_session, org.id, "example.com", actor_id=None)
+    scan = _scan(db_session, root, ScanStatus.RUNNING)
+
+    archive_root_domain(db_session, org.id, root.id, actor_id=None)
+
+    # Both entries land in one transaction; FKs order them arbitrarily, so compare unordered.
+    assert sorted(map(repr, _audit(db_session, org)[-2:])) == sorted(
+        map(
+            repr,
+            [
+                (
+                    "asset.root_archived",
+                    str(root.id),
+                    {"value": "example.com", "children": 0, "scans_cancelled": 1},
+                ),
+                ("scan.cancelled", str(scan.id), {"reason": "root_archived"}),
+            ],
+        )
+    )
+
+
+def test_archive_without_scans_writes_no_cancellation(db_session: Session, org: Org) -> None:
+    root = add_root_domain(db_session, org.id, "example.com", actor_id=None)
+
+    archive_root_domain(db_session, org.id, root.id, actor_id=None)
+
+    assert [action for action, *_ in _audit(db_session, org)] == [
+        "asset.root_added",
+        "asset.root_archived",
+    ]
+
+
+def test_cancelling_never_sets_finished_before_a_worker_start_time(
+    db_engine: Engine,
+) -> None:
+    """Regression: `now()` is the transaction's start, so a worker that committed `started_at`
+    after the archive request began could push `finished_at` before it and roll back the archive.
+    """
+    with Session(db_engine) as setup:
+        org = Org(name="clock", slug="clock")
+        setup.add(org)
+        setup.flush()
+        root = add_root_domain(setup, org.id, "clock.example.com", actor_id=None)
+        scan = _scan(setup, root, ScanStatus.QUEUED)
+        job = _job(setup, scan, JobStatus.QUEUED)
+        setup.commit()
+        org_id, root_id, scan_id, job_id = org.id, root.id, scan.id, job.id
+
+    archive = Session(db_engine)
+    worker = Session(db_engine)
+    try:
+        archive.get(Asset, root_id)  # the request's transaction begins now, before the worker
+        worker_scan = worker.get(Scan, scan_id)
+        worker_job = worker.get(Job, job_id)
+        assert worker_scan is not None
+        assert worker_job is not None
+        # The worker starts the scan and its job later than the archive request began.
+        started = worker.execute(text("SELECT clock_timestamp()")).scalar_one()
+        worker_scan.status = ScanStatus.RUNNING
+        worker_scan.started_at = started
+        worker_job.status = JobStatus.RUNNING
+        worker_job.started_at = started
+        worker.commit()
+
+        archive_root_domain(archive, org_id, root_id, actor_id=None)  # must not violate the check
+
+        archive.expire_all()
+        assert archive.get(Scan, scan_id).status == ScanStatus.CANCELLED  # type: ignore[union-attr]
+        assert archive.get(Job, job_id).status == JobStatus.CANCELLED  # type: ignore[union-attr]
+        rows = archive.execute(
+            text(
+                "SELECT finished_at >= started_at FROM scans WHERE id = :s"
+                " UNION ALL SELECT finished_at >= started_at FROM jobs WHERE id = :j"
+            ),
+            {"s": scan_id, "j": job_id},
+        ).scalars()
+        assert all(rows)
+    finally:
+        archive.rollback()
+        worker.rollback()
+        archive.close()
+        worker.close()
+        with Session(db_engine) as cleanup:
+            cleanup.execute(delete(AuditLog).where(AuditLog.org_id == org_id))
+            cleanup.execute(delete(Job).where(Job.org_id == org_id))
+            cleanup.execute(delete(Scan).where(Scan.org_id == org_id))
+            cleanup.execute(delete(Asset).where(Asset.org_id == org_id))
+            cleanup.execute(delete(Org).where(Org.id == org_id))
+            cleanup.commit()
+
+
+def test_concurrent_archives_of_one_root_do_not_deadlock(db_engine: Engine) -> None:
+    """Regression: both archives held the root key-share, then deadlocked upgrading to write.
+
+    Two admins archiving the same root at once must see one archive run and the other find it
+    already archived, never a deadlock (the root has no scans here, so nothing else is involved).
+    """
+    with Session(db_engine) as setup:
+        org = Org(name="twice", slug="twice")
+        setup.add(org)
+        setup.flush()
+        root = add_root_domain(setup, org.id, "twice.example.com", actor_id=None)
+        setup.commit()
+        org_id, root_id = org.id, root.id
+
+    ready = threading.Barrier(2)  # both archive requests are in flight together
+    errors: list[BaseException] = []
+
+    def archive() -> None:
+        session = Session(db_engine)
+        try:
+            session.get(Org, org_id)  # the request transaction opens before the archive
+            ready.wait(timeout=10)
+            archive_root_domain(session, org_id, root_id, actor_id=None)
+        except BaseException as exc:
+            errors.append(exc)
+            session.rollback()
+        finally:
+            session.close()
+
+    try:
+        threads = [threading.Thread(target=archive, daemon=True) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+            assert not thread.is_alive()
+        assert errors == [], f"deadlock or failure: {errors}"
+
+        with Session(db_engine) as check:
+            archived = check.scalars(
+                select(AuditLog).where(AuditLog.action == "asset.root_archived")
+            ).all()
+            assert len(archived) == 1  # the second archive changed nothing
+            assert check.get(Asset, root_id).is_active is False  # type: ignore[union-attr]
+    finally:
+        with Session(db_engine) as cleanup:
+            cleanup.execute(delete(AuditLog).where(AuditLog.org_id == org_id))
+            cleanup.execute(delete(Job).where(Job.org_id == org_id))
+            cleanup.execute(delete(Scan).where(Scan.org_id == org_id))
+            cleanup.execute(delete(Asset).where(Asset.org_id == org_id))
+            cleanup.execute(delete(Org).where(Org.id == org_id))
+            cleanup.commit()

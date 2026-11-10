@@ -332,6 +332,30 @@ def test_owner_archives_a_root_through_the_confirm_dialog(
     assert "<dialog" not in after  # already archived: nothing to confirm
 
 
+def test_archiving_a_root_shows_its_running_scan_as_cancelled(
+    alice: FlaskClient, db_session: Session
+) -> None:
+    _add(alice, "example.com")
+    root_id = _root_id(db_session)
+    db_session.add(
+        Scan(
+            org_id=_org_id(db_session, root_id),
+            root_asset_id=root_id,
+            profile="dns_passive",
+            status=ScanStatus.RUNNING,
+            triggered_by=ScanTrigger.USER,
+        )
+    )
+    db_session.commit()
+
+    alice.post(
+        f"/assets/{root_id}/archive", data={"csrf_token": _csrf(alice, f"/assets/{root_id}")}
+    )
+
+    history = _html(alice, f"/assets/{root_id}?tab=scans", HTMX)
+    assert 'class="pill pill-neutral">cancelled' in history
+
+
 def test_discovered_assets_have_no_archive_action(alice: FlaskClient, db_session: Session) -> None:
     _add(alice, "example.com")
     www_id = _discover(db_session, _root_id(db_session), AssetType.SUBDOMAIN, "www.example.com")
