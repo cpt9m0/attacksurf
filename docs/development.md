@@ -208,7 +208,12 @@ pyright and pytest versions come from `uv.lock`.
   still has CRLF files: with no uncommitted work, rewrite them once from Git Bash with
   `git ls-files -z | xargs -0 rm -f && git checkout -- .` (untracked files such as `.env` stay).
 - Layout: `tests/unit/`, `tests/integration/` (DB, Celery; fixtures `db_engine`, `db_session`),
-  `tests/e2e/` (against the running stack, e.g. `make test-worker`; Playwright later).
+  `tests/e2e/` (against the running stack, e.g. `make test-worker`). Browser layout tests live in
+  `tests/e2e/web/` (marker `web_e2e`): they render the real pages to disk and measure them in
+  Chromium with no server and no database, so they run after
+  `uv run playwright install chromium` with
+  `RUN_WEB_E2E=1 uv run pytest tests/e2e/web -m web_e2e --no-cov` (CI runs the same command in
+  the `web-e2e` job).
 - Celery tasks in tests: `task.apply(kwargs=...)` runs them in-process; patch
   `workers.runtime.session_factory` to share the test's connection
   (`tests/integration/workers/test_tracked_task.py`).
@@ -243,7 +248,7 @@ This project is built mostly by AI coding agents. The setup:
 |---|---|---|
 | context7 | current library docs | optional `CONTEXT7_API_KEY` (higher rate limits) |
 | brave-search | web search | requires `BRAVE_API_KEY` ([get one](https://brave.com/search/api/)) |
-| playwright | browser testing of the UI | none (`npx`) |
+| playwright | browser testing of the UI | dev dependency (`uv add --dev playwright`) |
 
 Export the keys in your shell (or in your cloud environment's secrets); never commit them.
 Other agents (Codex, Cursor, ...) read `AGENTS.md` directly; configure the same MCP servers in

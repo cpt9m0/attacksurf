@@ -136,8 +136,11 @@ sync" rule below is satisfied**. Do not claim done without running them.
 
 - pytest, Arrange/Act/Assert, one behavior per test, descriptive names (`test_<unit>_<behavior>`).
 - Web unit tests: `auth_client` / `login_as(client, make_session_user(role=...))` fake the
-  logged-in user (`tests/unit/web/conftest.py`); DB-backed flows use `db_app`
+  logged-in user (`tests/conftest.py`); DB-backed flows use `db_app`
   (`tests/integration/conftest.py`). POSTs need a CSRF token from a rendered form.
+- Browser layout tests live in `tests/e2e/web/` (marker `web_e2e`): opt-in with `RUN_WEB_E2E=1`
+  after `uv run playwright install chromium`; they render the real pages to disk and measure them
+  in Chromium, with no server and no database.
 - Build settings with `tests.helpers.make_settings(...)`: it ignores `.env` **and** OS env, so
   tests are hermetic. Tests of env loading use `settings_from_env()` with the `clean_env`
   fixture. Use the `app` / `client` fixtures from `tests/conftest.py`.
