@@ -1,7 +1,7 @@
 """Use cases: adding and archiving root domains."""
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import Engine, delete, select, text
 from sqlalchemy.orm import Session
 
 from attacksurf.domain.assets import (
@@ -315,3 +315,62 @@ def test_archive_without_scans_writes_no_cancellation(db_session: Session, org: 
         "asset.root_added",
         "asset.root_archived",
     ]
+
+
+def test_cancelling_never_sets_finished_before_a_worker_start_time(
+    db_engine: Engine,
+) -> None:
+    """Regression: `now()` is the transaction's start, so a worker that committed `started_at`
+    after the archive request began could push `finished_at` before it and roll back the archive.
+    """
+    with Session(db_engine) as setup:
+        org = Org(name="clock", slug="clock")
+        setup.add(org)
+        setup.flush()
+        root = add_root_domain(setup, org.id, "clock.example.com", actor_id=None)
+        scan = _scan(setup, root, ScanStatus.QUEUED)
+        job = _job(setup, scan, JobStatus.QUEUED)
+        setup.commit()
+        org_id, root_id, scan_id, job_id = org.id, root.id, scan.id, job.id
+
+    archive = Session(db_engine)
+    worker = Session(db_engine)
+    try:
+        archive.get(Asset, root_id)  # the request's transaction begins now, before the worker
+        worker_scan = worker.get(Scan, scan_id)
+        worker_job = worker.get(Job, job_id)
+        assert worker_scan is not None
+        assert worker_job is not None
+        # The worker starts the scan and its job later than the archive request began.
+        started = worker.execute(text("SELECT clock_timestamp()")).scalar_one()
+        worker_scan.status = ScanStatus.RUNNING
+        worker_scan.started_at = started
+        worker_job.status = JobStatus.RUNNING
+        worker_job.started_at = started
+        worker.commit()
+
+        archive_root_domain(archive, org_id, root_id, actor_id=None)  # must not violate the check
+
+        archive.expire_all()
+        assert archive.get(Scan, scan_id).status == ScanStatus.CANCELLED  # type: ignore[union-attr]
+        assert archive.get(Job, job_id).status == JobStatus.CANCELLED  # type: ignore[union-attr]
+        rows = archive.execute(
+            text(
+                "SELECT finished_at >= started_at FROM scans WHERE id = :s"
+                " UNION ALL SELECT finished_at >= started_at FROM jobs WHERE id = :j"
+            ),
+            {"s": scan_id, "j": job_id},
+        ).scalars()
+        assert all(rows)
+    finally:
+        archive.rollback()
+        worker.rollback()
+        archive.close()
+        worker.close()
+        with Session(db_engine) as cleanup:
+            cleanup.execute(delete(AuditLog).where(AuditLog.org_id == org_id))
+            cleanup.execute(delete(Job).where(Job.org_id == org_id))
+            cleanup.execute(delete(Scan).where(Scan.org_id == org_id))
+            cleanup.execute(delete(Asset).where(Asset.org_id == org_id))
+            cleanup.execute(delete(Org).where(Org.id == org_id))
+            cleanup.commit()

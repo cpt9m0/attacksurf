@@ -22,9 +22,19 @@ Archiving a root domain now cancels its queued/running scans in the archive's ow
 - UI: the archive dialog says scans in progress are cancelled; the existing `cancelled` pill
   (neutral) shows in the scan history.
 
-Verified: `pytest` 1207 passed, 19 skipped (all opt-in suites); ruff check/format, pyright
-(`src` + `tests`), lint-imports clean. Docs synced: ADR 0021, ADR 0010, `architecture.md`,
-`security.md`, `CHANGELOG.md`.
+Codex review on PR #148 (round 1) found two real races in the first version; both fixed:
+- **Deadlock:** the archive locked the root *before* the scan rows, while persistence locked the
+  scan row (`load_job_scan`) and then the root. Archive now cancels (locking scan rows) *before*
+  `_lock_root`, and persistence only reads the root `FOR KEY SHARE` (upgrading to `FOR UPDATE`
+  solely in `_admit`, for the cap). Rule: always scan rows → root. A deterministic regression
+  test reproduces `DeadlockDetected` on the old order.
+- **Timestamps:** `now()` is the transaction start, so a worker's `started_at` committed after
+  the request began could exceed `finished_at` and roll back the archive. Cancellation now uses
+  `clock_timestamp()`, jobs `greatest(started_at, clock_timestamp())`.
+
+Verified: `pytest` 1210 passed, 19 skipped (all opt-in suites); ruff check/format, pyright
+(`src` + `tests`), lint-imports clean. Docs synced: ADR 0021 (lock order + timestamps), ADR 0010,
+`architecture.md`, `security.md`, `CHANGELOG.md`, `STATE.md`.
 
 ## Next step
 Open the PR for this branch (`Closes #116`) and drive it through review.

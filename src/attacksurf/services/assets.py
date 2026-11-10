@@ -72,12 +72,19 @@ def archive_root_domain(
     and drop their output instead of writing it (ADR 0021). Archiving an archived root changes
     nothing. Raises `AssetNotFound` unless `asset_id` is one of the org's root domains.
     """
-    root = session.scalars(
-        scoped(Asset, org_id).where(Asset.id == asset_id).with_for_update()
+    current = session.scalars(
+        scoped(Asset, org_id).where(Asset.id == asset_id).with_for_update(read=True, key_share=True)
     ).one_or_none()
-    if root is None or root.type != AssetType.DOMAIN or root.parent_id is not None:
+    if current is None or current.type != AssetType.DOMAIN or current.parent_id is not None:
         raise AssetNotFound("Asset not found.")
-    if not root.is_active:
+    if not current.is_active:
+        return current
+    # Scan rows before the root, the order `run_check` uses (`load_job_scan`, then persistence):
+    # the other order deadlocks against a worker persisting at the same moment (ADR 0021).
+    cancelled = _cancel_scans(session, org_id, current.id)
+    root = _lock_root(session, org_id, current.id)
+    if not root.is_active:  # archived while we waited: that archive did all of this
+        session.rollback()
         return root
     # Discovered assets are always direct children: the pipeline parents them to the scan root.
     archived = session.scalars(
@@ -91,7 +98,6 @@ def archive_root_domain(
         .returning(Asset.id),
         execution_options={"synchronize_session": "fetch"},
     ).all()
-    cancelled = _cancel_scans(session, org_id, root.id)
     audit(
         session,
         org_id,
@@ -119,11 +125,26 @@ def archive_root_domain(
     return root
 
 
+def _lock_root(session: Session, org_id: UUID, root_id: UUID) -> Asset:
+    """Lock the root for `archive_root_domain`, after it has locked the root's scan rows.
+
+    Re-reads the row: another archive may have committed while we waited for a scan row.
+    Archiving an archived root changes nothing, so the caller must stop when it is inactive.
+    """
+    return session.scalars(
+        scoped(Asset, org_id).where(Asset.id == root_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).one()
+
+
 def _cancel_scans(session: Session, org_id: UUID, root_id: UUID) -> Sequence[UUID]:
     """Cancel the root's queued/running scans and their unfinished jobs, without committing.
 
-    Returned IDs are the scans cancelled by this call. A scan cancelled while still queued gets
-    `started_at` from the database clock too: the schema keeps `finished_at >= started_at`.
+    Returned IDs are the scans cancelled by this call. Rows are locked scan-then-job, the order
+    `run_check` and `TrackedTask` use, so an archive and a worker finishing a job can't deadlock.
+    `clock_timestamp()` is the real time of each update: `now()` is when this transaction began,
+    which can precede a worker's `started_at` committed in between, and the schema requires
+    `finished_at >= started_at`.
     """
     cancelled = session.scalars(
         update(Scan)
@@ -134,8 +155,8 @@ def _cancel_scans(session: Session, org_id: UUID, root_id: UUID) -> Sequence[UUI
         )
         .values(
             status=ScanStatus.CANCELLED,
-            started_at=func.coalesce(Scan.started_at, func.now()),
-            finished_at=func.now(),
+            started_at=func.coalesce(Scan.started_at, func.clock_timestamp()),
+            finished_at=func.clock_timestamp(),
         )
         .returning(Scan.id),
         execution_options={"synchronize_session": "fetch"},
@@ -152,7 +173,7 @@ def _cancel_scans(session: Session, org_id: UUID, root_id: UUID) -> Sequence[UUI
         .values(
             status=JobStatus.CANCELLED,
             error="Root domain was archived.",
-            finished_at=func.now(),
+            finished_at=func.greatest(Job.started_at, func.clock_timestamp()),
         ),
         execution_options={"synchronize_session": "fetch"},
     )

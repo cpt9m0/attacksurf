@@ -140,10 +140,11 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   Budget exhaustion discards the result; ordinary errors and exhausted retries fail the job
   but release the chord. Guard denial skips it. Unexpected pipeline errors fail the scan and
   cancel queued work. Terminal scan status and an inactive root are checked again before
-  persistence, which also holds the root's `FOR UPDATE` lock: a cancelled scan or an archived
-  root writes nothing (ADR 0021).
+  persistence: a cancelled scan or an archived root writes nothing (ADR 0021).
 - Archiving a root domain cancels its queued/running scans and their unfinished jobs in the same
-  transaction (audited `scan.cancelled`), and is the only cancellation path for now. No Celery
+  transaction (audited `scan.cancelled`), and is the only cancellation path for now. Archive and
+  persistence lock the scan rows and then the root, the same order, so overlapping runs never
+  deadlock; cancellation timestamps come from `clock_timestamp()` (ADR 0021). No Celery
   revoke is sent: tasks that are already queued or running see the cancelled scan or the inactive
   root and drop their output, and `start_scan`/`dispatch_stage`/`finalize_scan` refuse an
   archived root even when a stale session copy still says active (ADR 0021).

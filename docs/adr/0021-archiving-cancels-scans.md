@@ -30,11 +30,21 @@ Celery tasks (ADR 0010/0011).
   a cancelled scan never writes assets, relations, findings or evidence. Orchestration checks the
   root too: `dispatch_stage` and `finalize_scan` do nothing for an inactive root, so an archived
   scan neither fans out checks nor completes.
-- **One lock orders archive and persistence.** `persist_scan_output` locks the scan's root row
-  `FOR UPDATE` before writing anything, and `archive_root_domain` takes the same lock first.
-  Either the archive commits first and the persist drops its output, or persistence commits first
-  and the archive's update deactivates everything it created. `_admit`'s cap counting relies on
-  that same lock instead of taking its own.
+- **One lock order, taken the same way on both sides.** Both paths lock the scan rows first and
+  the root second: persistence already holds its scan row (`load_job_scan`) before it reads the
+  root, and `archive_root_domain` cancels the root's scans before taking the root's lock. Taking
+  the root first in the archive instead deadlocks against a worker persisting at that moment, and
+  Postgres aborts one of them (found in review, #148). So `persist_scan_output` reads the root
+  `FOR KEY SHARE`, which never conflicts with the archive's key-share pre-read and cannot form a
+  cycle; it upgrades to `FOR UPDATE` only for the cap counting (`_admit`), which is the sole place
+  that needs the root's write lock. Either persistence commits first and the archive's update
+  deactivates everything it created, or the archive commits first and the persist drops its
+  output. Whichever starts first, the two never deadlock.
+- **Timestamps never move backwards.** Cancellation writes `clock_timestamp()`, the real time of
+  the update, never `now()`: `now()` is the archive transaction's start, so a worker that
+  committed `started_at` after the request began would otherwise trip `finished_after_started`
+  and roll back the whole archive (also found in review, #148). Jobs use
+  `greatest(started_at, clock_timestamp())` for the same reason.
 - **New scans never race the archive.** `start_scan` reads the root with `populate_existing`, so a
   committed archive is never hidden by a stale copy in the session.
 

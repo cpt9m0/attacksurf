@@ -44,21 +44,16 @@ def persist_scan_output(
     exceeding the cap never fails the job.
 
     Raises `ScanCancelled` for a cancelled scan and `AssetNotFound` when the scan's root is
-    archived (ADR 0021). An archived root is checked under the root row's `FOR UPDATE` lock, the
-    one `archive_root_domain` takes, so an archive either commits before this call starts
-    writing or waits out these writes and deactivates whatever they created.
+    archived (ADR 0021). The archive check and the writes take locks in the same order as
+    `archive_root_domain` (scan rows, then the root): the root is only read key-share here, which
+    never conflicts with the archive's own lock, and the caller already holds the scan row lock.
     """
     asset = get_scoped(session, Asset, asset_id, scan.org_id)
     if asset is None:
         raise AssetNotFound("Asset not found.")
     if scan.status in TERMINAL:
         raise ScanCancelled("Scan was cancelled.")
-    root = session.scalars(
-        scoped(Asset, scan.org_id).where(Asset.id == scan.root_asset_id).with_for_update(),
-        execution_options={"populate_existing": True},
-    ).one_or_none()
-    if root is None or not root.is_active:
-        raise AssetNotFound("Root asset is archived.")
+    _check_root_archived(session, scan)
     refs = {(asset.type, asset.value): asset.id}
     # Every name the plugin reported is a valid reference, including ones the cap will drop
     # (a reference to a name it never reported is still a plugin bug and fails the job).
@@ -66,6 +61,8 @@ def persist_scan_output(
     _validate_references(output, declared, catalog)
     admitted: set[tuple[AssetType, str]] | None = None
     if discovered_limit is not None:
+        # The cap counts the root's children, so it alone takes the root's write lock.
+        _writable_root(session, scan)
         keep = _admit(
             session, scan.org_id, scan.root_asset_id, asset, output, limit=discovered_limit
         )
@@ -113,6 +110,41 @@ def persist_scan_output(
             events.append(FindingCreated(scan.org_id, scan.id, finding_id))
         _upsert_evidence(session, scan, finding_id, raw, seen)
     return events
+
+
+def _check_root_archived(session: Session, scan: Scan) -> Asset:
+    """Fresh read of the scan's root; raises `AssetNotFound` unless it is active.
+
+    `FOR KEY SHARE`, not `FOR UPDATE`: the caller already holds the scan row lock, and
+    `archive_root_domain` takes rows scan-then-root, so waiting for the root's write lock here
+    could deadlock against an archive that is waiting for this scan. Key-share still makes the
+    archive's `UPDATE` of the root wait, so the rows next to this read's writes can't vanish
+    under it.
+    """
+    root = session.scalars(
+        scoped(Asset, scan.org_id)
+        .where(Asset.id == scan.root_asset_id)
+        .with_for_update(read=True, key_share=True),
+        execution_options={"populate_existing": True},
+    ).one_or_none()
+    if root is None or not root.is_active:
+        raise AssetNotFound("Root asset is archived.")
+    return root
+
+
+def _writable_root(session: Session, scan: Scan) -> Asset:
+    """Lock the root `FOR UPDATE` for writes under it, after the caller locked its scan rows.
+
+    An archive that committed between the earlier key-share check and this lock is caught here;
+    one that arrives later waits for this transaction and then deactivates what it wrote.
+    """
+    root = session.scalars(
+        scoped(Asset, scan.org_id).where(Asset.id == scan.root_asset_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).one_or_none()
+    if root is None or not root.is_active:
+        raise AssetNotFound("Root asset is archived.")
+    return root
 
 
 def _validate_references(
