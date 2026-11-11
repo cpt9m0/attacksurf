@@ -175,6 +175,27 @@ forbidden_modules = [
     "attacksurf.infra",
     "attacksurf.scanners",
     "attacksurf.ai",
+    "attacksurf.sandbox_launcher",
+    "celery",
+    "flask",
+    "httpx",
+    "psycopg",
+    "redis",
+    "sqlalchemy",
+]
+
+[[tool.importlinter.contracts]]
+name = "sandbox launcher stays isolated from the app, the proxy and Docker"
+type = "forbidden"
+source_modules = ["attacksurf.sandbox_launcher"]
+forbidden_modules = [
+    "attacksurf.web",
+    "attacksurf.workers",
+    "attacksurf.services",
+    "attacksurf.infra",
+    "attacksurf.scanners",
+    "attacksurf.ai",
+    "attacksurf.sandbox_proxy",
     "celery",
     "flask",
     "httpx",
