@@ -2,47 +2,41 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-11 · **Branch:** `149-content-width` · **Issue:** #149 (PR #150, draft)
+**Updated:** 2026-11-11 · **Branch:** `15-ct-discovery` · **Issue:** #15 · **PR:** #155
 
 ## Status
-#149 is implemented and in review: `.content` fills the main column at every width (the 72rem cap
-and `--content-max-width` are gone). At 1440px the content right edge is 1440px (was 1360px); the
-390px phone layout is unchanged. E2E 14 passed; full pytest 1269 passed, 18 skipped, coverage
-97.37%; ruff/pyright/import-linter/pre-commit clean.
+Issue #15 is implemented and the PR is open. All local checks are green: ruff, pyright,
+import-linter, pre-commit, `uv lock --check`, and `pytest` with Postgres (1330 passed, 18
+skipped, coverage 97.21%). A real `dns_passive` scan of `example.com` in the dev Compose stack
+completed and persisted `dev`, `m`, `products`, `support` and `www` subdomains with five
+`subdomain_of` relations. The test org was removed afterwards.
 
 ## Last task
-- `app.css` / `tokens.css`: removed the `.content` max-width and its now-unused token.
-- `tests/e2e/web/test_shell_layout.py`: 1440px regression test (light + dark); the `shell` fixture
-  takes a viewport `width` (Protocol-typed).
-- `DESIGN.md` §3/§4 and `CHANGELOG.md` updated. PR #150 is a draft, rebased on `0bd583c` (#147)
-  with the `CHANGELOG.md` conflict resolved.
+- Added the `dns.discovery.ct` scanner (crt.sh + Cert Spotter fallback), the namespaced
+  fail-open Redis source cache (`ctx.runtime.cache`), wildcard-zone detection and
+  `Asset.details["wildcard"]` persistence, and the `dns_passive` discovery cap (ADR 0022).
+- Added unit/integration/fixture tests; updated architecture, security, add-scanner skill,
+  AGENTS, CHANGELOG and ADR 0022.
+- Local `worker-passive` was restarted to load the new scanner; the Compose stack is still up.
 
 ## Next step
-Drive PR #150 through review (CI, then mark ready); merge only on request. Next unblocked work:
-#23 PR 3 (OpenAI-compatible provider, partner) and #84 PR 3 (sandbox launcher).
+Review and merge PR #155. After merge, implement #16 (DNS resolution + asset graph); it should
+read `Asset.details["wildcard"]` before treating wildcard answers as real hosts and can reuse
+`ctx.runtime.cache` for RDAP-style source data.
 
 ## Open threads
-- #23: PR 3 mirrors ADR 0019 (no SDK retries/sampling, deadline per call) and adds `openai` to the
-  SDK import-linter contract; PR 4 adds `LLMUsage` + factory + AI-off startup warning and closes
-  #23. Org base URLs need ScopeGuard (#24).
-- #84: PR 3 (launcher) must send exactly what `sandbox_proxy/policy.py` accepts; deployment must
-  pass proxy settings as env vars, and `runsc` must be registered on the VPS. Resolve the 240 s
-  registry cap vs ADR 0016's 600 s before the first analysis scanner.
-- #29: backups, monitoring and hardening remain; signup should be closed until backups exist; the
-  tunnel/API credentials recorded in #133 still need rotation. `.env.example` lacks
-  `ALLOW_SIGNUP`, `SESSION_LIFETIME_HOURS` and `PROXY_COUNT`.
-- Scans (ADR 0021): a user-facing "cancel scan" is not built. Lock rule to keep: scan rows before
-  the root, and never read the root locked then upgrade that lock.
-- #149 follow-up if wanted: cap per-card prose with `--measure` on ultra-wide screens.
+- PR #155 is open and ready for review; wait for CI and review.
+- The live scan seeded the shared Redis cache with the public CT result for `example.com`
+  (`attacksurf:scan-cache:v1:ct:v1:example.com`, TTL 6 h). It is safe to leave; delete the key if
+  a fresh live source query is needed.
+- The dev Compose stack and the `.venv` remain from this session; no production deploy was done.
 
 ## Notes for the next agent
-- `.content` intentionally has no max-width (#149); change it only with a new `DESIGN.md` §4
-  decision.
-- Browser layout tests: `RUN_WEB_E2E=1 uv run pytest tests/e2e/web -m web_e2e --no-cov` (opt-in;
-  CI runs them). In this sandbox `~/.cache` is read-only: set `UV_CACHE_DIR=/tmp/uv-cache` and
-  `PLAYWRIGHT_BROWSERS_PATH=/tmp/ms-playwright`.
-- DB-backed tests:
-  `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@localhost:5432/attacksurf_test`
-  (compose Postgres is up).
-- Due-verification tests are clock-pinned; `docs/plans/` is the user's temporary copy, never stage
-  it.
+- Production plugins are registered explicitly in `src/attacksurf/app.py` and
+  `src/attacksurf/workers/app.py`; a new plugin needs both imports. `scanners/__init__.py`
+  intentionally only holds the package docstring (importing a subpackage there breaks the
+  import-linter entry-point contract).
+- `ScanOutput.wildcard_zones` is validated by `services.scan_results`; persistence marks only
+  the root and admitted discovered zones. A marker for a non-root input is rejected.
+- Tests that need Redis behavior use `tests.fakes.FakeCache`; `workers.runtime.scan_cache` is
+  `lru_cache`d and cleared on worker fork.
