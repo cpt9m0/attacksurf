@@ -1,4 +1,4 @@
-"""The app shell must fit a 390px phone viewport (issue #114).
+"""The app shell must fit a 390px phone viewport (#114) and fill a wide one (#149).
 
 The real templates and stylesheets run in Chromium without a server or a database: the rendered
 page is written to a temporary directory next to a copy of `static/` and opened as a `file://`
@@ -8,8 +8,9 @@ still measuring what a browser actually lays out, which a CSS rule test cannot.
 
 import os
 import shutil
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Protocol
 
 import pytest
 from flask.testing import FlaskClient
@@ -28,6 +29,7 @@ pytestmark = [
 REPO_ROOT = Path(__file__).resolve().parents[3]
 STATIC = REPO_ROOT / "src/attacksurf/web/static"
 PHONE_WIDTH = 390
+WIDE_WIDTH = 1440
 NAV_PAGES = (
     ("/", "Dashboard"),
     ("/assets", "Assets"),
@@ -37,7 +39,11 @@ NAV_PAGES = (
 )
 THEMES = ("light", "dark")
 
-type Shell = Callable[[str, str], Page]
+
+class Shell(Protocol):
+    """Open a rendered page at a viewport width (phone width unless `width` is given)."""
+
+    def __call__(self, path: str, theme: str, *, width: int = PHONE_WIDTH) -> Page: ...
 
 
 @pytest.fixture(scope="module")
@@ -53,18 +59,18 @@ def browser() -> Iterator[Browser]:
 
 @pytest.fixture
 def shell(browser: Browser, phone_client: FlaskClient, tmp_path: Path) -> Iterator[Shell]:
-    """Render a page next to a copy of `static/` and open it in a phone-sized viewport."""
+    """Render a page next to a copy of `static/` and open it at the requested width."""
     shutil.copytree(STATIC, tmp_path / "static")
     opened: list[Page] = []
 
-    def _open(path: str, theme: str) -> Page:
+    def _open(path: str, theme: str, *, width: int = PHONE_WIDTH) -> Page:
         html = phone_client.get(path).get_data(as_text=True)
         # Same document, served from disk: `/static/...` resolves to the copy next to it.
         html = html.replace('"/static/', '"static/').replace("'/static/", "'static/")
         name = path.strip("/").replace("/", "-") or "dashboard"
         document = tmp_path / f"shell-{name}.html"
         document.write_text(html, encoding="utf-8")
-        page = browser.new_page(viewport={"width": PHONE_WIDTH, "height": 844})
+        page = browser.new_page(viewport={"width": width, "height": 844})
         opened.append(page)
         page.goto(document.as_uri())
         # theme.js sets this from localStorage; the attribute is what the tokens key off.
@@ -89,6 +95,30 @@ def test_nav_pages_fit_a_phone_viewport(shell: Shell, path: str, title: str, the
 
     assert inner_width == PHONE_WIDTH
     assert scroll_width <= inner_width, f"{path} is {scroll_width}px wide in the {theme} theme"
+
+
+@pytest.mark.parametrize("theme", THEMES)
+def test_dashboard_fills_the_main_column_on_a_wide_screen(shell: Shell, theme: str) -> None:
+    page = shell("/", theme, width=WIDE_WIDTH)
+
+    # The real page, not an error page: the error layout would also render the shell.
+    assert page.locator("h1").first.inner_text() == "Dashboard"
+    layout = page.evaluate(
+        """() => {
+            const box = selector => document.querySelector(selector).getBoundingClientRect();
+            const content = box('.content');
+            return {viewport: window.innerWidth,
+                    layoutWidth: document.documentElement.clientWidth,
+                    scrollWidth: document.documentElement.scrollWidth,
+                    contentLeft: content.left, contentRight: content.right,
+                    navRight: box('.sidenav').right};
+        }"""
+    )
+
+    assert layout["viewport"] == WIDE_WIDTH
+    assert round(layout["contentLeft"]) == round(layout["navRight"])  # starts after the nav
+    assert round(layout["contentRight"]) == layout["layoutWidth"]  # no unused band on the right
+    assert layout["scrollWidth"] <= layout["layoutWidth"]  # the shell still fits the screen
 
 
 def test_user_menu_truncates_instead_of_widening_the_top_bar(shell: Shell) -> None:
