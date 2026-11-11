@@ -1,12 +1,14 @@
-"""Network lookups scanners may use: DNS answers and size-capped HTTP (implemented in `infra`).
+"""Lookups scanners may use: DNS answers, size-capped HTTP and the run cache.
 
-Scanners receive these through `ScannerRuntime`; each call still goes through ScopeGuard, so a
-plugin can only reach what its declared permissions allow.
+Scanners receive these through `ScannerRuntime`; DNS/HTTP calls still go through ScopeGuard, so a
+plugin can only reach what its declared permissions allow. The cache is process-internal (never a
+target) and uses its own namespace and bounds.
 """
 
 from collections.abc import Mapping
 from typing import Protocol
 
+from attacksurf.domain.cache import NullCache, ScanCache
 from attacksurf.domain.sandbox import SandboxRunner, UnconfiguredSandboxRunner
 
 
@@ -72,14 +74,19 @@ class SafeHttpClient(Protocol):
 class ScannerRuntime:
     """Run-scoped adapters handed to a plugin after the gate approved it."""
 
-    __slots__ = ("dns", "http", "sandbox")
+    __slots__ = ("cache", "dns", "http", "sandbox")
 
     def __init__(
-        self, dns: DnsResolver, http: SafeHttpClient, sandbox: SandboxRunner | None = None
+        self,
+        dns: DnsResolver,
+        http: SafeHttpClient,
+        sandbox: SandboxRunner | None = None,
+        cache: ScanCache | None = None,
     ) -> None:
         self.dns = dns
         self.http = http
         self.sandbox = sandbox or UnconfiguredSandboxRunner()
+        self.cache = cache if cache is not None else NullCache()
 
     def close(self) -> None:
         self.http.close()

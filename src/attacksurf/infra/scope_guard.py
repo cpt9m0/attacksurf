@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from attacksurf.domain.assets import AssetType
+from attacksurf.domain.cache import NullCache, ScanCache
 from attacksurf.domain.net import DnsResolver, HttpBody, SafeHttpClient, ScannerRuntime
 from attacksurf.domain.sandbox import SandboxResult, SandboxRunner, UnconfiguredSandboxRunner
 from attacksurf.domain.scanners import AssetRef, ScanContext, Scanner, ScannerGate, ScannerGrant
@@ -61,12 +62,14 @@ class ScopeGuard(ScannerGate):
         ownership: OwnershipChecker,
         classify: Callable[[str], PublicSuffix] = public_suffix.classify,
         sandbox: SandboxRunner | None = None,
+        cache: ScanCache | None = None,
     ) -> None:
         self._dns = dns
         self._http = http
         self._ownership = ownership
         self._classify = classify
         self._sandbox = sandbox or UnconfiguredSandboxRunner()
+        self._cache = cache if cache is not None else NullCache()
 
     def check(self, ctx: ScanContext, asset: AssetRef, scanner: Scanner) -> ScannerRuntime:
         """Validate and authorize one run. Raises `ScopeError`, and the job is then skipped."""
@@ -86,7 +89,7 @@ class ScopeGuard(ScannerGate):
             check_host=self._check_host,
         )
         sandbox = _GuardedSandbox(self._sandbox, allowed=grant.sandbox_analyzers)
-        return ScannerRuntime(guarded_dns, http.client_for(guarded_dns), sandbox)
+        return ScannerRuntime(guarded_dns, http.client_for(guarded_dns), sandbox, cache=self._cache)
 
     def _check_target(self, asset: AssetRef, scanner: Scanner) -> None:
         if asset.type not in scanner.asset_types:

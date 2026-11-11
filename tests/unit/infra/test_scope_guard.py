@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from attacksurf.domain.assets import AssetType
+from attacksurf.domain.cache import NullCache
 from attacksurf.domain.net import HttpBody, ScannerRuntime
 from attacksurf.domain.sandbox import SandboxError
 from attacksurf.domain.scanners import (
@@ -24,6 +25,7 @@ from attacksurf.infra.scope_guard import (
     _GuardedHttp,
     request_host,
 )
+from tests.fakes import FakeCache
 from tests.scanner_fixtures import FakeCheck, FakeSandboxRunner
 
 
@@ -127,6 +129,29 @@ def make_guard(
 def verify_all(scope: ScopeGuard) -> ScopeGuard:
     scope._ownership = EverythingVerified()  # type: ignore[assignment]
     return scope
+
+
+def test_gate_passes_its_cache_to_the_run() -> None:
+    cache = FakeCache()
+    scope = ScopeGuard(
+        dns=StubDns(),
+        http=StubHttp(),
+        ownership=UnverifiedOwnership(),
+        cache=cache,
+    )
+    scope._classify = ClassifiedAsPublicSuffix()  # type: ignore[assignment]
+
+    runtime = scope.check(context(), target(), scanner())
+
+    assert runtime.cache is cache
+
+
+def test_gate_defaults_to_a_null_cache() -> None:
+    scope, _ = make_guard()
+
+    runtime = scope.check(context(), target(), scanner())
+
+    assert isinstance(runtime.cache, NullCache)
 
 
 def test_passive_scanner_gets_run_scoped_adapters_and_no_lookups_at_planning() -> None:
