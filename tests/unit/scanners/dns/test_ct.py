@@ -65,6 +65,16 @@ def test_certspotter_parser_normalizes_names_and_wildcards() -> None:
 
     assert result.names == CERTSPOTTER_NAMES
     assert result.wildcard_zones == ("acme.example",)
+    assert result.last_id == "2003"
+    assert result.empty is False
+
+
+def test_certspotter_parser_marks_an_empty_page() -> None:
+    result = ct.parse_certspotter([], "acme.example")
+
+    assert result.empty is True
+    assert result.last_id is None
+    assert result.names == ()
 
 
 @pytest.mark.parametrize("payload", [{"name_value": "x"}, "text", None])
@@ -104,16 +114,15 @@ def test_query_sources_uses_crt_sh_when_it_succeeds() -> None:
     ],
 )
 def test_query_sources_falls_back_to_certspotter(failure: HttpBody | Exception) -> None:
-    http = FakeHttp(failure, body("certspotter_example.json"))
+    http = FakeHttp(failure, body("certspotter_example.json"), HttpBody(200, b"[]"))
 
     result = ct.query_sources(http, "acme.example")  # type: ignore[arg-type]
 
     assert result is not None
     assert result.names == CERTSPOTTER_NAMES
-    assert [url.split("?")[0] for url in http.calls] == [
-        "https://crt.sh/",
-        "https://api.certspotter.com/v1/issuances",
-    ]
+    assert http.calls[0].startswith("https://crt.sh/?q=%25.acme.example")
+    assert http.calls[1].startswith("https://api.certspotter.com/v1/issuances?")
+    assert http.calls[2].endswith("&after=2003")
 
 
 def test_query_sources_returns_none_when_both_sources_fail() -> None:
@@ -122,11 +131,11 @@ def test_query_sources_returns_none_when_both_sources_fail() -> None:
     assert ct.query_sources(http, "acme.example") is None  # type: ignore[arg-type]
 
 
-def test_fetch_certspotter_follows_the_next_link() -> None:
-    next_url = "https://api.certspotter.com/v1/issuances?after=2003&domain=acme.example"
+def test_fetch_certspotter_uses_the_last_id_and_stops_on_an_empty_page() -> None:
     http = FakeHttp(
-        body("certspotter_example.json", headers={"Link": f'<{next_url}>; rel="next"'}),
+        body("certspotter_example.json"),
         body("certspotter_page2.json"),
+        HttpBody(200, b"[]"),
     )
 
     result = ct.fetch_certspotter(http, "acme.example")  # type: ignore[arg-type]
@@ -136,43 +145,64 @@ def test_fetch_certspotter_follows_the_next_link() -> None:
     assert "build.acme.example" in result.names
     assert http.calls == [
         "https://api.certspotter.com/v1/issuances?domain=acme.example&include_subdomains=true&expand=dns_names",
-        next_url,
+        "https://api.certspotter.com/v1/issuances?domain=acme.example&include_subdomains=true&expand=dns_names&after=2003",
+        "https://api.certspotter.com/v1/issuances?domain=acme.example&include_subdomains=true&expand=dns_names&after=2004",
     ]
 
 
-def test_fetch_certspotter_does_not_follow_a_link_to_another_host() -> None:
-    headers = {"link": '<https://evil.example/v1/issuances>; rel="next"'}
-    http = FakeHttp(body("certspotter_example.json", headers=headers))
+def test_fetch_certspotter_marks_an_empty_first_page_complete() -> None:
+    http = FakeHttp(HttpBody(200, b"[]"))
 
     result = ct.fetch_certspotter(http, "acme.example")  # type: ignore[arg-type]
 
     assert result is not None
     assert result.complete is True
+    assert result.names == ()
+    assert len(http.calls) == 1
+
+
+def test_fetch_certspotter_is_incomplete_when_the_last_page_has_no_id() -> None:
+    payload = json.dumps([{"dns_names": ["www.acme.example"]}]).encode()
+    http = FakeHttp(HttpBody(200, payload))
+
+    result = ct.fetch_certspotter(http, "acme.example")  # type: ignore[arg-type]
+
+    assert result is not None
+    assert result.complete is False
+    assert result.names == ("www.acme.example",)
     assert len(http.calls) == 1
 
 
 def test_fetch_certspotter_returns_a_partial_result_when_a_later_page_fails() -> None:
-    next_url = "https://api.certspotter.com/v1/issuances?after=2003&domain=acme.example"
-    http = FakeHttp(
-        body("certspotter_example.json", headers={"Link": f'<{next_url}>; rel="next"'}),
-        HttpBody(status_code=503, content=b""),
-    )
+    http = FakeHttp(body("certspotter_example.json"), HttpBody(status_code=503, content=b""))
 
     result = ct.fetch_certspotter(http, "acme.example")  # type: ignore[arg-type]
 
     assert result is not None
     assert result.complete is False
     assert result.names == CERTSPOTTER_NAMES
+    assert len(http.calls) == 2
+
+
+def test_fetch_certspotter_stops_incomplete_on_a_repeated_cursor() -> None:
+    http = FakeHttp(body("certspotter_example.json"), body("certspotter_example.json"))
+
+    result = ct.fetch_certspotter(http, "acme.example")  # type: ignore[arg-type]
+
+    assert result is not None
+    assert result.complete is False
+    assert len(http.calls) == 2
 
 
 def test_fetch_certspotter_stops_at_the_page_cap_as_incomplete() -> None:
-    next_url = "https://api.certspotter.com/v1/issuances?after=1&domain=acme.example"
-    http = FakeHttp(
-        *[
-            body("certspotter_page2.json", headers={"Link": f'<{next_url}>; rel="next"'})
-            for _ in range(ct.MAX_CERTSPOTTER_PAGES)
-        ]
-    )
+    pages = [
+        HttpBody(
+            200,
+            json.dumps([{"id": str(index), "dns_names": [f"p{index}.acme.example"]}]).encode(),
+        )
+        for index in range(1, ct.MAX_CERTSPOTTER_PAGES + 1)
+    ]
+    http = FakeHttp(*pages)
 
     result = ct.fetch_certspotter(http, "acme.example")  # type: ignore[arg-type]
 

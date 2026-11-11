@@ -138,10 +138,9 @@ def test_scan_stores_a_complete_result_and_reuses_it() -> None:
 
 
 def test_scan_does_not_cache_a_partial_fallback_result() -> None:
-    next_url = "https://api.certspotter.com/v1/issuances?after=1&domain=acme.example"
     http = FakeHttp(
         HttpBody(status_code=503, content=b""),
-        response("certspotter_example.json", headers={"Link": f'<{next_url}>; rel="next"'}),
+        response("certspotter_example.json"),
         HttpBody(status_code=503, content=b""),
     )
     ctx, _dns, _http, cache = context(http=http)

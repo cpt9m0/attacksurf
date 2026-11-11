@@ -14,12 +14,14 @@ never touch the live services.
 
 ## Decision
 - **Sources:** `dns.discovery.ct` queries crt.sh's JSON endpoint first and falls back to the Cert
-  Spotter issuances API (at most five pages, following only `api.certspotter.com` next links) when
-  crt.sh fails, times out or returns a truncated body. Both hosts are declared in the scanner's
-  `ScannerGrant`; every request still goes through the pinned safe client. When both sources fail,
-  the scanner raises `TransientJobError`; Celery's existing retry policy (max three attempts,
-  exponential backoff with jitter) provides the retry/backoff behavior. There is no sleep loop
-  inside the scanner.
+  Spotter issuances API when crt.sh fails, times out or returns a truncated body. Cert Spotter is
+  paginated the way its API documents: pass the last issuance's `id` as `after` with the other
+  parameters unchanged, and repeat until an empty array (at most five pages; reaching the cap
+  first means the result is incomplete and is not cached). Both hosts are declared in the
+  scanner's `ScannerGrant`; every request still goes through the pinned safe client. When both
+  sources fail, the scanner raises `TransientJobError`; Celery's existing retry policy (max three
+  attempts, exponential backoff with jitter) provides the retry/backoff behavior. There is no
+  sleep loop inside the scanner.
 - **Parsing:** response bodies are untrusted. `name_value` (and `common_name`) from crt.sh and
   `dns_names` from Cert Spotter are split, stripped of one leading `*.`, normalized with
   `normalize_hostname`, filtered to the scanned root, deduplicated and sorted shallow-first. The
