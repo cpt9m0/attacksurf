@@ -2,46 +2,35 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-11 · **Branch:** `main` · **Issue:** #15 · **PR:** #155 (merged)
+**Updated:** 2026-11-11 · **Branch:** `84-sandbox-runtime-info` · **Issue:** #84 (analysis sandbox), PR 3a of the split PR 3
 
 ## Status
-Issue #15 is merged into `main` as `dfc8111` (PR #155). The Cert Spotter pagination review
-comment is addressed: the source follows the last issuance id as `after`, repeats until an empty
-page, and never caches a partial result. All local checks are green: ruff, pyright,
-import-linter, pre-commit, `uv lock --check`, and `pytest` with Postgres (1333 passed, 18 skipped,
-coverage 97.24%); all PR CI checks passed. A real `dns_passive` scan of `example.com` in the dev
-Compose stack completed and persisted `dev`, `m`, `products`, `support` and `www` subdomains with
-five `subdomain_of` relations. The test org was removed afterwards.
+PR 3a is committed (code + tests + ADR 0023, then docs) and pushed, and a PR is open
+(`gh pr view 84-sandbox-runtime-info`). It is waiting on CI and review.
 
 ## Last task
-- Added the `dns.discovery.ct` scanner (crt.sh + Cert Spotter fallback), the namespaced
-  fail-open Redis source cache (`ctx.runtime.cache`), wildcard-zone detection and
-  `Asset.details["wildcard"]` persistence, and the `dns_passive` discovery cap (ADR 0022).
-- Added unit/integration/fixture tests; updated architecture, security, add-scanner skill,
-  AGENTS, CHANGELOG and ADR 0022.
-- Addressed the Cert Spotter pagination review comment: cursor-based `after` pagination until
-  an empty page, with incomplete results never cached.
-- Squash-merged PR #155 into `main` as `dfc8111`; the remote issue branch was deleted and the
-  local checkout is on `main`.
-- Local `worker-passive` was restarted to load the new scanner; the Compose stack is still up.
+- `sandbox-proxy` allows one read call, `GET /info`. It answers with runtime names only,
+  caches a good answer for 60 s with one daemon call at a time, logs failure reasons (status
+  code only), and reads up to 8 MiB. Docker round trips share `_docker_call`.
+- ADR 0023 records the change (ADR 0016 has an "amended by" pointer); security.md and
+  CHANGELOG are updated.
+- Tests in the existing `tests/unit/sandbox_proxy/test_{policy,server}.py` cover the happy path,
+  boundaries, invalid requests, Docker failures, caching and concurrency. `FakeDocker` serves
+  `/info`. Full suite: 1395 passed, 18 skipped, coverage 97.48%.
 
 ## Next step
-Implement #16 (DNS resolution + asset graph); it should
-read `Asset.details["wildcard"]` before treating wildcard answers as real hosts and can reuse
-`ctx.runtime.cache` for RDAP-style source data.
+Start PR 3b (`84-sandbox-launcher-core`) from up-to-date `main`, following
+`docs/plans/84-pr3-sandbox-launcher-split-4-prs.md` (it doesn't depend on 3a). Merge 3a first
+when its review passes.
 
 ## Open threads
-- The live scan seeded the shared Redis cache with the public CT result for `example.com`
-  (`attacksurf:scan-cache:v1:ct:v1:example.com`, TTL 6 h). It is safe to leave; delete the key if
-  a fresh live source query is needed.
-- The dev Compose stack and the `.venv` remain from this session; no production deploy was done.
+- Issue #84's merge-order checklist lists 3a to 3d; `84-analysis-sandbox.md` (untracked) still
+  shows a single PR 3.
+- Optional one-line `/info` note in the `docs/architecture.md` proxy box: user hasn't decided.
 
 ## Notes for the next agent
-- Production plugins are registered explicitly in `src/attacksurf/app.py` and
-  `src/attacksurf/workers/app.py`; a new plugin needs both imports. `scanners/__init__.py`
-  intentionally only holds the package docstring (importing a subpackage there breaks the
-  import-linter entry-point contract).
-- `ScanOutput.wildcard_zones` is validated by `services.scan_results`; persistence marks only
-  the root and admitted discovered zones. A marker for a non-root input is rejected.
-- Tests that need Redis behavior use `tests.fakes.FakeCache`; `workers.runtime.scan_cache` is
-  `lru_cache`d and cleared on worker fork.
+- The PR 3 plan (4 PRs, commits, testing gate) is in `docs/plans/84-pr3-sandbox-launcher-split-4-prs.md`
+  (untracked).
+- The user wants explanations in plain language, and tests run before every commit.
+- The ruff format hook strips imports that aren't used yet: add imports together with their
+  first use.

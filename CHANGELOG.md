@@ -13,6 +13,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   all network access stays behind ScopeGuard (ADR 0022, #15).
 - `sandbox-proxy` service: the only holder of the Docker socket, allowing six container actions
   on containers it created and refusing any create request outside the sandbox policy (#84).
+- `sandbox-proxy` answers `GET /info` with the registered runtime names only, so the launcher
+  can refuse to start in prod without `runsc` (ADR 0023, #84).
 - CD is verified end-to-end: a merge to `main` reaches production within one timer
   interval, and the running `web` image tag matches the recorded deployed SHA (#29).
 - Pull-based CD: `scripts/deploy.sh` (also `make deploy`) fetches `origin/main`, builds the
