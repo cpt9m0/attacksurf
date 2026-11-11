@@ -19,3 +19,8 @@ def test_call_deadline_leaves_room_inside_the_task_soft_time_limit() -> None:
 
 def test_one_request_with_its_sdk_retries_fits_inside_the_call_deadline() -> None:
     assert (MAX_RETRIES + 1) * REQUEST_TIMEOUT_SECONDS <= CALL_DEADLINE_SECONDS
+
+
+def test_sdks_do_not_retry_because_celery_retries_the_task() -> None:
+    # Two retry layers multiply requests and park a worker in Retry-After sleeps (ADR 0019).
+    assert MAX_RETRIES == 0

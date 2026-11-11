@@ -219,7 +219,7 @@ def test_due_verifications_cover_expired_and_stale_pending_proofs(
 
 def test_due_verifications_skip_archived_roots(db_session: Session, org: Org, root: Asset) -> None:
     proof = _start(db_session, FakeQueue(db_session), org.id, root.id)
-    verifications.record_check(db_session, proof, (record_value(proof.token),))
+    verifications.record_check(db_session, proof, (record_value(proof.token),), now=NOW)
     record_asset(db_session, org.id, AssetType.DOMAIN, "example.com", source=AssetSource.USER)
     _archive(db_session, root)
 

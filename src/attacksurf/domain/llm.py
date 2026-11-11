@@ -99,11 +99,10 @@ class LLMProvider(Protocol):
         *,
         schema: type[T],
         max_tokens: int,
-        temperature: float | None = None,
     ) -> LLMResult[T]:
         """Ask the configured model for a reply that validates against `schema`.
 
-        `temperature=None` sends no temperature, so the model's default applies. Raises an
+        No sampling settings: the model's defaults always apply (ADR 0019). Raises an
         `LLMError` subclass on failure.
         """
         ...

@@ -25,6 +25,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   redirecting to the apex, and a deploy runbook in `docs/deployment.md` (ADR 0020, #132).
 
 ### Fixed
+- Pyright and pytest pass on Windows again: pyright checks as Linux (where the app runs), and
+  the sandbox proxy server tests, which need Unix sockets, skip on Windows (#84).
+- The archived-roots due-verification test recorded its check at the real time instead of the
+  test clock, so it passed without testing the archive filter (#14).
 - Archiving a root domain now cancels its queued and running scans in the same transaction, and
   they show as `cancelled` in the scan history. Nothing under an archived root becomes active or
   produces a new finding afterwards, whatever stage the scan was in: persistence drops output for
@@ -84,6 +88,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   silently.
 
 ### Changed
+- The LLM contract has no `temperature` any more: Anthropic API version `2026-10-21` (sent by
+  the `anthropic` 2.x SDK) rejects sampling parameters on every model, and nothing used it, so
+  models run with their defaults (ADR 0019, #23).
+- LLM SDK clients no longer retry (`ai/limits.MAX_RETRIES = 0`): Celery's task retry is the
+  only retry layer, so errors don't multiply requests or park an `ai` worker in `Retry-After`
+  sleeps (ADR 0019, #23).
+- Dependencies: add the `anthropic` SDK (2.3.0, the newest release at least two weeks old;
+  `jiter` and `opentelemetry-api` pinned back the same way). The scanner network-boundary test
+  also bans its `httpx2`/`httpcore2` HTTP stack and the LLM SDKs (#23).
 - `LLM_MODEL` no longer defaults to a Claude model in code: model names come only from config,
   and an instance without both `LLM_API_KEY` and `LLM_MODEL` has AI off (ADR 0019).
   Developers set the Meta development configuration in their own `.env` (see
@@ -92,6 +105,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   survives scan pruning and work outside a scan can be tracked.
 
 ### Added
+- Anthropic provider (`ai/providers/anthropic.py`, #23): Messages API requests with native
+  JSON-schema output, the system prompt split out, thinking blocks ignored, cached input
+  tokens counted as input, SDK errors mapped to `LLMError`s without the response body, and the
+  base URL always passed explicitly so `ANTHROPIC_BASE_URL` can't redirect a key. Replies cut
+  off at the token limit, refused, or over the context window fail at once instead of paying
+  for a corrective retry; an unreadable 2xx body is transient; a reply without usage is kept
+  with usage marked unreported; failed calls log status, error type and request ID. A whole
+  `complete()` call stops at `CALL_DEADLINE_SECONDS`, even against a server that trickles
+  bytes, and the corrective retry gets only the time left. Passes the
+  shared provider contract against a stubbed API, and an opt-in `llm_live` test against Meta's
+  Anthropic-format endpoint (`tests/e2e/test_anthropic_live.py`). An import-linter contract keeps LLM SDK
+  imports inside `ai/providers/`.
 - LLM provider contract (#23, ADR 0019): `LLMProvider` protocol, result/usage types and
   `LLMError` subclasses in `domain/llm.py`; shared schema validation with one corrective retry
   (`ai/structured.py`); one HTTP-status error mapping (`ai/errors.py`); `resolve_llm_config`

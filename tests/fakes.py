@@ -45,7 +45,6 @@ class FakeLLMCall:
     messages: tuple[Message, ...]
     schema: type[BaseModel]
     max_tokens: int
-    temperature: float | None
 
 
 class FakeLLMProvider:
@@ -65,10 +64,9 @@ class FakeLLMProvider:
         *,
         schema: type[T],
         max_tokens: int,
-        temperature: float | None = None,
     ) -> LLMResult[T]:
         def send(conversation: Sequence[Message]) -> Completion:
-            self.calls.append(FakeLLMCall(tuple(conversation), schema, max_tokens, temperature))
+            self.calls.append(FakeLLMCall(tuple(conversation), schema, max_tokens))
             assert self.replies, "FakeLLMProvider: no reply queued for this call"
             reply = self.replies.pop(0)
             if isinstance(reply, Exception):

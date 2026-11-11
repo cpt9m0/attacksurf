@@ -16,6 +16,10 @@ from attacksurf.sandbox_proxy.policy import SandboxPolicy
 from attacksurf.sandbox_proxy.server import MAX_TRACKED_CONTAINERS, make_server
 from tests.unit.sandbox_proxy.test_policy import IMAGE, create_body
 
+if not hasattr(socketserver, "UnixStreamServer"):
+    # The proxy only runs on Linux; CI runs these tests, Windows dev machines can't.
+    pytest.skip("needs Unix domain sockets", allow_module_level=True)
+
 CREATED = "e" * 64
 FOREIGN = "f" * 64
 

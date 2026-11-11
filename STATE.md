@@ -2,90 +2,86 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-10 · **Branch:** `116-archive-cancels-scans` · **Issue:** #116 (PR pending)
+**Updated:** 2026-11-10 · **Branch:** `23-anthropic-provider` · **Issue:** #23 (LLM providers), PR 2 of 4
 
 ## Status
-Archiving a root domain now cancels its queued/running scans in the archive's own transaction
-(ADR 0021), and no in-flight scan can write under an archived root afterwards:
+PR 1 (shared LLM contract) is merged: [#131](https://github.com/cpt9m0/attacksurf/pull/131).
+PR 2 (Anthropic provider, Angela) is code-complete and in review. `origin/main` (`da70e1e`,
+archiving cancels scans, ADR 0021) is being merged in, with the `CHANGELOG.md` and `STATE.md`
+conflicts resolved. Plan:
+https://claude.ai/artifact/PnixRruj7R2cb7B6gLmvLi (outdated on ADR number, retry count and
+`temperature`: ADR 0019 is the source of truth).
 
-- `services/assets.archive_root_domain` cancels the root's `queued`/`running` scans (with
-  `coalesce(started_at, now())` so the `finished_at >= started_at` constraint holds) and their
-  unfinished jobs, and audits `asset.root_archived` (now carrying `scans_cancelled`) plus one
-  `scan.cancelled` per scan. Completed scans and finished jobs are untouched.
-- `services/scan_results.persist_scan_output` raises `ScanCancelled` (new `domain.scans` class)
-  for a terminal scan and `AssetNotFound` for an archived root. It now takes the root's
-  `FOR UPDATE` lock for every persist, the same lock the archive takes, so archive and persist
-  are ordered either way. `_admit` no longer takes its own lock.
-- `services/scans`: `dispatch_stage` and `finalize_scan` no-op for an inactive root
-  (`_root_active`, fresh read); `start_scan` reads the root with `populate_existing`.
-- No Celery revoke and no waiting (ADR 0021): queued tasks run once and no-op.
-- UI: the archive dialog says scans in progress are cancelled; the existing `cancelled` pill
-  (neutral) shows in the scan history.
-
-Codex review on PR #148 (round 1) found two real races in the first version; both fixed:
-- **Deadlock:** the archive locked the root *before* the scan rows, while persistence locked the
-  scan row (`load_job_scan`) and then the root. Archive now cancels (locking scan rows) *before*
-  `_lock_root`, and persistence only reads the root `FOR KEY SHARE` (upgrading to `FOR UPDATE`
-  solely in `_admit`, for the cap). Rule: always scan rows → root. A deterministic regression
-  test reproduces `DeadlockDetected` on the old order.
-- **Timestamps:** `now()` is the transaction start, so a worker's `started_at` committed after
-  the request began could exceed `finished_at` and roll back the archive. Cancellation now uses
-  `clock_timestamp()`, jobs `greatest(started_at, clock_timestamp())`.
-
-Codex review round 2 found two more, both fixed:
-- **Lock upgrade:** the cap path read the root `FOR KEY SHARE` and then upgraded to `FOR UPDATE`,
-  so overlapping capped persists deadlocked each other. Each transaction now takes the root
-  lock exactly once (key-share, or `FOR UPDATE` up front when `discovered_limit` is set).
-- **Stuck `queued`:** `start_scan` can insert a scan after the archive's cancellation ran.
-  `dispatch_stage` now cancels a non-terminal scan it finds under an inactive root and skips its
-  own job (`_abandon_stage`), instead of returning silently and leaving the scan `queued`.
-
-Codex review round 3: two concurrent archives both held the root key-share and then deadlocked
-upgrading to `FOR UPDATE`. The archive now validates with a plain read and takes the root lock
-once in `_lock_root`. Rule to keep: **no transaction reads the root locked and later upgrades
-that lock** (covers persists, archives, and mixes).
-
-Verified: `pytest` 1213 passed, 19 skipped (all opt-in suites); ruff check/format, pyright
-(`src` + `tests`), lint-imports clean. Docs synced: ADR 0021 (lock order + timestamps), ADR 0010,
-`architecture.md`, `security.md`, `CHANGELOG.md`, `STATE.md`.
+Commits on top of `main`: `04f9e9f` no SDK retries · `ab30ba8` `anthropic` 2.3.0 · `5f358bf`
+adapter + `temperature` removed from the contract + import-linter SDK contract · `8d1f38e`
+replies a retry can't fix · `48fa361` call deadline · `de523e8` live test (passed against
+`https://api.meta.ai` on 2026-11-09) · `45faf84` clock pin in due-verification tests. `main`
+pinned the failing one itself (#133); this branch still pins the archived-roots test, which
+passed without testing the archive filter. `84c58b3`: pyright checks as Linux and the
+sandbox proxy server tests skip on Windows, so pushes from Windows pass the hooks.
 
 ## Next step
-Open the PR for this branch (`Closes #116`) and drive it through review.
+1. Commit the merge of `da70e1e` and push.
+2. Review feedback: the reviewer asked for a superseding ADR instead of editing ADR 0019 in
+   place. Write `docs/adr/0022-...` with "no sampling settings" and "no SDK retries" (reasons
+   and trade-offs moved from 0019). Restore those two 0019 paragraphs to their merged wording
+   plus a "Superseded in part by ADR 0022" note. Keep 0019's error-handling and deadline
+   additions, which fill in what 0019 already required. Update the links in
+   `docs/architecture.md`, the `llm-prompt` skill and CHANGELOG.
+3. PR size: about 420 changed lines excluding tests and `uv.lock` (about 210 of them code),
+   slightly over the ~400 guideline; the PR description says so.
 
 ## Open threads
-- Local dev DB was reset on this machine: the `attacksurf_pgdata` volume held a postgres 16 data
-  directory (empty `attacksurf` DB, a stale `attacksurf_test` schema) that the postgres 18
-  compose service refuses to start on. The stack now runs on a fresh 18 volume (`make up`);
-  nothing to recover, but any local data from before is gone.
-- A user-facing "cancel scan" would reuse `services.assets._cancel_scans` and the persistence
-  guards; not built here.
+- #23:
+  - Both implementers agreed (2026-11-09) to `MAX_RETRIES = 0` and no `temperature` in
+    `complete()`; moving into ADR 0022 (next step 2).
+  - PR 3 (OpenAI-compatible, partner): mirror ADR 0019's rules (no SDK retries, no sampling
+    params, `finish_reason` `length`/`content_filter` fail at once, deadline per call) and add
+    `openai` to the import-linter SDK contract in `pyproject.toml`.
+  - PR 4 (`LLMUsage` + factory + AI-off startup warning, Angela; closes #23) not started.
+  - Known limit, accepted: a request abandoned at the deadline runs on until its own timeouts
+    end it. That is immediate for normal servers and unbounded only for a server trickling
+    bytes. Fix if needed: an httpx2 response event hook that checks the deadline per chunk and
+    closes the connection.
+  - Org-supplied base URLs need ScopeGuard (SSRF) validation in #24 before use.
 - #84: PR 3 (`84-sandbox-launcher`) is next; merge order port → proxy → launcher → analysis
-  worker → CI. The launcher must send exactly what `sandbox_proxy/policy.py` accepts (user
-  `65532:65532`, `LogConfig` none, `AutoRemove`, binds under the artifact root; attach before
-  start, stdout only), and deployment must pass the proxy settings as environment variables
-  (the proxy never reads `.env`).
-- The scanner registry caps `timeout_seconds` at 240 s, but ADR 0016 allows 600 s sandbox runs.
-  Resolve before the first analysis scanner; the runner client deadline is affected too.
-- #23: Anthropic and OpenAI-compatible adapters and the factory remain; each must enforce the
-  240 s deadline, and org base URLs need ScopeGuard validation (#24).
-- #29: backups, monitoring and hardening remain; signup is enabled and should be closed until
-  backups exist. The exposed tunnel/API credentials recorded in #133 still need rotation.
-- `.env.example` lacks ALLOW_SIGNUP, SESSION_LIFETIME_HOURS, PROXY_COUNT.
+  worker → CI.
+  - The launcher must send exactly what `sandbox_proxy/policy.py` accepts: user
+    `65532:65532`, `LogConfig` none, `AutoRemove`, binds under the artifact root, attach before
+    start, stdout only.
+  - Deployment must pass the proxy settings as environment variables (the proxy never reads
+    `.env`).
+  - The scanner registry caps `timeout_seconds` at 240 s, but ADR 0016 allows 600 s sandbox
+    runs. Resolve this before the first analysis scanner; the runner client deadline is
+    affected too.
+  - PR 4 adds a new ADR for consuming the `analysis` queue before a real analyzer exists, and
+    names the OSV volume `attacksurf_osv` to match the proxy.
+  - `runsc` must be registered on the VPS before the proxy is deployed to prod.
+- #29: backups, monitoring and hardening remain.
+  - Signup is enabled and should be closed until backups exist.
+  - The exposed tunnel/API credentials recorded in #133 still need rotation.
+- `.env.example` lacks `ALLOW_SIGNUP`, `SESSION_LIFETIME_HOURS` and `PROXY_COUNT` (the settings
+  exist in `config.py`).
+- Scans (ADR 0021): a user-facing "cancel scan" would reuse `services.assets._cancel_scans` and
+  the persistence guards; not built. Lock rule to keep: scan rows before the root, and no
+  transaction reads the root locked and later upgrades that lock.
+- Follow-ups: #115, #117.
 
 ## Notes for the next agent
-- On this host there is no `uv` and no `.venv`; run Python tooling in the compose `web` image:
-  `docker compose run --rm --no-deps --entrypoint sh -v ./tests:/app/tests -v ./.github:/app/.github:ro
-  -e TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@postgres:5432/attacksurf_test
-  web -c 'cd /app && pytest'`. Use `--no-deps`: without it compose recreates postgres and redis.
-  `make test` mounts only `./tests`, so `tests/unit/test_test_database.py` fails to collect
-  without the `.github` mount (it skips outside the container instead of failing).
-- Pyright has no Node runtime in the image; run it from the host against an exported
-  `attacksurf:dev` `.venv` with `pythonVersion 3.12` and `extraPaths` pointing at the exported
-  site-packages and `src`.
+- SDK 2.3.0:
+  - HTTP stack is `httpx2`; stub it with `httpx2.MockTransport`.
+  - Sends API version `2026-10-21`, which rejects `temperature`/`top_p`/`top_k`.
+  - Sends `api_key=` as Bearer and doesn't validate 2xx bodies.
+  - Would sleep for any `Retry-After` if retries were on.
+  - Reads `ANTHROPIC_BASE_URL` when no base URL is given; the adapter always passes one.
+- Meta accepts only `tool_choice: "auto"`. Thinking counts toward `max_tokens` (564 output tokens
+  for one sentence), so size `max_tokens` generously.
+- Live LLM tests: see `docs/development.md` (env vars override `.env` for one run); never in CI.
 - Browser layout tests: `RUN_WEB_E2E=1 uv run pytest tests/e2e/web -m web_e2e --no-cov` after
-  `uv run playwright install chromium`; they skip by default.
-- Deployment: `docs/deployment.md` (pull-based CD); secrets stay in `/etc/attacksurf/`, never git
-  or images.
+  `uv run playwright install chromium`. They skip by default, so `uv run pytest` stays fast.
+- Deployment: `docs/deployment.md` (pull-based CD).
+  - Secrets stay in `/etc/attacksurf/`, never in git or images.
+  - `PROXY_COUNT` counts hops (1 behind the tunnel); validate Caddy before deploying.
+- Windows dev machine: Postgres on host port 5433 (git-excluded `compose.override.yaml`).
 - `docs/plans/` holds the user's temporary plan copy: never stage it.
-- Commits and pushes are authorized for this branch; merge only when requested.
-- The due-verifications test is clock-pinned on `main` (explicit `NOW`); keep it that way.
+- Due-verification tests are clock-pinned (explicit `NOW`); keep them that way.
