@@ -98,7 +98,10 @@ sync" rule below is satisfied**. Do not claim done without running them.
    (`infra/scope_guard.py`; ADR 0013). Scanners use `ctx.runtime.dns` / `ctx.runtime.http` only,
    never raw `requests`/`httpx`/sockets/dnspython (a test enforces it), and declare a
    `ScannerGrant` (public data services, or the target for verified active checks). Active
-   checks require verified ownership.
+   checks require verified ownership. Flaky public sources may use `ctx.runtime.cache` (namespaced,
+   bounded, fail-open; public source data only, never findings/evidence/tenant data) and raise
+   `TransientJobError` for Celery's retry/backoff; wildcard zones are returned in
+   `ScanOutput.wildcard_zones` and persisted as `Asset.details["wildcard"] = true`.
 7. **LLMs judge, scanners detect.** AI never invents findings, never auto-closes them, and only
    sees normalized findings. All LLM output is schema-validated (pydantic).
 8. **Scan-derived content is untrusted:** escape in templates (never `|safe` on it), and wrap it as

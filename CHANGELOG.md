@@ -6,6 +6,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Subdomain discovery from Certificate Transparency: `dns.discovery.ct` queries crt.sh's JSON
+  endpoint with Cert Spotter as fallback, normalizes and caps names per root (1000), caches
+  complete results in a namespaced Redis cache for six hours, and detects wildcard DNS zones.
+  Wildcard zones are persisted as `Asset.details["wildcard"] = true` for later resolution, and
+  all network access stays behind ScopeGuard (ADR 0022, #15).
 - `sandbox-proxy` service: the only holder of the Docker socket, allowing six container actions
   on containers it created and refusing any create request outside the sandbox policy (#84).
 - CD is verified end-to-end: a merge to `main` reaches production within one timer
