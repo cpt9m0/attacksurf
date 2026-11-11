@@ -70,7 +70,7 @@ All severity colors must reach 4.5:1 contrast for text on their badge background
 | `--radius-sm/md/lg` | TBD |
 | `--shadow-sm/md` | TBD |
 | Borders, focus ring, opacity | `--border-width`, `--border-width-accent`, `--focus-ring-width/-offset`, `--opacity-disabled` (placeholders) |
-| Layout widths | `--content-max-width`, `--nav-width`, `--auth-card-width`, `--user-menu-min-width`, `--field-min-width`, `--filter-min-width`, `--meta-column-min-width` (placeholders) |
+| Layout widths | `--nav-width`, `--auth-card-width`, `--user-menu-min-width`, `--field-min-width`, `--filter-min-width`, `--meta-column-min-width` (placeholders) |
 | Line heights, weights, icons | `--line-height-body/-heading/-badge`, `--font-weight-semibold/-bold`, `--icon-size`, `--icon-size-lg`, `--measure` (placeholders) |
 
 `app.css` uses only these variables (a test rejects raw colors); the only raw dimension is the
@@ -83,7 +83,9 @@ All severity colors must reach 4.5:1 contrast for text on their badge background
   top bar is two rows — brand + theme toggle, then user menu + Log out — with the email truncated
   (`title` keeps the full text), and the nav row scrolls horizontally inside itself.
 - Footer: "Source code" link (required by AGPL §13).
-- Max content width: `--content-max-width` (placeholder 72rem). Data tables may go full width.
+- Content width: `.content` fills the main column at every width (no max-width cap). Prose that
+  needs a shorter line caps itself with `--measure` (empty-state copy, dialogs), and wide tables
+  scroll inside `.table-wrap` (`.content` keeps `min-width: 0`).
 - Templates: `layouts/base.html` (shell), `layouts/fragment.html` (HTMX partial), pages in
   `pages/`, errors in `errors/error.html`.
 

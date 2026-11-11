@@ -181,8 +181,9 @@ pre,
   /* Grid items default to min-width: auto, so a wide table would widen the page instead of
      scrolling inside its .table-wrap. */
   min-width: 0;
+  /* No max-width: the content fills the main column on every screen. Prose that needs a shorter
+     line caps itself with --measure. */
   width: 100%;
-  max-width: var(--content-max-width);
   padding: var(--space-5);
 }
 

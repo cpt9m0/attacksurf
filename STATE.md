@@ -2,86 +2,47 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-10 · **Branch:** `23-anthropic-provider` · **Issue:** #23 (LLM providers), PR 2 of 4
+**Updated:** 2026-11-11 · **Branch:** `149-content-width` · **Issue:** #149 (PR #150, draft)
 
 ## Status
-PR 1 (shared LLM contract) is merged: [#131](https://github.com/cpt9m0/attacksurf/pull/131).
-PR 2 (Anthropic provider, Angela) is code-complete and in review. `origin/main` (`da70e1e`,
-archiving cancels scans, ADR 0021) is being merged in, with the `CHANGELOG.md` and `STATE.md`
-conflicts resolved. Plan:
-https://claude.ai/artifact/PnixRruj7R2cb7B6gLmvLi (outdated on ADR number, retry count and
-`temperature`: ADR 0019 is the source of truth).
+#149 is implemented and in review: `.content` fills the main column at every width (the 72rem cap
+and `--content-max-width` are gone). At 1440px the content right edge is 1440px (was 1360px); the
+390px phone layout is unchanged. E2E 14 passed; full pytest 1269 passed, 18 skipped, coverage
+97.37%; ruff/pyright/import-linter/pre-commit clean.
 
-Commits on top of `main`: `04f9e9f` no SDK retries · `ab30ba8` `anthropic` 2.3.0 · `5f358bf`
-adapter + `temperature` removed from the contract + import-linter SDK contract · `8d1f38e`
-replies a retry can't fix · `48fa361` call deadline · `de523e8` live test (passed against
-`https://api.meta.ai` on 2026-11-09) · `45faf84` clock pin in due-verification tests. `main`
-pinned the failing one itself (#133); this branch still pins the archived-roots test, which
-passed without testing the archive filter. `84c58b3`: pyright checks as Linux and the
-sandbox proxy server tests skip on Windows, so pushes from Windows pass the hooks.
+## Last task
+- `app.css` / `tokens.css`: removed the `.content` max-width and its now-unused token.
+- `tests/e2e/web/test_shell_layout.py`: 1440px regression test (light + dark); the `shell` fixture
+  takes a viewport `width` (Protocol-typed).
+- `DESIGN.md` §3/§4 and `CHANGELOG.md` updated. PR #150 is a draft, rebased on `0bd583c` (#147)
+  with the `CHANGELOG.md` conflict resolved.
 
 ## Next step
-1. Commit the merge of `da70e1e` and push.
-2. Review feedback: the reviewer asked for a superseding ADR instead of editing ADR 0019 in
-   place. Write `docs/adr/0022-...` with "no sampling settings" and "no SDK retries" (reasons
-   and trade-offs moved from 0019). Restore those two 0019 paragraphs to their merged wording
-   plus a "Superseded in part by ADR 0022" note. Keep 0019's error-handling and deadline
-   additions, which fill in what 0019 already required. Update the links in
-   `docs/architecture.md`, the `llm-prompt` skill and CHANGELOG.
-3. PR size: about 420 changed lines excluding tests and `uv.lock` (about 210 of them code),
-   slightly over the ~400 guideline; the PR description says so.
+Drive PR #150 through review (CI, then mark ready); merge only on request. Next unblocked work:
+#23 PR 3 (OpenAI-compatible provider, partner) and #84 PR 3 (sandbox launcher).
 
 ## Open threads
-- #23:
-  - Both implementers agreed (2026-11-09) to `MAX_RETRIES = 0` and no `temperature` in
-    `complete()`; moving into ADR 0022 (next step 2).
-  - PR 3 (OpenAI-compatible, partner): mirror ADR 0019's rules (no SDK retries, no sampling
-    params, `finish_reason` `length`/`content_filter` fail at once, deadline per call) and add
-    `openai` to the import-linter SDK contract in `pyproject.toml`.
-  - PR 4 (`LLMUsage` + factory + AI-off startup warning, Angela; closes #23) not started.
-  - Known limit, accepted: a request abandoned at the deadline runs on until its own timeouts
-    end it. That is immediate for normal servers and unbounded only for a server trickling
-    bytes. Fix if needed: an httpx2 response event hook that checks the deadline per chunk and
-    closes the connection.
-  - Org-supplied base URLs need ScopeGuard (SSRF) validation in #24 before use.
-- #84: PR 3 (`84-sandbox-launcher`) is next; merge order port → proxy → launcher → analysis
-  worker → CI.
-  - The launcher must send exactly what `sandbox_proxy/policy.py` accepts: user
-    `65532:65532`, `LogConfig` none, `AutoRemove`, binds under the artifact root, attach before
-    start, stdout only.
-  - Deployment must pass the proxy settings as environment variables (the proxy never reads
-    `.env`).
-  - The scanner registry caps `timeout_seconds` at 240 s, but ADR 0016 allows 600 s sandbox
-    runs. Resolve this before the first analysis scanner; the runner client deadline is
-    affected too.
-  - PR 4 adds a new ADR for consuming the `analysis` queue before a real analyzer exists, and
-    names the OSV volume `attacksurf_osv` to match the proxy.
-  - `runsc` must be registered on the VPS before the proxy is deployed to prod.
-- #29: backups, monitoring and hardening remain.
-  - Signup is enabled and should be closed until backups exist.
-  - The exposed tunnel/API credentials recorded in #133 still need rotation.
-- `.env.example` lacks `ALLOW_SIGNUP`, `SESSION_LIFETIME_HOURS` and `PROXY_COUNT` (the settings
-  exist in `config.py`).
-- Scans (ADR 0021): a user-facing "cancel scan" would reuse `services.assets._cancel_scans` and
-  the persistence guards; not built. Lock rule to keep: scan rows before the root, and no
-  transaction reads the root locked and later upgrades that lock.
-- Follow-ups: #115, #117.
+- #23: PR 3 mirrors ADR 0019 (no SDK retries/sampling, deadline per call) and adds `openai` to the
+  SDK import-linter contract; PR 4 adds `LLMUsage` + factory + AI-off startup warning and closes
+  #23. Org base URLs need ScopeGuard (#24).
+- #84: PR 3 (launcher) must send exactly what `sandbox_proxy/policy.py` accepts; deployment must
+  pass proxy settings as env vars, and `runsc` must be registered on the VPS. Resolve the 240 s
+  registry cap vs ADR 0016's 600 s before the first analysis scanner.
+- #29: backups, monitoring and hardening remain; signup should be closed until backups exist; the
+  tunnel/API credentials recorded in #133 still need rotation. `.env.example` lacks
+  `ALLOW_SIGNUP`, `SESSION_LIFETIME_HOURS` and `PROXY_COUNT`.
+- Scans (ADR 0021): a user-facing "cancel scan" is not built. Lock rule to keep: scan rows before
+  the root, and never read the root locked then upgrade that lock.
+- #149 follow-up if wanted: cap per-card prose with `--measure` on ultra-wide screens.
 
 ## Notes for the next agent
-- SDK 2.3.0:
-  - HTTP stack is `httpx2`; stub it with `httpx2.MockTransport`.
-  - Sends API version `2026-10-21`, which rejects `temperature`/`top_p`/`top_k`.
-  - Sends `api_key=` as Bearer and doesn't validate 2xx bodies.
-  - Would sleep for any `Retry-After` if retries were on.
-  - Reads `ANTHROPIC_BASE_URL` when no base URL is given; the adapter always passes one.
-- Meta accepts only `tool_choice: "auto"`. Thinking counts toward `max_tokens` (564 output tokens
-  for one sentence), so size `max_tokens` generously.
-- Live LLM tests: see `docs/development.md` (env vars override `.env` for one run); never in CI.
-- Browser layout tests: `RUN_WEB_E2E=1 uv run pytest tests/e2e/web -m web_e2e --no-cov` after
-  `uv run playwright install chromium`. They skip by default, so `uv run pytest` stays fast.
-- Deployment: `docs/deployment.md` (pull-based CD).
-  - Secrets stay in `/etc/attacksurf/`, never in git or images.
-  - `PROXY_COUNT` counts hops (1 behind the tunnel); validate Caddy before deploying.
-- Windows dev machine: Postgres on host port 5433 (git-excluded `compose.override.yaml`).
-- `docs/plans/` holds the user's temporary plan copy: never stage it.
-- Due-verification tests are clock-pinned (explicit `NOW`); keep them that way.
+- `.content` intentionally has no max-width (#149); change it only with a new `DESIGN.md` §4
+  decision.
+- Browser layout tests: `RUN_WEB_E2E=1 uv run pytest tests/e2e/web -m web_e2e --no-cov` (opt-in;
+  CI runs them). In this sandbox `~/.cache` is read-only: set `UV_CACHE_DIR=/tmp/uv-cache` and
+  `PLAYWRIGHT_BROWSERS_PATH=/tmp/ms-playwright`.
+- DB-backed tests:
+  `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@localhost:5432/attacksurf_test`
+  (compose Postgres is up).
+- Due-verification tests are clock-pinned; `docs/plans/` is the user's temporary copy, never stage
+  it.
