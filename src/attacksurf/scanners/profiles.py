@@ -1,5 +1,13 @@
-"""Profiles list registered scanner names; DNS plugins populate dns_passive in #15-#19."""
+"""Scan profiles select registered scanners by name."""
 
 from attacksurf.domain.scanners import ScanProfile
 
-PROFILES = {"dns_passive": ScanProfile(name="dns_passive")}
+MAX_DISCOVERED_ASSETS = 1000
+
+PROFILES = {
+    "dns_passive": ScanProfile(
+        name="dns_passive",
+        discover=("dns.discovery.ct",),
+        max_discovered_assets=MAX_DISCOVERED_ASSETS,
+    )
+}

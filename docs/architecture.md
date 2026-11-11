@@ -93,7 +93,7 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 | Entity | Purpose |
 |---|---|
 | `Org`, `User`, `Membership` | tenancy; every tenant row carries `org_id`. `User` is global (one login, many orgs); `Membership.role` is `owner`/`admin`/`member` (`domain.accounts.has_role`) |
-| `Asset` | polymorphic target: `domain`, `subdomain`, `ip`, `url`, `repo`, `binary`; one row per `(org_id, type, value)` with `value` normalized by `domain.assets.normalize_asset_value` (hostnames lowercase punycode via `idna`, canonical IPs, `http(s)` URLs without credentials/fragment/default port; repo/binary not yet); `source` user/discovered, `parent_id` = asset a discovered one was found under (set once at first sighting, so no cycles; user-added assets are roots; deleting a parent cascades to its discovered children), `first_seen`/`last_seen`, `is_active` + `deactivated_at` (only sightings after it reactivate), `tags`, `details`. Roots come from `services.assets.add_root_domain` (any name `check_public_hostname` accepts, registrable or subdomain; re-adding an archived root restores it) and are removed only by `archive_root_domain` (root + its discovered children go inactive; findings and scans are kept) |
+| `Asset` | polymorphic target: `domain`, `subdomain`, `ip`, `url`, `repo`, `binary`; one row per `(org_id, type, value)` with `value` normalized by `domain.assets.normalize_asset_value` (hostnames lowercase punycode via `idna`, canonical IPs, `http(s)` URLs without credentials/fragment/default port; repo/binary not yet); `source` user/discovered, `parent_id` = asset a discovered one was found under (set once at first sighting, so no cycles; user-added assets are roots; deleting a parent cascades to its discovered children), `first_seen`/`last_seen`, `is_active` + `deactivated_at` (only sightings after it reactivate), `tags`, `details` (a JSONB bag for scan-derived metadata: CT discovery stores `{"wildcard": true}` on wildcard zones; #16 adds DNS records). Roots come from `services.assets.add_root_domain` (any name `check_public_hostname` accepts, registrable or subdomain; re-adding an archived root restores it) and are removed only by `archive_root_domain` (root + its discovered children go inactive; findings and scans are kept) |
 | `AssetRelation` | graph edges: `subdomain_of`, `cname_to`, `resolves_to`, `serves`; unique per `(org_id, from, to, kind)`, no self-edges. `services.assets.record_asset` / `record_relation` upsert atomically (`INSERT … ON CONFLICT`): re-seen rows extend `last_seen`, never downgrade `source=user`, don't commit (the pipeline commits once), and raise `AssetNotFound` for a parent or endpoint that isn't the org's (locked `FOR KEY SHARE` so it can't vanish before the insert) |
 | `Verification` | proof of ownership of a root domain (`_attacksurf-verify.<root>` TXT, `pending`/`verified`/`revoked`, `verified_at`, `last_checked_at`, `recheck_at`, `expires_at`; unique per `(org_id, asset_id)`). Renewals are due after 20 hours; authorization expires after 24 hours. Subdomains inherit their root's proof; a `verified` row counts only while `expires_at` is in the future. Written by `services.verifications` / `services.ownership`, read by `DbOwnershipChecker` (ADRs 0014, 0015) |
 | `Scan`, `Job` | one run of a profile (`dns_passive`, …) against a root asset (`queued/running/completed/failed/cancelled`, triggered by `user`/`schedule`, `stats`), and its jobs: a pipeline stage, or one scanner on one asset (`skipped` = not run, e.g. denied by ScopeGuard). `scan_id` is NULL for work that isn't part of a scan (ownership verification). Deleting the root asset deletes its scans (their jobs are kept with `scan_id` NULL); deleting another asset keeps the job with `asset_id` NULL |
@@ -113,14 +113,25 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 - A failing scanner fails only its job, not the scan.
 - Implemented framework (ADR 0011/0013): `domain/scanners.py` defines pydantic `ScanOutput`,
   `AssetRef(type, value)`, relations, raw rule findings/evidence, `ScanContext`, the `Scanner`
-  protocol, the frozen `ScannerGrant` and `ScannerRuntime` (validated DNS/HTTP adapters and the
-  grant-checked sandbox port from `domain/sandbox.py`). Plugins
+  protocol, the frozen `ScannerGrant` and `ScannerRuntime` (validated DNS/HTTP adapters, the
+  run cache and the grant-checked sandbox port from `domain/sandbox.py`). Plugins
   declare `name`, `asset_types`, `queue`, `requires_verification`, `timeout_seconds`
   (0 < timeout <= 240 s) and `grant`, and return `run(ctx, asset) -> ScanOutput`.
-- `scanners/registry.py` supplies `@register_scanner`; import plugin modules explicitly at
-  startup. `scanners/profiles.py` selects discovery/check plugins by name. `dns_passive` is
-  intentionally empty until DNS plugins land; empty/unknown profiles are rejected. Profiles
-  cannot route to the reserved `active`/`analysis` queues before those workers are implemented.
+  `ScanOutput.wildcard_zones` marks assets that are wildcard DNS zones rather than hosts; a
+  discovery profile's cap reaches the plugin through `ScanContext.max_discovered_assets`.
+- `scanners/registry.py` supplies `@register_scanner`; `workers/app.py` and `app.create_app`
+  import production plugin modules explicitly, so each process registers them once.
+  `scanners/profiles.py`
+  selects discovery/check plugins by name. `dns_passive` runs `dns.discovery.ct` with
+  `max_discovered_assets=1000`; empty/unknown profiles are rejected. Profiles cannot route to
+  the reserved `active`/`analysis` queues before those workers are implemented.
+- **CT discovery (#15, ADR 0022):** `dns.discovery.ct` queries crt.sh's JSON endpoint and falls
+  back to Cert Spotter when crt.sh fails, times out or truncates. Names are normalized, filtered
+  to the root, deduplicated and capped (shallow names first). Complete results are cached per
+  root in Redis for six hours through `ctx.runtime.cache`; failures are misses, never job
+  failures. A bounded number of random-label DNS lookups (`ctx.runtime.dns`) detects wildcard
+  zones, and detected zones are persisted as `Asset.details["wildcard"] = true`. When both
+  sources fail the scanner raises `TransientJobError`, so Celery retries with backoff.
 - `services.scans.start_scan` validates a tenant-owned, active domain root, audits and commits
   the scan/kickoff job, then enqueues `passive.discover`. Two waves use Celery chords:
   discovery on the root, then checks on the active root and its known direct children, filtered
@@ -161,14 +172,17 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   target (public domain under the bundled PSL; no internal/single-label names or IP literals;
   resolved addresses must be public), requires verified ownership for active checks, and returns
   run-scoped DNS/HTTP adapters bounded by the plugin's `ScannerGrant` (declared public data
-  services only, or the target after verification). `workers.runtime.scanner_gate()` wires it
-  with `services.ownership.DbOwnershipChecker`, so an active check runs only while the target's
-  root has a verified, unexpired TXT proof (ADR 0014).
+  services only, or the target after verification), plus the run cache.
+  `workers.runtime.scanner_gate()` wires it with `services.ownership.DbOwnershipChecker`, so an
+  active check runs
+  only while the target's root has a verified, unexpired TXT proof (ADR 0014).
 - Scanners only reach the network through those adapters: `infra/http.py` pins the validated
   address (keeping `Host`/SNI), re-checks redirects against the grant, ignores env proxies and
   caps time and body size; `infra/dns.py` uses the stub resolver without search domains. A test
   fails if scanner modules import raw network libraries. Profiles may cap discovered assets per
-  root (`max_discovered_assets`), enforced at persistence.
+  root (`max_discovered_assets`), enforced by the scanner and at persistence; CT discovery also
+  marks wildcard zones in `Asset.details` so later resolution does not treat wildcard answers as
+  real hosts.
 - Repository fetches (ADR 0017, not built yet) use `ScopeGuard.check_fetch` and a separate
   streaming port for git smart HTTP (dulwich over the pinned client). There's no `git` binary
   with network access, hosts come from an allowlist in code, and packs are stored unparsed.

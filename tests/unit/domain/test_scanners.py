@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import pytest
 from pydantic import ValidationError
 
@@ -7,6 +9,7 @@ from attacksurf.domain.scanners import (
     AssetRef,
     RawEvidence,
     RawFinding,
+    ScanContext,
     ScanOutput,
 )
 
@@ -49,3 +52,22 @@ def test_evidence_limits_utf8_bytes_and_rejects_nonfinite_json() -> None:
         RawEvidence(data={"text": "é" * (MAX_EVIDENCE_BYTES // 2)})
     with pytest.raises(ValidationError):
         RawEvidence(data={"number": float("nan")})
+
+
+def test_wildcard_zones_round_trip_and_are_capped() -> None:
+    zone = AssetRef(type=AssetType.SUBDOMAIN, value="dev.example.com")
+
+    output = ScanOutput(wildcard_zones=(zone,))
+
+    assert ScanOutput.model_validate_json(output.model_dump_json()) == output
+    with pytest.raises(ValidationError):
+        ScanOutput(wildcard_zones=(zone,) * 101)
+
+
+def test_scan_context_has_no_discovery_cap_by_default() -> None:
+    root = AssetRef(type=AssetType.DOMAIN, value="example.com")
+
+    ctx = ScanContext(uuid4(), uuid4(), root, "fixture")
+
+    assert ctx.max_discovered_assets is None
+    assert ctx.runtime is None

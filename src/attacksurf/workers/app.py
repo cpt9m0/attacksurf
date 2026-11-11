@@ -8,6 +8,9 @@ from celery.signals import setup_logging, worker_process_init
 
 from attacksurf.infra.logging import configure_logging
 from attacksurf.infra.queue import celery_config
+
+# Importing the module registers its plugin; production plugins are listed here explicitly.
+from attacksurf.scanners.dns import discovery as _ct_discovery  # noqa: F401
 from attacksurf.workers import runtime
 
 TASK_MODULES = (
@@ -35,3 +38,5 @@ def _setup_logging(**_kwargs: Any) -> None:
 def _fresh_db_pool(**_kwargs: Any) -> None:
     # A pool inherited from the parent would share sockets between processes.
     runtime.session_factory.cache_clear()
+    # The Redis client (and its connection pool) must also be created after the fork.
+    runtime.scan_cache.cache_clear()

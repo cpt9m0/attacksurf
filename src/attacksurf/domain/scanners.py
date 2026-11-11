@@ -81,6 +81,9 @@ class ScanOutput(OutputModel):
     assets: tuple[AssetRef, ...] = Field(default=(), max_length=1000)
     relations: tuple[DiscoveredRelation, ...] = Field(default=(), max_length=2000)
     findings: tuple[RawFinding, ...] = Field(default=(), max_length=1000)
+    # Assets that are wildcard DNS zones rather than individual hosts. Persistence stores a
+    # marker in `Asset.details`, so later resolution must not treat names under them as real.
+    wildcard_zones: tuple[AssetRef, ...] = Field(default=(), max_length=100)
 
     @model_validator(mode="after")
     def cap_size(self) -> Self:
@@ -124,6 +127,9 @@ class ScanContext:
     root_asset: AssetRef
     profile: str
     runtime: ScannerRuntime | None = None  # set by the worker after the gate approves the run
+    # The profile's per-root discovery cap, so a discovery scanner can stop before producing
+    # more output than persistence would admit.
+    max_discovered_assets: int | None = None
 
 
 @dataclass(frozen=True)

@@ -452,3 +452,79 @@ def test_concurrent_capped_persists_do_not_deadlock_on_the_root(
         assert children == ["www.capped.example"]  # inserted once, cap respected
     finally:
         _forget(db_engine, org_id)
+
+
+def test_persist_marks_discovered_wildcard_zones_in_asset_details(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    zone = AssetRef(type=AssetType.SUBDOMAIN, value="dev.acme.example")
+    output = ScanOutput(assets=(zone,), wildcard_zones=(zone,))
+
+    persist_scan_output(
+        db_session, scan, scan.root_asset_id, output, catalog=catalog, discovered_limit=10
+    )
+    db_session.flush()
+
+    row = db_session.scalars(scoped(Asset, scan.org_id).where(Asset.value == zone.value)).one()
+    assert row.details == {"wildcard": True}
+
+
+def test_persist_marks_the_root_wildcard_without_discovered_assets(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    root = db_session.get_one(Asset, scan.root_asset_id)
+    output = ScanOutput(wildcard_zones=(AssetRef(type=AssetType.DOMAIN, value=root.value),))
+
+    persist_scan_output(
+        db_session, scan, scan.root_asset_id, output, catalog=catalog, discovered_limit=10
+    )
+    db_session.flush()
+
+    assert root.details == {"wildcard": True}
+
+
+def test_persist_merges_the_wildcard_marker_with_existing_details(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    root = db_session.get_one(Asset, scan.root_asset_id)
+    root.details = {"owner": "security"}
+    db_session.flush()
+    output = ScanOutput(wildcard_zones=(AssetRef(type=AssetType.DOMAIN, value=root.value),))
+
+    persist_scan_output(db_session, scan, scan.root_asset_id, output, catalog=catalog)
+    db_session.flush()
+
+    assert root.details == {"owner": "security", "wildcard": True}
+
+
+def test_persist_skips_a_wildcard_zone_dropped_by_the_cap(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    kept = AssetRef(type=AssetType.SUBDOMAIN, value="a.acme.example")
+    dropped = AssetRef(type=AssetType.SUBDOMAIN, value="b.acme.example")
+    output = ScanOutput(assets=(kept, dropped), wildcard_zones=(dropped,))
+
+    persist_scan_output(
+        db_session, scan, scan.root_asset_id, output, catalog=catalog, discovered_limit=1
+    )
+    db_session.flush()
+
+    values = {row.value: row.details for row in db_session.scalars(scoped(Asset, scan.org_id))}
+    assert values[kept.value] == {}
+    assert dropped.value not in values
+
+
+def test_persist_rejects_a_wildcard_zone_it_never_reported(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    output = ScanOutput(
+        wildcard_zones=(AssetRef(type=AssetType.SUBDOMAIN, value="ghost.acme.example"),)
+    )
+
+    with pytest.raises(ValueError, match="reference"):
+        persist_scan_output(db_session, scan, scan.root_asset_id, output, catalog=catalog)

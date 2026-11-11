@@ -1,0 +1,9 @@
+[
+  {
+    "id": "2004",
+    "cert_sha256": "03",
+    "dns_names": ["build.acme.example", "*.build.acme.example"],
+    "not_before": "2026-01-01T00:00:00Z",
+    "not_after": "2027-01-01T00:00:00Z"
+  }
+]

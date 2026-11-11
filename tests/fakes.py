@@ -40,6 +40,23 @@ class FakeQueue:
         return "task-1"
 
 
+class FakeCache:
+    """In-memory `ScanCache` that records keys, values and TTLs."""
+
+    def __init__(self, values: dict[str, str] | None = None) -> None:
+        self.values = dict(values or {})
+        self.ttls: dict[str, int] = {}
+        self.gets: list[str] = []
+
+    def get(self, key: str) -> str | None:
+        self.gets.append(key)
+        return self.values.get(key)
+
+    def set(self, key: str, value: str, *, ttl_seconds: int) -> None:
+        self.values[key] = value
+        self.ttls[key] = ttl_seconds
+
+
 @dataclass(frozen=True)
 class FakeLLMCall:
     messages: tuple[Message, ...]

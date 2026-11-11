@@ -55,7 +55,13 @@ def run_check(
     asset_id = asset.id
     profile = profiles.get(scan.profile) if profiles else None
     target = AssetRef(type=asset.type, value=asset.value)
-    ctx = ScanContext(org_id, scan.id, AssetRef(type=root.type, value=root.value), scan.profile)
+    ctx = ScanContext(
+        org_id,
+        scan.id,
+        AssetRef(type=root.type, value=root.value),
+        scan.profile,
+        max_discovered_assets=profile.max_discovered_assets if profile else None,
+    )
     session.rollback()  # release locks/connection before untrusted or slow I/O
     try:
         runtime = gate.check(ctx, target, scanner)
