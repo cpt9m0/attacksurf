@@ -5,10 +5,12 @@
 **Updated:** 2026-11-11 · **Branch:** `15-ct-discovery` · **Issue:** #15 · **PR:** #155
 
 ## Status
-Issue #15 is implemented and the PR is open. All local checks are green: ruff, pyright,
-import-linter, pre-commit, `uv lock --check`, and `pytest` with Postgres (1330 passed, 18
-skipped, coverage 97.21%). A real `dns_passive` scan of `example.com` in the dev Compose stack
-completed and persisted `dev`, `m`, `products`, `support` and `www` subdomains with five
+Issue #15 is implemented and PR #155 is ready to merge: the Cert Spotter pagination review
+comment is addressed in `e303419` (use the last issuance id as `after`, repeat until an empty
+page, never cache a partial result). All local checks are green: ruff, pyright, import-linter,
+pre-commit, `uv lock --check`, and `pytest` with Postgres (1333 passed, 18 skipped, coverage
+97.24%); all CI checks pass too. A real `dns_passive` scan of `example.com` in the dev Compose
+stack completed and persisted `dev`, `m`, `products`, `support` and `www` subdomains with five
 `subdomain_of` relations. The test org was removed afterwards.
 
 ## Last task
@@ -17,15 +19,16 @@ completed and persisted `dev`, `m`, `products`, `support` and `www` subdomains w
   `Asset.details["wildcard"]` persistence, and the `dns_passive` discovery cap (ADR 0022).
 - Added unit/integration/fixture tests; updated architecture, security, add-scanner skill,
   AGENTS, CHANGELOG and ADR 0022.
+- Addressed the Cert Spotter pagination review comment: cursor-based `after` pagination until
+  an empty page, with incomplete results never cached.
 - Local `worker-passive` was restarted to load the new scanner; the Compose stack is still up.
 
 ## Next step
-Review and merge PR #155. After merge, implement #16 (DNS resolution + asset graph); it should
+Merge PR #155, then implement #16 (DNS resolution + asset graph); it should
 read `Asset.details["wildcard"]` before treating wildcard answers as real hosts and can reuse
 `ctx.runtime.cache` for RDAP-style source data.
 
 ## Open threads
-- PR #155 is open and ready for review; wait for CI and review.
 - The live scan seeded the shared Redis cache with the public CT result for `example.com`
   (`attacksurf:scan-cache:v1:ct:v1:example.com`, TTL 6 h). It is safe to leave; delete the key if
   a fresh live source query is needed.
