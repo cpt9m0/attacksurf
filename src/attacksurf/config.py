@@ -3,8 +3,9 @@
 import secrets
 from functools import lru_cache
 from typing import Literal, Self
+from urllib.parse import urlsplit
 
-from pydantic import Field, PrivateAttr, SecretStr, model_validator
+from pydantic import Field, PrivateAttr, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from attacksurf.domain.llm import ProviderKind
@@ -12,6 +13,8 @@ from attacksurf.domain.llm import ProviderKind
 MIN_PROD_SECRET_KEY_LENGTH = 32
 # Values that appear in docs/examples; using one in prod means a publicly known signing key.
 _PLACEHOLDER_SECRET_KEYS = frozenset({"change-me", "changeme", "secret", "dev", "test"})
+# Below the proxy's 900 s wait timeout, so the launcher's own kill always fires first.
+SANDBOX_MAX_WALL_TIME_SECONDS = 840
 
 
 class Settings(BaseSettings):
@@ -74,24 +77,25 @@ class Settings(BaseSettings):
         return self.env == "prod"
 
 
-class SandboxProxySettings(BaseSettings):
-    """`sandbox-proxy` only (ADR 0016). Separate so that process never holds app secrets.
+class _SandboxServiceSettings(BaseSettings):
+    """Fields and checks shared by the sandbox services (ADR 0016), kept apart from app secrets.
 
-    Environment only, no `.env`: the root-equivalent service must not pick up a stray file.
+    Environment only, no `.env`: services that drive Docker must not pick up a stray file.
     """
 
-    model_config = SettingsConfigDict(env_ignore_empty=True, extra="ignore")
+    # hide_input_in_errors: a bad value (e.g. a URL with a password) must not appear in startup
+    # errors that land in logs.
+    model_config = SettingsConfigDict(
+        env_ignore_empty=True, extra="ignore", hide_input_in_errors=True
+    )
 
     env: Literal["dev", "test", "prod"] = "dev"
     sandbox_artifact_root: str = "/var/lib/attacksurf/artifacts"
     sandbox_images_lock: str = "sandbox-images.lock"
-    sandbox_docker_socket: str = "/var/run/docker.sock"
-    sandbox_proxy_host: str = "0.0.0.0"  # noqa: S104 - reachable only on an internal network
-    sandbox_proxy_port: int = Field(default=8790, ge=1, le=65535)
     sandbox_allow_runc: bool = False  # dev/CI hosts without gVisor; refused in prod
 
     @model_validator(mode="after")
-    def _validate(self) -> Self:
+    def _validate_sandbox(self) -> Self:
         if self.env == "prod" and self.sandbox_allow_runc:
             raise ValueError("SANDBOX_ALLOW_RUNC (runc) is not allowed when ENV=prod")
         root = self.sandbox_artifact_root
@@ -100,9 +104,37 @@ class SandboxProxySettings(BaseSettings):
         self.sandbox_artifact_root = root.rstrip("/")
         return self
 
+
+class SandboxProxySettings(_SandboxServiceSettings):
+    """`sandbox-proxy` only: the one process that holds the Docker socket."""
+
+    sandbox_docker_socket: str = "/var/run/docker.sock"
+    sandbox_proxy_host: str = "0.0.0.0"  # noqa: S104 - reachable only on an internal network
+    sandbox_proxy_port: int = Field(default=8790, ge=1, le=65535)
+
     @property
     def allowed_runtimes(self) -> frozenset[str]:
         return frozenset({"runsc", "runc"} if self.sandbox_allow_runc else {"runsc"})
+
+
+class SandboxLauncherSettings(_SandboxServiceSettings):
+    """`sandbox-launcher` only: runs analyzers through the proxy, never touches Docker itself."""
+
+    sandbox_proxy_url: str = "http://sandbox-proxy:8790"
+    sandbox_launcher_host: str = "0.0.0.0"  # noqa: S104 - reachable only on an internal network
+    sandbox_launcher_port: int = Field(default=8791, ge=1, le=65535)
+    sandbox_wall_time_seconds: int = Field(default=600, ge=1, le=SANDBOX_MAX_WALL_TIME_SECONDS)
+    sandbox_max_concurrent_runs: int = Field(default=2, ge=1, le=16)
+
+    @field_validator("sandbox_proxy_url")
+    @classmethod
+    def _require_http_proxy_url(cls, value: str) -> str:
+        # Plain http only for now: the proxy is reached over an internal network. The message
+        # never repeats the value, which may embed credentials.
+        parts = urlsplit(value)
+        if parts.scheme != "http" or not parts.hostname:
+            raise ValueError("SANDBOX_PROXY_URL must be an http:// URL with a host")
+        return value
 
 
 @lru_cache

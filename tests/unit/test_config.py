@@ -1,13 +1,21 @@
+from pathlib import Path
+
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from attacksurf.config import SandboxProxySettings, get_settings
+from attacksurf.config import (
+    SANDBOX_MAX_WALL_TIME_SECONDS,
+    SandboxLauncherSettings,
+    SandboxProxySettings,
+    get_settings,
+)
+from attacksurf.sandbox_proxy.server import RUN_TIMEOUT_SECONDS
 from tests.helpers import PROD_SECRET_KEY, make_settings, settings_from_env
 
 
 @pytest.fixture(autouse=True)
 def _clean_settings_environment(clean_env: pytest.MonkeyPatch) -> None:
-    """Direct proxy constructors must not inherit operator settings."""
+    """Direct proxy and launcher constructors must not inherit operator settings."""
 
 
 def test_settings_defaults_to_dev() -> None:
@@ -175,3 +183,133 @@ def test_sandbox_proxy_settings_refuse_runc_in_prod() -> None:
 def test_sandbox_proxy_settings_refuse_unsafe_artifact_roots(root: str) -> None:
     with pytest.raises(ValueError, match="artifact root"):
         SandboxProxySettings(sandbox_artifact_root=root)
+
+
+def test_sandbox_launcher_settings_defaults() -> None:
+    settings = SandboxLauncherSettings()
+
+    assert settings.env == "dev"
+    assert settings.sandbox_artifact_root == "/var/lib/attacksurf/artifacts"
+    assert settings.sandbox_images_lock == "sandbox-images.lock"
+    assert settings.sandbox_proxy_url == "http://sandbox-proxy:8790"
+    assert settings.sandbox_launcher_port == 8791
+    assert settings.sandbox_wall_time_seconds == 600
+    assert settings.sandbox_max_concurrent_runs == 2
+    assert settings.sandbox_allow_runc is False
+
+
+def test_sandbox_launcher_settings_need_no_app_secrets_in_prod() -> None:
+    settings = SandboxLauncherSettings(env="prod", sandbox_artifact_root="/srv/artifacts")
+
+    assert not hasattr(settings, "secret_key")
+    assert not hasattr(settings, "database_url")
+    assert not hasattr(settings, "redis_url")
+    assert not hasattr(settings, "sandbox_docker_socket")
+
+
+def test_sandbox_launcher_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("ENV", "prod")
+    clean_env.setenv("SANDBOX_ARTIFACT_ROOT", "/srv/artifacts/")
+    clean_env.setenv("SANDBOX_PROXY_URL", "http://proxy.internal:9000")
+    clean_env.setenv("SANDBOX_LAUNCHER_PORT", "9001")
+    clean_env.setenv("SANDBOX_WALL_TIME_SECONDS", "120")
+    clean_env.setenv("SANDBOX_MAX_CONCURRENT_RUNS", "4")
+
+    settings = SandboxLauncherSettings()
+
+    assert settings.env == "prod"
+    assert settings.sandbox_artifact_root == "/srv/artifacts"
+    assert settings.sandbox_proxy_url == "http://proxy.internal:9000"
+    assert settings.sandbox_launcher_port == 9001
+    assert settings.sandbox_wall_time_seconds == 120
+    assert settings.sandbox_max_concurrent_runs == 4
+
+
+def test_sandbox_launcher_settings_ignore_dotenv_file(
+    clean_env: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / ".env").write_text("SANDBOX_ALLOW_RUNC=true\nSANDBOX_WALL_TIME_SECONDS=5\n")
+    clean_env.chdir(tmp_path)
+
+    settings = SandboxLauncherSettings()
+
+    assert settings.sandbox_allow_runc is False
+    assert settings.sandbox_wall_time_seconds == 600
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("sandbox_wall_time_seconds", 0),
+        ("sandbox_wall_time_seconds", SANDBOX_MAX_WALL_TIME_SECONDS + 1),
+        ("sandbox_max_concurrent_runs", 0),
+        ("sandbox_max_concurrent_runs", 17),
+        ("sandbox_launcher_port", 0),
+        ("sandbox_launcher_port", 65536),
+    ],
+)
+def test_sandbox_launcher_settings_reject_out_of_range(field: str, value: int) -> None:
+    with pytest.raises(ValidationError, match=field):
+        SandboxLauncherSettings.model_validate({field: value})
+
+
+def test_sandbox_launcher_settings_accept_wall_time_ceiling() -> None:
+    settings = SandboxLauncherSettings(sandbox_wall_time_seconds=SANDBOX_MAX_WALL_TIME_SECONDS)
+
+    assert settings.sandbox_wall_time_seconds == SANDBOX_MAX_WALL_TIME_SECONDS
+
+
+def test_sandbox_launcher_wall_time_ceiling_is_below_proxy_run_timeout() -> None:
+    # The launcher must kill an overrunning container before the proxy drops the wait call.
+    assert SANDBOX_MAX_WALL_TIME_SECONDS < RUN_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://sandbox-proxy:8790", "http://proxy.internal:9000", "http://127.0.0.1:8790/"],
+)
+def test_sandbox_launcher_settings_accept_http_proxy_urls(url: str) -> None:
+    assert SandboxLauncherSettings(sandbox_proxy_url=url).sandbox_proxy_url == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://sandbox-proxy:8790",
+        "unix:///var/run/docker.sock",
+        "file:///etc/passwd",
+        "ftp://sandbox-proxy",
+        "sandbox-proxy:8790",
+        "//sandbox-proxy:8790",
+        "http://",
+        "http:///path",
+        "",
+    ],
+)
+def test_sandbox_launcher_settings_refuse_non_http_proxy_urls(url: str) -> None:
+    with pytest.raises(ValueError, match="SANDBOX_PROXY_URL"):
+        SandboxLauncherSettings(sandbox_proxy_url=url)
+
+
+def test_sandbox_launcher_proxy_url_error_does_not_echo_credentials() -> None:
+    url = "ftp://user:hunter2@sandbox-proxy"
+
+    with pytest.raises(ValueError, match="SANDBOX_PROXY_URL") as excinfo:
+        SandboxLauncherSettings(sandbox_proxy_url=url)
+
+    assert "hunter2" not in str(excinfo.value)
+
+
+def test_sandbox_launcher_settings_allow_runc_only_when_asked_outside_prod() -> None:
+    assert SandboxLauncherSettings(env="dev", sandbox_allow_runc=True).sandbox_allow_runc
+
+
+def test_sandbox_launcher_settings_refuse_runc_in_prod() -> None:
+    with pytest.raises(ValueError, match="runc"):
+        SandboxLauncherSettings(env="prod", sandbox_allow_runc=True)
+
+
+@pytest.mark.parametrize("root", ["relative/path", "/", "/srv/../etc"])
+def test_sandbox_launcher_settings_refuse_unsafe_artifact_roots(root: str) -> None:
+    with pytest.raises(ValueError, match="artifact root"):
+        SandboxLauncherSettings(sandbox_artifact_root=root)
