@@ -41,25 +41,23 @@ def persist_scan_output(
     tenant with assets. The limit covers the root's discovered assets in total (what exists plus
     what this run adds), so a huge zone can't be crawled in chunks across rescans. Relations
     and findings about dropped names are skipped: they are not attached to another asset, and
-    exceeding the cap never fails the job.
+    exceeding the cap never fails the job. Wildcard-zone markers are merged into `Asset.details`
+    for the root and the discovered zones that survived the cap (ADR 0022).
 
     Raises `ScanCancelled` for a cancelled scan and `AssetNotFound` when the scan's root is
     archived (ADR 0021). Locks are taken in the order `archive_root_domain` uses (scan rows, then
     the root): the caller already holds the scan row lock. The root is read `FOR KEY SHARE`,
-    which never conflicts with the archive, or locked `FOR UPDATE` once when the cap needs it.
+    which never conflicts with the archive, or locked `FOR UPDATE` once when the cap or a root
+    wildcard marker needs it.
     """
     asset = get_scoped(session, Asset, asset_id, scan.org_id)
     if asset is None:
         raise AssetNotFound("Asset not found.")
     if scan.status in TERMINAL:
         raise ScanCancelled("Scan was cancelled.")
-    # One root lock, taken once: key-share normally, the write lock only for the cap. Taking an
-    # exclusive lock here after a key-share one would deadlock concurrent persists (no upgrade).
-    if discovered_limit is not None:
-        _writable_root(session, scan)
-    else:
-        _check_root_archived(session, scan)
-    refs = {(asset.type, asset.value): asset.id}
+    input_ref = (asset.type, asset.value)
+    root = _lock_root(session, scan, asset, output, discovered_limit=discovered_limit)
+    refs = {input_ref: asset.id}
     # Every name the plugin reported is a valid reference, including ones the cap will drop
     # (a reference to a name it never reported is still a plugin bug and fails the job).
     declared = set(refs) | {(a.type, a.value) for a in output.assets}
@@ -72,7 +70,9 @@ def persist_scan_output(
         admitted = {(ref.type, ref.value) for ref in keep}
         output = output.model_copy(update={"assets": keep})
     seen = scan.started_at or scan.created_at
-    input_ref = (asset.type, asset.value)
+    rows: dict[tuple[AssetType, str], Asset] = {
+        input_ref: root if asset.id == scan.root_asset_id else asset
+    }
     written: set[tuple[AssetType, str]] = set()
     for discovered in output.assets:
         row = record_asset(
@@ -86,6 +86,7 @@ def persist_scan_output(
         )
         written.add((row.type, row.value))
         refs[(row.type, row.value)] = row.id
+        rows[(row.type, row.value)] = row
     # The cap may have dropped a discovered name; links to it are skipped, never guessed.
     for relation in output.relations:
         if not _usable(relation.from_asset, written, input_ref, admitted):
@@ -100,6 +101,7 @@ def persist_scan_output(
             relation.kind,
             seen_at=seen,
         )
+    _mark_wildcards(rows, output.wildcard_zones)
     events: list[FindingCreated] = []
     for raw in output.findings:
         target_ref = (raw.asset.type, raw.asset.value) if raw.asset else input_ref
@@ -113,6 +115,29 @@ def persist_scan_output(
             events.append(FindingCreated(scan.org_id, scan.id, finding_id))
         _upsert_evidence(session, scan, finding_id, raw, seen)
     return events
+
+
+def _lock_root(
+    session: Session,
+    scan: Scan,
+    asset: Asset,
+    output: ScanOutput,
+    *,
+    discovered_limit: int | None,
+) -> Asset:
+    """Take the one root lock this persist needs, in the archive-compatible order.
+
+    The cap needs the write lock (it counts and admits under it); a wildcard marker on the input
+    root does too, because the marker updates the root row. A key-share lock is never upgraded:
+    concurrent persists would deadlock doing that, so the choice is made before locking.
+    """
+    input_ref = (asset.type, asset.value)
+    marks_input = any((z.type, z.value) == input_ref for z in output.wildcard_zones)
+    if marks_input and asset.id != scan.root_asset_id:
+        raise ValueError("wildcard markers apply to the scan root")
+    if discovered_limit is not None or marks_input:
+        return _writable_root(session, scan)
+    return _check_root_archived(session, scan)
 
 
 def _check_root_archived(session: Session, scan: Scan) -> Asset:
@@ -158,6 +183,8 @@ def _validate_references(
     for relation in output.relations:
         _resolve(declared, relation.from_asset)
         _resolve(declared, relation.to_asset)
+    for zone in output.wildcard_zones:
+        _resolve(declared, zone)
     for raw in output.findings:
         get_rule(raw.rule_id, catalog)
         if raw.asset:
@@ -205,6 +232,20 @@ def _usable(
     if admitted is not None and key not in admitted:
         return False
     return key in written
+
+
+def _mark_wildcards(
+    rows: Mapping[tuple[AssetType, str], Asset], zones: tuple[AssetRef, ...]
+) -> None:
+    """Merge the wildcard marker into the rows that exist; a cap-dropped zone has no row.
+
+    `details` is a JSONB bag shared with later scanners (#16 adds DNS records), so the marker is
+    merged rather than replacing whatever is already there.
+    """
+    for zone in zones:
+        row = rows.get((zone.type, zone.value))
+        if row is not None:
+            row.details = {**(row.details or {}), "wildcard": True}
 
 
 def _admit(
