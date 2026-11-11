@@ -2,16 +2,16 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-11 · **Branch:** `15-ct-discovery` · **Issue:** #15 · **PR:** #155
+**Updated:** 2026-11-11 · **Branch:** `main` · **Issue:** #15 · **PR:** #155 (merged)
 
 ## Status
-Issue #15 is implemented and PR #155 is ready to merge: the Cert Spotter pagination review
-comment is addressed in `e303419` (use the last issuance id as `after`, repeat until an empty
-page, never cache a partial result). All local checks are green: ruff, pyright, import-linter,
-pre-commit, `uv lock --check`, and `pytest` with Postgres (1333 passed, 18 skipped, coverage
-97.24%); all CI checks pass too. A real `dns_passive` scan of `example.com` in the dev Compose
-stack completed and persisted `dev`, `m`, `products`, `support` and `www` subdomains with five
-`subdomain_of` relations. The test org was removed afterwards.
+Issue #15 is merged into `main` as `dfc8111` (PR #155). The Cert Spotter pagination review
+comment is addressed: the source follows the last issuance id as `after`, repeats until an empty
+page, and never caches a partial result. All local checks are green: ruff, pyright,
+import-linter, pre-commit, `uv lock --check`, and `pytest` with Postgres (1333 passed, 18 skipped,
+coverage 97.24%); all PR CI checks passed. A real `dns_passive` scan of `example.com` in the dev
+Compose stack completed and persisted `dev`, `m`, `products`, `support` and `www` subdomains with
+five `subdomain_of` relations. The test org was removed afterwards.
 
 ## Last task
 - Added the `dns.discovery.ct` scanner (crt.sh + Cert Spotter fallback), the namespaced
@@ -21,10 +21,12 @@ stack completed and persisted `dev`, `m`, `products`, `support` and `www` subdom
   AGENTS, CHANGELOG and ADR 0022.
 - Addressed the Cert Spotter pagination review comment: cursor-based `after` pagination until
   an empty page, with incomplete results never cached.
+- Squash-merged PR #155 into `main` as `dfc8111`; the remote issue branch was deleted and the
+  local checkout is on `main`.
 - Local `worker-passive` was restarted to load the new scanner; the Compose stack is still up.
 
 ## Next step
-Merge PR #155, then implement #16 (DNS resolution + asset graph); it should
+Implement #16 (DNS resolution + asset graph); it should
 read `Asset.details["wildcard"]` before treating wildcard answers as real hosts and can reuse
 `ctx.runtime.cache` for RDAP-style source data.
 
