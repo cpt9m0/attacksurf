@@ -13,6 +13,7 @@ from attacksurf.sandbox_proxy.policy import (
     OSV_BIND,
     SANDBOX_USER,
     PolicyViolation,
+    Route,
     SandboxPolicy,
     classify_request,
     load_images,
@@ -211,6 +212,11 @@ def test_malformed_create_body_is_rejected(body: object) -> None:
         ("POST", f"/containers/{CONTAINER}/attach?stream=1&stdout=1", "attach"),
         ("POST", f"/containers/{CONTAINER}/kill?signal=SIGKILL", "kill"),
         ("DELETE", f"/containers/{CONTAINER}?force=1", "remove"),
+        # The runtime-info call (ADR 0023), across the allowed API version range.
+        ("GET", "/info", "info"),
+        ("GET", "/v1.30/info", "info"),
+        ("GET", "/v1.47/info", "info"),
+        ("GET", "/v1.99/info", "info"),
     ],
 )
 def test_allowed_docker_calls_are_recognized(method: str, target: str, action: str) -> None:
@@ -242,9 +248,49 @@ def test_allowed_docker_calls_are_recognized(method: str, target: str, action: s
         ("DELETE", f"/containers/{CONTAINER}?v=1"),
         ("POST", f"/containers/%2e%2e/{CONTAINER}/start"),
         ("POST", f"/v1.47/../containers/{CONTAINER}/start"),
+        ("GET", f"/containers/{CONTAINER}/start"),
+        ("DELETE", "/containers/create"),
+        ("DELETE", f"/containers/{CONTAINER}/kill"),
     ],
 )
 def test_other_docker_calls_are_denied(method: str, target: str) -> None:
+    with pytest.raises(PolicyViolation):
+        classify_request(method, target)
+
+
+# The runtime-info call (ADR 0023): routed to the canonical path, never to a container.
+def test_info_route_keeps_the_versioned_path_and_has_no_container() -> None:
+    assert classify_request("GET", "/v1.47/info") == Route("info", None, "/v1.47/info")
+
+
+def test_info_with_an_empty_query_string_is_canonicalized_to_the_bare_path() -> None:
+    assert classify_request("GET", "/info?").target == "/info"
+
+
+# Only a bare GET on the exact info path is allowed: other methods, options, fragments,
+# lookalike paths, legacy or unknown API versions, and path tricks are all refused.
+@pytest.mark.parametrize(
+    ("method", "target"),
+    [
+        ("POST", "/info"),
+        ("DELETE", "/info"),
+        ("POST", "/v1.47/info"),
+        ("GET", "/info?format=json"),
+        ("GET", "/info?verbose=1&verbose=1"),
+        ("GET", "/info#Runtimes"),
+        ("GET", "/infox"),
+        ("GET", "/info/"),
+        ("GET", "/INFO"),
+        ("GET", "/system/info"),
+        ("GET", "/v1.29/info"),
+        ("GET", "/v1.24/info"),
+        ("GET", "/v2.0/info"),
+        ("GET", "/v1.47/../info"),
+        ("GET", "/%69nfo"),
+        ("GET", f"/containers/{CONTAINER}/info"),
+    ],
+)
+def test_info_call_variants_are_denied(method: str, target: str) -> None:
     with pytest.raises(PolicyViolation):
         classify_request(method, target)
 

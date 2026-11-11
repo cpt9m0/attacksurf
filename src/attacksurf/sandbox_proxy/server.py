@@ -5,6 +5,8 @@ import json
 import re
 import socket
 import threading
+import time
+from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, NoReturn
@@ -22,6 +24,9 @@ from attacksurf.sandbox_proxy.policy import (
 
 MAX_CREATE_BODY_BYTES = 64 * 1024
 MAX_DOCKER_REPLY_BYTES = 1024 * 1024
+# Docker's info carries host labels, plugins and registry settings; only runtime names leave.
+MAX_DOCKER_INFO_BYTES = 8 * 1024 * 1024
+RUNTIMES_CACHE_SECONDS = 60
 MAX_TRACKED_CONTAINERS = 256
 CLIENT_TIMEOUT_SECONDS = 30
 DOCKER_TIMEOUT_SECONDS = 30
@@ -75,6 +80,29 @@ class _TrackedContainers:
             return container_id in self._ids
 
 
+class _RuntimeCache:
+    """Registered runtime names, so a looping client can't make the daemon rebuild its info.
+
+    One fetch at a time under the lock; only successes are kept, so a fixed daemon is seen
+    on the next request.
+    """
+
+    def __init__(self) -> None:
+        self._names: list[str] | None = None
+        self._expires = 0.0
+        self._lock = threading.Lock()
+
+    def get(self, fetch: Callable[[], list[str] | None]) -> list[str] | None:
+        with self._lock:
+            now = time.monotonic()
+            if self._names is None or now >= self._expires:
+                names = fetch()
+                if names is None:
+                    return None
+                self._names, self._expires = names, now + RUNTIMES_CACHE_SECONDS
+            return self._names
+
+
 class ProxyServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -83,6 +111,7 @@ class ProxyServer(ThreadingHTTPServer):
         self.policy = policy
         self.docker_socket = docker_socket
         self.containers = _TrackedContainers()
+        self.runtimes = _RuntimeCache()
 
 
 def make_server(host: str, port: int, policy: SandboxPolicy, docker_socket: str) -> ProxyServer:
@@ -99,6 +128,40 @@ class _UnixConnection(http.client.HTTPConnection):
         sock.settimeout(self.timeout)
         sock.connect(self._path)
         self.sock = sock
+
+
+class _DockerUnavailable(Exception):
+    """The daemon couldn't be reached or broke off; `sent` says whether a request may have
+    reached it, which decides whether a create's outcome is uncertain."""
+
+    def __init__(self, *, sent: bool) -> None:
+        super().__init__("Docker is unavailable.")
+        self.sent = sent
+
+
+def _docker_call(
+    docker_socket: str,
+    method: str,
+    target: str,
+    *,
+    timeout: float,
+    body: bytes | None = None,
+    headers: dict[str, str] | None = None,
+    limit: int = MAX_DOCKER_REPLY_BYTES,
+) -> tuple[int, bytes]:
+    """One non-streaming request to the daemon: status and at most `limit` reply bytes."""
+    connection = _UnixConnection(docker_socket, timeout)
+    sent = False
+    try:
+        connection.connect()
+        sent = True
+        connection.request(method, target, body=body, headers=headers or {})
+        response = connection.getresponse()
+        return response.status, response.read(limit)
+    except (OSError, http.client.HTTPException):
+        raise _DockerUnavailable(sent=sent) from None
+    finally:
+        connection.close()
 
 
 def _created_id(reply: bytes) -> str | None:
@@ -124,6 +187,17 @@ def _wait_succeeded(reply: bytes) -> bool:
     )
 
 
+def _runtime_names(reply: bytes) -> list[str] | None:
+    try:
+        parsed = json.loads(reply)
+    except ValueError:
+        return None
+    runtimes = parsed.get("Runtimes") if isinstance(parsed, dict) else None
+    if not isinstance(runtimes, dict):
+        return None
+    return sorted(runtimes)
+
+
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result = dict(pairs)
     if len(result) != len(pairs):
@@ -145,19 +219,21 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             self._check_ownership(route)
             if route.action == "attach":
                 self._stream(route)
+            elif route.action == "info":
+                self._runtimes(route)
             else:
                 self._forward(route, body)
         except PolicyViolation as violation:
             log.warning("sandbox_proxy_denied", reason=str(violation))
             self._reply(403, json.dumps({"message": str(violation)}).encode())
 
-    do_POST = do_DELETE = _handle
+    do_GET = do_POST = do_DELETE = _handle
 
     def _deny(self) -> None:
         log.warning("sandbox_proxy_denied", reason="Docker call not allowed.")
         self._reply(403, b'{"message": "Docker call not allowed."}')
 
-    do_GET = do_HEAD = do_PUT = do_PATCH = do_OPTIONS = _deny
+    do_HEAD = do_PUT = do_PATCH = do_OPTIONS = _deny
 
     def _read_body(self, route: Route) -> bytes:
         if self.headers.get("Transfer-Encoding"):
@@ -201,47 +277,48 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         A 404 is not proof of absence: a timed-out create may still finish later.
         Retry cleanup on the next create; release only after confirmed deletion.
         """
-        connection = _UnixConnection(self.server.docker_socket, DOCKER_TIMEOUT_SECONDS)
         try:
-            connection.request("DELETE", f"/containers/{name}?force=1", body=b"")
-            response = connection.getresponse()
-            if response.status == HTTPStatus.NO_CONTENT:
-                self.server.containers.release(name)
-        except (OSError, http.client.HTTPException):
-            pass
-        finally:
-            connection.close()
+            status, _ = _docker_call(
+                self.server.docker_socket,
+                "DELETE",
+                f"/containers/{name}?force=1",
+                timeout=DOCKER_TIMEOUT_SECONDS,
+                body=b"",
+            )
+        except _DockerUnavailable:
+            return
+        if status == HTTPStatus.NO_CONTENT:
+            self.server.containers.release(name)
 
     def _forward_reserved(self, route: Route, body: bytes, name: str | None) -> None:
         timeout = RUN_TIMEOUT_SECONDS if route.action == "wait" else DOCKER_TIMEOUT_SECONDS
-        connection = _UnixConnection(self.server.docker_socket, timeout)
         method = "DELETE" if route.action == "remove" else "POST"
         headers = {"Content-Type": "application/json"} if name else {}
-        sent = False
         try:
-            connection.connect()
-            sent = True
-            connection.request(method, route.target, body=body, headers=headers)
-            response = connection.getresponse()
-            reply = response.read(MAX_DOCKER_REPLY_BYTES)
-        except (OSError, http.client.HTTPException):
+            status, reply = _docker_call(
+                self.server.docker_socket,
+                method,
+                route.target,
+                timeout=timeout,
+                body=body,
+                headers=headers,
+            )
+        except _DockerUnavailable as error:
             if name:
-                self._finish_create(name, uncertain=sent)
+                self._finish_create(name, uncertain=error.sent)
             self._reply(502, b'{"message": "Docker is unavailable."}')
             return
-        finally:
-            connection.close()
-        valid = self._record(route, response.status, reply)
+        valid = self._record(route, status, reply)
         if name:
             uncertain = not (
-                (response.status == HTTPStatus.CREATED and valid)
-                or HTTPStatus.BAD_REQUEST <= response.status < HTTPStatus.INTERNAL_SERVER_ERROR
+                (status == HTTPStatus.CREATED and valid)
+                or HTTPStatus.BAD_REQUEST <= status < HTTPStatus.INTERNAL_SERVER_ERROR
             )
             self._finish_create(name, uncertain=uncertain)
         if not valid:
             self._reply(502, b'{"message": "Docker sent an invalid reply."}')
             return
-        self._reply(response.status, reply)
+        self._reply(status, reply)
 
     def _finish_create(self, name: str, *, uncertain: bool) -> None:
         if uncertain:
@@ -274,6 +351,36 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         ):
             containers.discard(route.container_id)
         return True
+
+    def _runtimes(self, route: Route) -> None:
+        """Answer with the registered runtime names only: the rest of Docker's info (host
+        paths, labels, registry and swarm settings) stays behind the proxy (ADR 0023)."""
+        names = self.server.runtimes.get(lambda: self._fetch_runtimes(route))
+        if names is None:
+            self._reply(502, b'{"message": "Docker runtimes are unavailable."}')
+            return
+        self._reply(200, json.dumps({"Runtimes": names}).encode())
+
+    def _fetch_runtimes(self, route: Route) -> list[str] | None:
+        """Ask the daemon; log why it failed (status only, never reply contents)."""
+        try:
+            status, reply = _docker_call(
+                self.server.docker_socket,
+                "GET",
+                route.target,
+                timeout=DOCKER_TIMEOUT_SECONDS,
+                limit=MAX_DOCKER_INFO_BYTES,
+            )
+        except _DockerUnavailable:
+            log.warning("sandbox_proxy_info_failed", reason="docker_unavailable")
+            return None
+        if status != HTTPStatus.OK:
+            log.warning("sandbox_proxy_info_failed", reason="docker_status", status=status)
+            return None
+        names = _runtime_names(reply)
+        if names is None:
+            log.warning("sandbox_proxy_info_failed", reason="invalid_reply")
+        return names
 
     def _stream(self, route: Route) -> None:
         """Relay the hijacked attach stream. One way only: nothing reaches the container."""
