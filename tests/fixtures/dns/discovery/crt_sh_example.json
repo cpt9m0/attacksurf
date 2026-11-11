@@ -1,0 +1,80 @@
+[
+  {
+    "issuer_ca_id": 1,
+    "issuer_name": "C=US, O=Example CA, CN=Example DV",
+    "common_name": "www.acme.example",
+    "name_value": "www.acme.example",
+    "id": 1001,
+    "not_before": "2026-01-01T00:00:00",
+    "not_after": "2027-01-01T00:00:00",
+    "serial_number": "01"
+  },
+  {
+    "issuer_ca_id": 1,
+    "issuer_name": "C=US, O=Example CA, CN=Example DV",
+    "common_name": "acme.example",
+    "name_value": "*.acme.example\nacme.example",
+    "id": 1002,
+    "not_before": "2026-01-01T00:00:00",
+    "not_after": "2027-01-01T00:00:00",
+    "serial_number": "02"
+  },
+  {
+    "issuer_ca_id": 1,
+    "issuer_name": "C=US, O=Example CA, CN=Example DV",
+    "common_name": "api.acme.example",
+    "name_value": "api.acme.example\ndev.acme.example\nWWW.ACME.EXAMPLE",
+    "id": 1003,
+    "not_before": "2026-01-01T00:00:00",
+    "not_after": "2027-01-01T00:00:00",
+    "serial_number": "03"
+  },
+  {
+    "issuer_ca_id": 1,
+    "issuer_name": "C=US, O=Example CA, CN=Example DV",
+    "common_name": "dev.acme.example",
+    "name_value": "*.dev.acme.example\nmail.acme.example.\nwww.acme.example.evil",
+    "id": 1004,
+    "not_before": "2026-01-01T00:00:00",
+    "not_after": "2027-01-01T00:00:00",
+    "serial_number": "04"
+  },
+  {
+    "issuer_ca_id": 1,
+    "issuer_name": "C=US, O=Example CA, CN=Example DV",
+    "common_name": "xn--bcher-kva.acme.example",
+    "name_value": "xn--bcher-kva.acme.example\nnot-under.example\n*.acme.example",
+    "id": 1005,
+    "not_before": "2026-01-01T00:00:00",
+    "not_after": "2027-01-01T00:00:00",
+    "serial_number": "05"
+  },
+  {
+    "issuer_ca_id": 1,
+    "issuer_name": "C=US, O=Example CA, CN=Example DV",
+    "common_name": "broken",
+    "name_value": "*.acme.example\n*.*.acme.example\nbad name.acme.example\n",
+    "id": 1006,
+    "not_before": "2026-01-01T00:00:00",
+    "not_after": "2027-01-01T00:00:00",
+    "serial_number": "06"
+  },
+  {
+    "issuer_ca_id": 1,
+    "issuer_name": "C=US, O=Example CA, CN=Example DV",
+    "common_name": "certspotter.acme.example",
+    "name_value": null,
+    "id": 1007,
+    "not_before": "2026-01-01T00:00:00",
+    "not_after": "2027-01-01T00:00:00",
+    "serial_number": "07"
+  },
+  {
+    "issuer_ca_id": 1,
+    "issuer_name": "malformed entry",
+    "common_name": null,
+    "name_value": null,
+    "id": 1008
+  },
+  "not an object"
+]

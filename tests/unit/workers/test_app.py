@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from celery.signals import setup_logging, worker_process_init
 
+from attacksurf.infra.cache import RedisScanCache
 from attacksurf.infra.scope_guard import ScopeGuard
 from attacksurf.services.ownership import DbOwnershipChecker
 from attacksurf.workers import app as worker_app
@@ -46,6 +47,16 @@ def test_celery_tracer_does_not_log_raw_exceptions(monkeypatch: pytest.MonkeyPat
     setup_logging.send(sender=None)
 
     assert not tracer.isEnabledFor(logging.ERROR)
+
+
+def test_scan_cache_is_cached_per_process_and_rebuilt_after_fork() -> None:
+    runtime.scan_cache.cache_clear()
+    before = runtime.scan_cache()
+
+    assert isinstance(before, RedisScanCache)
+    assert runtime.scan_cache() is before
+    worker_process_init.send(sender=None)
+    assert runtime.scan_cache() is not before
 
 
 def test_production_gate_checks_ownership_in_the_database() -> None:

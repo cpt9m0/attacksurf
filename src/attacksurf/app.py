@@ -5,6 +5,9 @@ from flask import Flask
 
 from attacksurf.config import Settings, get_settings
 from attacksurf.infra.logging import configure_logging, init_request_logging
+
+# Importing the module registers its plugin; production plugins are listed here explicitly.
+from attacksurf.scanners.dns import discovery as _ct_discovery  # noqa: F401
 from attacksurf.web.api.v1 import bp as api_v1_bp
 from attacksurf.web.auth import init_auth
 from attacksurf.web.db import init_db

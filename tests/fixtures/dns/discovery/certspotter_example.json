@@ -1,0 +1,23 @@
+[
+  {
+    "id": "2001",
+    "cert_sha256": "00",
+    "dns_names": ["www.acme.example", "*.acme.example"],
+    "not_before": "2026-01-01T00:00:00Z",
+    "not_after": "2027-01-01T00:00:00Z"
+  },
+  {
+    "id": "2002",
+    "cert_sha256": "01",
+    "dns_names": ["api.acme.example", "outside.example"],
+    "not_before": "2026-01-01T00:00:00Z",
+    "not_after": "2027-01-01T00:00:00Z"
+  },
+  {
+    "id": "2003",
+    "cert_sha256": "02",
+    "dns_names": ["API.ACME.EXAMPLE", "shop.acme.example"],
+    "not_before": "2026-01-01T00:00:00Z",
+    "not_after": "2027-01-01T00:00:00Z"
+  }
+]
