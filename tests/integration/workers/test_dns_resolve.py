@@ -37,9 +37,11 @@ class FakeDns:
         self,
         answers: dict[tuple[str, DnsRecordType], tuple[str, ...] | DnsStatus] | None = None,
         *,
+        errors: set[tuple[str, DnsRecordType]] | None = None,
         default_status: DnsStatus = DnsStatus.NO_ANSWER,
     ) -> None:
         self.answers = answers or {}
+        self.errors = errors or set()
         self.default_status = default_status
 
     def resolve_ipv4(self, host: str) -> tuple[str, ...]:
@@ -51,7 +53,11 @@ class FakeDns:
     def lookup_many(self, queries: Sequence[DnsQuery]) -> tuple[DnsLookup, ...]:
         results = []
         for query in queries:
-            outcome = self.answers.get((query.name, query.record_type), self.default_status)
+            key = (query.name, query.record_type)
+            if key in self.errors:
+                results.append(DnsLookup(query, (), DnsStatus.ERROR))
+                continue
+            outcome = self.answers.get(key, self.default_status)
             if isinstance(outcome, DnsStatus):
                 results.append(DnsLookup(query, (), outcome))
             else:
@@ -185,3 +191,37 @@ def test_dns_resolve_deactivates_a_non_resolving_subdomain(
     assert job.status is JobStatus.COMPLETED
     assert (subdomain.is_active, subdomain.deactivated_at) == (False, seen)
     assert db_session.scalars(scoped(Finding, scan.org_id)).all() == []
+
+
+def test_dns_resolve_preserves_details_when_a_record_query_fails(
+    db_session: Session,
+) -> None:
+    scan = make_scan(db_session)
+    root = db_session.get_one(Asset, scan.root_asset_id)
+    previous = {"dns": {"a": ["93.184.216.1"], "mx": ["10 mail.acme.example"]}}
+    root.details = previous
+    db_session.flush()
+    job = _job(db_session, scan, root.id)
+    runtime = ScannerRuntime(
+        FakeDns(
+            {(ROOT, DnsRecordType.A): ("93.184.216.34",)},
+            errors={(ROOT, DnsRecordType.MX)},
+            default_status=DnsStatus.NXDOMAIN,
+        ),
+        FakeHttp(),
+    )
+
+    run_check(
+        db_session,
+        scan.org_id,
+        job.id,
+        registry=registry,
+        gate=FakeGate(runtime),
+        events=Events(),
+        retry_allowed=False,
+        profiles=PROFILES,
+    )
+
+    db_session.expire_all()
+    assert job.status is JobStatus.COMPLETED
+    assert root.details == previous

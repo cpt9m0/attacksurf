@@ -229,6 +229,7 @@ def test_resolve_marks_a_non_resolving_subdomain_inactive() -> None:
     assert output.assets == ()
     assert output.relations == ()
     assert output.observations[0].active is False
+    assert output.observations[0].details == {"dns": {}}
 
 
 def test_resolve_keeps_an_asset_with_only_txt_active() -> None:
@@ -246,6 +247,27 @@ def test_resolve_does_not_deactivate_on_a_partial_lookup_error() -> None:
     )
 
     assert output.observations[0].active is None
+    assert output.observations[0].details == {}
+
+
+def test_resolve_does_not_deactivate_when_a_non_address_query_fails() -> None:
+    output, _dns = run(
+        {},
+        errors={(ASSET, DnsRecordType.MX)},
+        default_status=DnsStatus.NXDOMAIN,
+    )
+
+    assert output.observations[0].active is None
+    assert output.observations[0].details == {}
+
+
+def test_resolve_withholds_details_when_any_query_fails() -> None:
+    output, _dns = run(
+        {(ASSET, DnsRecordType.A): ("93.184.216.34",)},
+        errors={(ASSET, DnsRecordType.MX)},
+    )
+
+    assert output.observations[0].active is True
     assert output.observations[0].details == {}
 
 

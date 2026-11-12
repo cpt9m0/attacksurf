@@ -235,10 +235,16 @@ def _output(ctx: ScanContext, asset: AssetRef, resolution: _Resolution) -> ScanO
         resolution.address_error,
         ctx.target_is_wildcard,
     )
-    # A transient failure with no data must not erase records from the last good scan; a
-    # confirmed empty answer (active False) does replace them.
+    # A partial lookup failure must not replace the last good records: the failed record type
+    # is simply absent from this run's details, and a top-level merge would erase it. Only a
+    # complete observation may replace the DNS subtree (a confirmed empty answer clears it).
+    failed = (
+        resolution.chain_error
+        or resolution.address_error
+        or any(result.status is DnsStatus.ERROR for result in resolution.by_type.values())
+    )
     details: dict[str, JsonValue] = {}
-    if dns_details or active is False:
+    if not failed and (dns_details or active is False):
         details["dns"] = dns_details
     assets, relations = _graph(ctx, asset, resolution.chain, resolution.addresses)
     observations = [AssetObservation(asset=asset, details=details, active=active)]
@@ -408,7 +414,12 @@ def _active(
 ) -> bool | None:
     if len(chain) > 1 or any(result.found for result in by_type.values()):
         return True
-    if chain_error or address_error or wildcard:
+    if (
+        chain_error
+        or address_error
+        or wildcard
+        or any(result.status is DnsStatus.ERROR for result in by_type.values())
+    ):
         return None
     return False
 
