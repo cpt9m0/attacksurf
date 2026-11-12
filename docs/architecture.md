@@ -42,7 +42,8 @@ worker-analysis ─ run(artifact ID, analyzer) ─► sandbox-launcher ─► sa
 refuses rather than guesses:
 
 - `config.SandboxLauncherSettings`: process env only (no `.env`, no app secrets); the proxy URL
-  must be plain `http://` with a host; wall time is at most 840 s, below the proxy's 900 s, so
+  may embed credentials, so it is a `SecretStr` unwrapped only where connecting, and must be
+  plain `http://` with a host; wall time is at most 840 s, below the proxy's 900 s, so
   the launcher's own kill fires first; `runc` is refused in prod.
 - `catalog.py`: each analyzer's command and limits are code, its image digest comes from
   `sandbox-images.lock`; `load_catalog` keeps only analyzers present in both. `CATALOG` is empty

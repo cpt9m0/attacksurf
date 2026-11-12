@@ -120,7 +120,8 @@ class SandboxProxySettings(_SandboxServiceSettings):
 class SandboxLauncherSettings(_SandboxServiceSettings):
     """`sandbox-launcher` only: runs analyzers through the proxy, never touches Docker itself."""
 
-    sandbox_proxy_url: str = "http://sandbox-proxy:8790"
+    # May embed proxy credentials, so it is a secret; unwrap only where connecting.
+    sandbox_proxy_url: SecretStr = SecretStr("http://sandbox-proxy:8790")
     sandbox_launcher_host: str = "0.0.0.0"  # noqa: S104 - reachable only on an internal network
     sandbox_launcher_port: int = Field(default=8791, ge=1, le=65535)
     sandbox_wall_time_seconds: int = Field(default=600, ge=1, le=SANDBOX_MAX_WALL_TIME_SECONDS)
@@ -128,10 +129,10 @@ class SandboxLauncherSettings(_SandboxServiceSettings):
 
     @field_validator("sandbox_proxy_url")
     @classmethod
-    def _require_http_proxy_url(cls, value: str) -> str:
+    def _require_http_proxy_url(cls, value: SecretStr) -> SecretStr:
         # Plain http only for now: the proxy is reached over an internal network. The message
         # never repeats the value, which may embed credentials.
-        parts = urlsplit(value)
+        parts = urlsplit(value.get_secret_value())
         if parts.scheme != "http" or not parts.hostname:
             raise ValueError("SANDBOX_PROXY_URL must be an http:// URL with a host")
         return value

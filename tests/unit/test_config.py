@@ -191,7 +191,7 @@ def test_sandbox_launcher_settings_defaults() -> None:
     assert settings.env == "dev"
     assert settings.sandbox_artifact_root == "/var/lib/attacksurf/artifacts"
     assert settings.sandbox_images_lock == "sandbox-images.lock"
-    assert settings.sandbox_proxy_url == "http://sandbox-proxy:8790"
+    assert settings.sandbox_proxy_url.get_secret_value() == "http://sandbox-proxy:8790"
     assert settings.sandbox_launcher_port == 8791
     assert settings.sandbox_wall_time_seconds == 600
     assert settings.sandbox_max_concurrent_runs == 2
@@ -219,7 +219,7 @@ def test_sandbox_launcher_settings_read_from_environment(clean_env: pytest.Monke
 
     assert settings.env == "prod"
     assert settings.sandbox_artifact_root == "/srv/artifacts"
-    assert settings.sandbox_proxy_url == "http://proxy.internal:9000"
+    assert settings.sandbox_proxy_url.get_secret_value() == "http://proxy.internal:9000"
     assert settings.sandbox_launcher_port == 9001
     assert settings.sandbox_wall_time_seconds == 120
     assert settings.sandbox_max_concurrent_runs == 4
@@ -269,7 +269,9 @@ def test_sandbox_launcher_wall_time_ceiling_is_below_proxy_run_timeout() -> None
     ["http://sandbox-proxy:8790", "http://proxy.internal:9000", "http://127.0.0.1:8790/"],
 )
 def test_sandbox_launcher_settings_accept_http_proxy_urls(url: str) -> None:
-    assert SandboxLauncherSettings(sandbox_proxy_url=url).sandbox_proxy_url == url
+    settings = SandboxLauncherSettings(sandbox_proxy_url=SecretStr(url))
+
+    assert settings.sandbox_proxy_url.get_secret_value() == url
 
 
 @pytest.mark.parametrize(
@@ -288,16 +290,27 @@ def test_sandbox_launcher_settings_accept_http_proxy_urls(url: str) -> None:
 )
 def test_sandbox_launcher_settings_refuse_non_http_proxy_urls(url: str) -> None:
     with pytest.raises(ValueError, match="SANDBOX_PROXY_URL"):
-        SandboxLauncherSettings(sandbox_proxy_url=url)
+        SandboxLauncherSettings(sandbox_proxy_url=SecretStr(url))
 
 
 def test_sandbox_launcher_proxy_url_error_does_not_echo_credentials() -> None:
     url = "ftp://user:hunter2@sandbox-proxy"
 
     with pytest.raises(ValueError, match="SANDBOX_PROXY_URL") as excinfo:
-        SandboxLauncherSettings(sandbox_proxy_url=url)
+        SandboxLauncherSettings(sandbox_proxy_url=SecretStr(url))
 
     assert "hunter2" not in str(excinfo.value)
+
+
+def test_sandbox_launcher_proxy_url_is_masked() -> None:
+    url = "http://proxy-user:hunter2@proxy.internal:9000"
+
+    settings = SandboxLauncherSettings(sandbox_proxy_url=SecretStr(url))
+
+    assert isinstance(settings.sandbox_proxy_url, SecretStr)
+    assert "hunter2" not in repr(settings)
+    assert "hunter2" not in settings.model_dump_json()
+    assert settings.sandbox_proxy_url.get_secret_value() == url
 
 
 def test_sandbox_launcher_settings_allow_runc_only_when_asked_outside_prod() -> None:
