@@ -8,12 +8,19 @@ import pytest
 from sqlalchemy import Engine, delete, select
 from sqlalchemy.orm import Session
 
-from attacksurf.domain.assets import AssetNotFound, AssetType
+from attacksurf.domain.assets import AssetNotFound, AssetSource, AssetType, RelationKind
 from attacksurf.domain.findings import FindingStatus, Severity
 from attacksurf.domain.rules import Rule
-from attacksurf.domain.scanners import AssetRef, RawEvidence, RawFinding, ScanOutput
+from attacksurf.domain.scanners import (
+    AssetObservation,
+    AssetRef,
+    DiscoveredRelation,
+    RawEvidence,
+    RawFinding,
+    ScanOutput,
+)
 from attacksurf.domain.scans import JobStatus, ScanCancelled, ScanStatus, ScanTrigger
-from attacksurf.infra.db.models import Asset, Evidence, Finding, Job, Org, Scan
+from attacksurf.infra.db.models import Asset, AssetRelation, Evidence, Finding, Job, Org, Scan
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services import assets as assets_service
 from attacksurf.services.assets import archive_root_domain
@@ -528,3 +535,191 @@ def test_persist_rejects_a_wildcard_zone_it_never_reported(
 
     with pytest.raises(ValueError, match="reference"):
         persist_scan_output(db_session, scan, scan.root_asset_id, output, catalog=catalog)
+
+
+def _subdomain(session: Session, scan: Scan, value: str = "www.acme.example") -> Asset:
+    return assets_service.record_asset(
+        session,
+        scan.org_id,
+        AssetType.SUBDOMAIN,
+        value,
+        source=AssetSource.DISCOVERED,
+        parent_id=scan.root_asset_id,
+    )
+
+
+def test_persist_merges_observation_details_and_keeps_existing_keys(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    root = db_session.get_one(Asset, scan.root_asset_id)
+    root.details = {"wildcard": True}
+    db_session.flush()
+    output = ScanOutput(
+        observations=(
+            AssetObservation(
+                asset=AssetRef(type=AssetType.DOMAIN, value=root.value),
+                details={"dns": {"a": ["93.184.216.34"]}},
+                active=True,
+            ),
+        )
+    )
+
+    persist_scan_output(db_session, scan, root.id, output, catalog=catalog)
+
+    assert root.details == {"wildcard": True, "dns": {"a": ["93.184.216.34"]}}
+
+
+def test_persist_deactivates_a_non_resolving_discovered_subdomain(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    subdomain = _subdomain(db_session, scan)
+    seen = subdomain.last_seen + timedelta(minutes=1)
+    scan.started_at = seen
+    db_session.flush()
+    output = ScanOutput(
+        observations=(
+            AssetObservation(
+                asset=AssetRef(type=AssetType.SUBDOMAIN, value=subdomain.value),
+                active=False,
+            ),
+        )
+    )
+
+    persist_scan_output(db_session, scan, subdomain.id, output, catalog=catalog)
+
+    assert (subdomain.is_active, subdomain.deactivated_at) == (False, seen)
+
+
+def test_persist_never_deactivates_a_root_domain(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    root = db_session.get_one(Asset, scan.root_asset_id)
+    output = ScanOutput(
+        observations=(
+            AssetObservation(asset=AssetRef(type=AssetType.DOMAIN, value=root.value), active=False),
+        )
+    )
+
+    persist_scan_output(db_session, scan, root.id, output, catalog=catalog)
+
+    assert root.is_active is True
+
+
+def test_persist_reactivates_a_subdomain_seen_after_its_deactivation(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    subdomain = _subdomain(db_session, scan)
+    gone_at = subdomain.last_seen - timedelta(hours=1)
+    subdomain.is_active, subdomain.deactivated_at = False, gone_at
+    scan.started_at = subdomain.last_seen
+    db_session.flush()
+    output = ScanOutput(
+        observations=(
+            AssetObservation(
+                asset=AssetRef(type=AssetType.SUBDOMAIN, value=subdomain.value), active=True
+            ),
+        )
+    )
+
+    persist_scan_output(db_session, scan, subdomain.id, output, catalog=catalog)
+
+    assert (subdomain.is_active, subdomain.deactivated_at) == (True, None)
+
+
+def test_persist_ignores_an_older_deactivation_result(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    subdomain = _subdomain(db_session, scan)
+    scan.started_at = subdomain.last_seen - timedelta(hours=1)
+    db_session.flush()
+    output = ScanOutput(
+        observations=(
+            AssetObservation(
+                asset=AssetRef(type=AssetType.SUBDOMAIN, value=subdomain.value), active=False
+            ),
+        )
+    )
+
+    persist_scan_output(db_session, scan, subdomain.id, output, catalog=catalog)
+
+    assert subdomain.is_active is True
+
+
+def test_observation_for_a_cap_dropped_asset_is_skipped(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    persist_scan_output(
+        db_session,
+        scan,
+        scan.root_asset_id,
+        ScanOutput(assets=(AssetRef(type=AssetType.SUBDOMAIN, value="a.acme.example"),)),
+        catalog=catalog,
+        discovered_limit=1,
+    )
+    output = ScanOutput(
+        assets=(AssetRef(type=AssetType.SUBDOMAIN, value="b.acme.example"),),
+        observations=(
+            AssetObservation(
+                asset=AssetRef(type=AssetType.SUBDOMAIN, value="b.acme.example"),
+                details={"dns": {"a": ["93.184.216.34"]}},
+                active=False,
+            ),
+        ),
+    )
+
+    persist_scan_output(
+        db_session, scan, scan.root_asset_id, output, catalog=catalog, discovered_limit=1
+    )
+
+    assert not db_session.scalars(
+        scoped(Asset, scan.org_id).where(Asset.value == "b.acme.example")
+    ).all()
+
+
+def test_observation_for_an_unknown_asset_is_rejected(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    output = ScanOutput(
+        observations=(
+            AssetObservation(
+                asset=AssetRef(type=AssetType.SUBDOMAIN, value="ghost.acme.example"),
+                active=False,
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="reference"):
+        persist_scan_output(db_session, scan, scan.root_asset_id, output, catalog=catalog)
+
+
+def test_persist_allows_a_subdomain_cname_to_its_root(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    root = db_session.get_one(Asset, scan.root_asset_id)
+    subdomain = _subdomain(db_session, scan)
+    output = ScanOutput(
+        relations=(
+            DiscoveredRelation(
+                from_asset=AssetRef(type=AssetType.SUBDOMAIN, value=subdomain.value),
+                to_asset=AssetRef(type=AssetType.DOMAIN, value=root.value),
+                kind=RelationKind.CNAME_TO,
+            ),
+        )
+    )
+
+    persist_scan_output(db_session, scan, subdomain.id, output, catalog=catalog)
+
+    relation = db_session.scalars(scoped(AssetRelation, scan.org_id)).one()
+    assert (relation.from_asset_id, relation.to_asset_id, relation.kind) == (
+        subdomain.id,
+        root.id,
+        RelationKind.CNAME_TO,
+    )

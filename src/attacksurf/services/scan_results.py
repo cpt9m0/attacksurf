@@ -16,7 +16,7 @@ from attacksurf.domain.events import FindingCreated
 from attacksurf.domain.findings import finding_fingerprint
 from attacksurf.domain.ids import uuid7
 from attacksurf.domain.rules import RULES, Rule, get_rule
-from attacksurf.domain.scanners import AssetRef, RawFinding, ScanOutput
+from attacksurf.domain.scanners import AssetObservation, AssetRef, RawFinding, ScanOutput
 from attacksurf.domain.scans import ScanCancelled
 from attacksurf.infra.db.models import Asset, Evidence, Finding, Scan
 from attacksurf.infra.db.tenancy import get_scoped, scoped
@@ -57,9 +57,11 @@ def persist_scan_output(
         raise ScanCancelled("Scan was cancelled.")
     input_ref = (asset.type, asset.value)
     root = _lock_root(session, scan, asset, output, discovered_limit=discovered_limit)
-    refs = {input_ref: asset.id}
+    root_ref = (root.type, root.value)
+    refs = {input_ref: asset.id, root_ref: root.id}
     # Every name the plugin reported is a valid reference, including ones the cap will drop
-    # (a reference to a name it never reported is still a plugin bug and fails the job).
+    # (a reference to a name it never reported is still a plugin bug and fails the job). The
+    # scan root is always valid: a subdomain may CNAME to its apex.
     declared = set(refs) | {(a.type, a.value) for a in output.assets}
     _validate_references(output, declared, catalog)
     admitted: set[tuple[AssetType, str]] | None = None
@@ -71,9 +73,11 @@ def persist_scan_output(
         output = output.model_copy(update={"assets": keep})
     seen = scan.started_at or scan.created_at
     rows: dict[tuple[AssetType, str], Asset] = {
-        input_ref: root if asset.id == scan.root_asset_id else asset
+        input_ref: root if asset.id == scan.root_asset_id else asset,
+        root_ref: root,
     }
-    written: set[tuple[AssetType, str]] = set()
+    # The root exists independently of this output; `_usable` may link a subdomain's CNAME to it.
+    written: set[tuple[AssetType, str]] = {root_ref}
     for discovered in output.assets:
         row = record_asset(
             session,
@@ -87,6 +91,9 @@ def persist_scan_output(
         written.add((row.type, row.value))
         refs[(row.type, row.value)] = row.id
         rows[(row.type, row.value)] = row
+    _apply_observations(
+        output, rows=rows, written=written, input_ref=input_ref, admitted=admitted, seen=seen
+    )
     # The cap may have dropped a discovered name; links to it are skipped, never guessed.
     for relation in output.relations:
         if not _usable(relation.from_asset, written, input_ref, admitted):
@@ -185,10 +192,51 @@ def _validate_references(
         _resolve(declared, relation.to_asset)
     for zone in output.wildcard_zones:
         _resolve(declared, zone)
+    for observation in output.observations:
+        _resolve(declared, observation.asset)
     for raw in output.findings:
         get_rule(raw.rule_id, catalog)
         if raw.asset:
             _resolve(declared, raw.asset)
+
+
+def _apply_observations(
+    output: ScanOutput,
+    *,
+    rows: dict[tuple[AssetType, str], Asset],
+    written: set[tuple[AssetType, str]],
+    input_ref: tuple[AssetType, str],
+    admitted: set[tuple[AssetType, str]] | None,
+    seen: datetime,
+) -> None:
+    for observation in output.observations:
+        if not _usable(observation.asset, written, input_ref, admitted):
+            continue
+        row = rows.get((observation.asset.type, observation.asset.value))
+        if row is not None:
+            _observe(row, observation, seen)
+
+
+def _observe(row: Asset, observation: AssetObservation, seen: datetime) -> None:
+    """Merge details and apply a lifecycle claim without moving state backwards.
+
+    A scanner may deactivate only a discovered asset: roots are user-owned and stay active even
+    when their DNS no longer resolves. A late older result can extend details but never
+    reactivates or deactivates over a newer sighting.
+    """
+    if observation.details:
+        row.details = {**(row.details or {}), **observation.details}
+    if observation.active is None:
+        return
+    if observation.active:
+        row.last_seen = max(row.last_seen, seen)
+        if row.deactivated_at is None or seen > row.deactivated_at:
+            row.is_active = True
+            row.deactivated_at = None
+        return
+    if row.parent_id is not None and row.is_active and seen >= row.last_seen:
+        row.is_active = False
+        row.deactivated_at = seen
 
 
 def _upsert_evidence(

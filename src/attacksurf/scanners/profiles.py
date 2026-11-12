@@ -8,6 +8,7 @@ PROFILES = {
     "dns_passive": ScanProfile(
         name="dns_passive",
         discover=("dns.discovery.ct",),
+        checks=("dns.resolve",),
         max_discovered_assets=MAX_DISCOVERED_ASSETS,
     )
 }

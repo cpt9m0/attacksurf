@@ -61,6 +61,7 @@ def run_check(
         AssetRef(type=root.type, value=root.value),
         scan.profile,
         max_discovered_assets=profile.max_discovered_assets if profile else None,
+        target_is_wildcard=bool((asset.details or {}).get("wildcard")),
     )
     session.rollback()  # release locks/connection before untrusted or slow I/O
     try:
