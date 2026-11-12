@@ -8,7 +8,7 @@ from flask.testing import FlaskClient
 from pydantic import SecretStr
 
 from attacksurf import create_app
-from attacksurf.config import SandboxProxySettings, Settings
+from attacksurf.config import SandboxLauncherSettings, SandboxProxySettings, Settings
 from attacksurf.domain.accounts import Role
 from attacksurf.domain.ids import uuid7
 from attacksurf.services import auth as auth_service
@@ -32,8 +32,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
-    """Unset every variable read by application or proxy settings for env-loading tests."""
-    for name in Settings.model_fields.keys() | SandboxProxySettings.model_fields.keys():
+    """Unset every variable read by app, proxy or launcher settings for env-loading tests."""
+    names = (
+        Settings.model_fields.keys()
+        | SandboxProxySettings.model_fields.keys()
+        | SandboxLauncherSettings.model_fields.keys()
+    )
+    for name in names:
         monkeypatch.delenv(name.upper(), raising=False)
     return monkeypatch
 

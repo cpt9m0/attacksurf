@@ -2,42 +2,47 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-12 · **Branch:** `main` · **PR:** #157 (merged)
+**Updated:** 2026-11-12 · **Branch:** `84-sandbox-launcher-core` · **Issue:** #84 (analysis
+sandbox), PR 3b of the 3a to 3d launcher split
 
 ## Status
-`main` has PR 3a of the #84 analysis sandbox: the sandbox proxy answers `GET /info` with the
-registered runtime names (ADR 0023), so the launcher can refuse to start in prod without
-`runsc`. Full suite: 1395 passed, 18 skipped, coverage 97.40%; ruff, pyright and lint-imports
-are clean. The runtime image is Python 3.15 (`python:3.15-slim`), pydantic 2.14.1 /
-pydantic-core 2.50.1, and CI tests 3.12, 3.13 and 3.15.
+`main` has PR 3a (#157, merged): the sandbox proxy answers `GET /info` with the registered
+runtime names (ADR 0023). PR 3b (sandbox launcher building blocks) is open as #158 on
+`84-sandbox-launcher-core`, merged with `main`, CI green, Codex reviewed with no findings, and
+mergeable. It contains the settings, catalog, artifact resolver, create-body builder and capped
+stdout reader; the launcher service itself is PR 3c.
 
 ## Last task
-- Merged #157 (`84-sandbox-runtime-info`); the code merged cleanly and only `STATE.md`
-  conflicted with `main`.
-- `sandbox-proxy` allows exactly one read call, `GET /info`. It answers with sorted runtime
-  names only, caches a good answer for 60 s with one daemon call at a time, logs the failure
-  status code, and reads up to 8 MiB. The three Docker round trips share `_docker_call`.
-- ADR 0023 records the change (ADR 0016 has an "amended by" pointer); `docs/security.md` and
-  `CHANGELOG.md` are updated.
+- `SandboxLauncherSettings` in `config.py` (env only, wall time at most 840 s, `runc` refused in prod).
+- `sandbox_launcher/catalog.py` + `artifacts.py`, and the launcher import-linter contract.
+- `sandbox_launcher/container.py`: `build_create_body`, tested against the real proxy policy.
+- `sandbox_launcher/stream.py`: `read_stdout` keeps stdout, drops stderr, caps at 2 MiB, fails closed.
+- Codex review fix: `SANDBOX_PROXY_URL` is a `SecretStr` validated on its unwrapped value and
+  masked in `repr()`/serialization; tests cover the mask.
+- Docs: `AGENTS.md` layout, `docs/architecture.md` (launcher building blocks), `docs/security.md`,
+  `CHANGELOG.md`.
 
 ## Next step
-PR 3b (`84-sandbox-launcher-core`, #158) is open and now needs a merge of `main`, which
-conflicts only in `STATE.md`. Then 3c (launcher service and the `runsc` startup check) and 3d
-(worker-side client). Order and scope: issue #84's merge-order checklist.
+Merge #158 (3b), then start PR 3c (`runner.py`, `server.py` with `POST /runs`, `__main__.py`)
+per issue #84's merge-order checklist.
 
 ## Open threads
-- Optional one-line `/info` note in the `docs/architecture.md` proxy box: user hasn't decided.
+- PR 3c needs both 3a and 3b merged (or stacks on them as a draft).
 - The PR 3 plan (4 PRs, commits, testing gate) lived in
   `docs/plans/84-pr3-sandbox-launcher-split-4-prs.md`, which is untracked and absent from this
   checkout, so issue #84 is the current source of truth for the split.
 
 ## Notes for the next agent
-- Production plugins are registered explicitly in `src/attacksurf/app.py` and
-  `src/attacksurf/workers/app.py`; a new plugin needs both imports.
-- `ScanOutput.wildcard_zones` is validated by `services.scan_results`; a marker for a non-root
-  input is rejected. Tests that need Redis behavior use `tests.fakes.FakeCache`.
-- Bumping the Python base image again needs a `pydantic-core` release with wheels for that
-  CPython; `grimp` 3.18 is the first with aarch64 cp315 wheels (dev only).
+- PR 3c `runner.py` must decide the outcome from its own flags (`timed_out`, cap tripped) before
+  any stream error: a kill mid-frame reaches `read_stdout` as `MalformedStream`. It strips the
+  proxy's HTTP response head before handing frames to `read_stdout`.
+- PR 3c moves `FakeDocker` to `tests/docker_fakes.py`; it must be able to script stdout/stderr
+  frames split across writes.
+- PR 3d's ~3 MiB reply cap assumes stdout is at most 2 MiB (base64 about 2.67 MiB).
+- The launcher copies proxy constants and `domain.scanners.MAX_OUTPUT_BYTES` on purpose (it may
+  not import them); a parity test guards each copy. Don't "fix" that by importing.
+- Plan docs for this PR: `docs/plans/84-pr3-sandbox-launcher-split-4-prs.md` and
+  `docs/plans/84-pr3b-launcher-building-blocks/`.
 - DB tests need `TEST_DATABASE_URL`; the dev Compose stack exposes PostgreSQL on
   `127.0.0.1:5432` with an `attacksurf_test` database (`make test` runs them in `web`).
 - The ruff format hook strips imports that aren't used yet: add imports together with their
