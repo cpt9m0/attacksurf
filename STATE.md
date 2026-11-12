@@ -2,43 +2,48 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-12 · **Branch:** `main` · **PR:** #157 (merged)
+**Updated:** 2026-11-12 · **Branch:** `23-llm-adr-0024` · **Issue:** #23 (LLM providers)
 
 ## Status
-`main` has PR 3a of the #84 analysis sandbox: the sandbox proxy answers `GET /info` with the
-registered runtime names (ADR 0023), so the launcher can refuse to start in prod without
-`runsc`. Full suite: 1395 passed, 18 skipped, coverage 97.40%; ruff, pyright and lint-imports
-are clean. The runtime image is Python 3.15 (`python:3.15-slim`), pydantic 2.14.1 /
-pydantic-core 2.50.1, and CI tests 3.12, 3.13 and 3.15.
-
-## Last task
-- Merged #157 (`84-sandbox-runtime-info`); the code merged cleanly and only `STATE.md`
-  conflicted with `main`.
-- `sandbox-proxy` allows exactly one read call, `GET /info`. It answers with sorted runtime
-  names only, caches a good answer for 60 s with one daemon call at a time, logs the failure
-  status code, and reads up to 8 MiB. The three Docker round trips share `_docker_call`.
-- ADR 0023 records the change (ADR 0016 has an "amended by" pointer); `docs/security.md` and
-  `CHANGELOG.md` are updated.
+Review follow-up to #147 (Anthropic provider, merged): its reviewer asked for a superseding ADR
+instead of editing ADR 0019 in place. The fix wasn't pushed before #147 merged, so it lands
+here, on a branch from `main` (`a673a6e`), uncommitted:
+- `docs/adr/0024-no-llm-sampling-or-sdk-retries.md` records "no sampling settings" and "no SDK
+  retries" (`MAX_RETRIES = 0`), with reasons and trade-offs. Numbers 0022 (CT discovery) and
+  0023 (sandbox runtime check) were taken on `main` in the meantime.
+- ADR 0019's contract and retry paragraphs are back to their accepted wording, each with a
+  "Superseded by ADR 0024" line, and its Status line says so. Its error-handling,
+  deadline-enforcement and live-verification additions stay, since they fill in what 0019
+  already required.
+- Citations of these two decisions point to ADR 0024: `architecture.md`, `ai/limits.py`,
+  `domain/llm.py`, the `llm-prompt` skill, `CHANGELOG.md` and two test comments. Main's own
+  ADR 0022 and 0023 citations are untouched.
 
 ## Next step
-PR 3b (`84-sandbox-launcher-core`, #158) is open and now needs a merge of `main`, which
-conflicts only in `STATE.md`. Then 3c (launcher service and the `runsc` startup check) and 3d
-(worker-side client). Order and scope: issue #84's merge-order checklist.
+1. Commit (`docs(ai): record no sampling and no sdk retries in adr 0024`, footer `Refs #23`),
+   push, and open the PR. Reply to the reviewer on #147 with its link.
+2. Then PR 4a (usage tracking, Angela) on `23-llm-usage` from `origin/main`. The plan, with the
+   PR 4 split, is at https://claude.ai/artifact/PnixRruj7R2cb7B6gLmvLi. PR 4b (factory, closes
+   #23) is the partner's, after PR 3 (OpenAI-compatible). The migration is `0008` unless
+   another PR takes it first.
 
 ## Open threads
-- Optional one-line `/info` note in the `docs/architecture.md` proxy box: user hasn't decided.
-- The PR 3 plan (4 PRs, commits, testing gate) lived in
-  `docs/plans/84-pr3-sandbox-launcher-split-4-prs.md`, which is untracked and absent from this
-  checkout, so issue #84 is the current source of truth for the split.
+- #23: PR 3 must mirror ADR 0019 and ADR 0024 (no SDK retries, no sampling params,
+  `finish_reason` `length`/`content_filter` fail at once, deadline per call) and add `openai`
+  to the import-linter SDK contract. Org-supplied base URLs need ScopeGuard validation (#24).
+- #84: PR 3b (`84-sandbox-launcher-core`, #158) is open and needs a merge of `main` (conflicts
+  only in `STATE.md`). Then 3c (launcher service and the `runsc` startup check) and 3d
+  (worker-side client); order and scope: issue #84's merge-order checklist.
+- Optional one-line `/info` note in the `docs/architecture.md` proxy box: not decided.
 
 ## Notes for the next agent
+- ADR numbers move fast: check `origin/main` and open branches for the next free number right
+  before pushing a new ADR.
 - Production plugins are registered explicitly in `src/attacksurf/app.py` and
   `src/attacksurf/workers/app.py`; a new plugin needs both imports.
-- `ScanOutput.wildcard_zones` is validated by `services.scan_results`; a marker for a non-root
-  input is rejected. Tests that need Redis behavior use `tests.fakes.FakeCache`.
-- Bumping the Python base image again needs a `pydantic-core` release with wheels for that
-  CPython; `grimp` 3.18 is the first with aarch64 cp315 wheels (dev only).
-- DB tests need `TEST_DATABASE_URL`; the dev Compose stack exposes PostgreSQL on
-  `127.0.0.1:5432` with an `attacksurf_test` database (`make test` runs them in `web`).
-- The ruff format hook strips imports that aren't used yet: add imports together with their
-  first use.
+- Tests that need Redis behavior use `tests.fakes.FakeCache`.
+- The runtime image is Python 3.15; CI tests 3.12, 3.13 and 3.15. A base-image bump needs a
+  `pydantic-core` release with wheels for that CPython.
+- DB tests need `TEST_DATABASE_URL`. Windows dev machine: Postgres on host port 5433
+  (git-excluded `compose.override.yaml`).
+- The ruff format hook strips imports that aren't used yet: add imports with their first use.

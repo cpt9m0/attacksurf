@@ -1,6 +1,6 @@
 # 0019. LLM provider contract and config resolution
 
-- Status: accepted
+- Status: accepted; `temperature` and the SDK retry count superseded by ADR 0024
 - Date: 2026-11-05
 
 ## Context
@@ -11,15 +11,12 @@ For v1 the repo owner confirmed that orgs without a key use the operator's insta
 a cap. Development uses Meta's Muse Spark models, which serve both API formats with one key.
 
 ## Decision
-- **Contract in `domain/llm.py`**: `LLMProvider.complete(messages, *, schema, max_tokens)
-  -> LLMResult[T]`. A provider is built from one `LLMConfig`, so the model is not a call
-  argument (unlike #23's sketch): a call cannot pair one source's key with another's model.
-  `schema` is required, since every AI feature validates its output.
-  **No sampling settings** (decided 2026-11-09, PR 2; the contract first had
-  `temperature=None`): Anthropic API version `2026-10-21`, which the `anthropic` 2.x SDK sends,
-  rejects `temperature`, `top_p` and `top_k` with a 400 on every model, and OpenAI reasoning
-  models reject non-default values too. Nothing called with one, and a setting that works on
-  only one provider would mislead, so adapters send none and the model's defaults apply.
+- **Contract in `domain/llm.py`**: `LLMProvider.complete(messages, *, schema, max_tokens,
+  temperature=None) -> LLMResult[T]`. A provider is built from one `LLMConfig`, so the model is
+  not a call argument (unlike #23's sketch): a call cannot pair one source's key with another's
+  model. `schema` is required, since every AI feature validates its output. `temperature=None`
+  sends no temperature at all.
+  *Superseded by ADR 0024: `temperature` is removed, and adapters send no sampling settings.*
 - **Structured output** uses each API's native JSON-schema format (Anthropic
   `output_config.format`, OpenAI `response_format` `json_schema`), not a forced tool call: Meta
   only accepts `tool_choice: "auto"`. Validation and the one retry live in
@@ -39,26 +36,24 @@ a cap. Development uses Meta's Muse Spark models, which serve both API formats w
   response body, and raise `from None` so the SDK error (which carries it) isn't chained.
 - **Timeouts and retries**: the SDKs default to a 600 s timeout, longer than a Celery task may
   run (`TrackedTask.soft_time_limit` = 300 s), so every adapter passes `ai/limits.py`'s
-  `REQUEST_TIMEOUT_SECONDS` (60 s) and `MAX_RETRIES` (0) to its SDK client.
-  **No SDK retries** (decided 2026-11-09, PR 2/PR 3): `LLMUnavailable` is a
-  `TransientJobError`, so Celery already retries the *task* (3 times, 1/2/4 s backoff with
-  jitter, recorded on the job). SDK retries on top would multiply requests (up to 16 instead of
-  8 per call under errors) and park one of the two `ai` workers in `Retry-After` sleeps. Cost:
-  a brief blip waits for a task retry instead of an instant one, and Celery's backoff ignores
-  `Retry-After`; pass it through as the retry countdown if 429s become frequent.
-  The request timeout still doesn't bound a call's total time: a read timeout limits each
-  chunk's wait, not the whole response, and the corrective retry and PR 3's format fallback
-  add requests. So each adapter must also enforce `CALL_DEADLINE_SECONDS` (240 s) across one
-  `complete()` call and raise `LLMUnavailable` when it would be exceeded, proven in its own
-  tests with a slow response (and a 429 with a large `Retry-After` failing at once). The shared
-  test only checks that the deadline leaves room under the soft limit; Celery's soft limit stays
-  the backstop. The Anthropic adapter (PR 2) gives each request `min(REQUEST_TIMEOUT_SECONDS,
-  time left)`, starts none once the time is up, and runs each request in its own thread that
-  it abandons at the deadline: no client timeout bounds a whole response (a server can keep
-  one alive by trickling bytes). The abandoned request ends on its own timeouts and may still
-  be billed. AI tasks must make one `complete()` call
-  each, or cache results per finding (#25), so a task retry doesn't pay again for calls that
-  succeeded.
+  `REQUEST_TIMEOUT_SECONDS` (60 s) and `MAX_RETRIES` (1) to its SDK client. Those don't bound
+  a call's total time: a read timeout limits each chunk's wait, not the whole response, the
+  SDKs sleep for any server `Retry-After`, and PR 3's format fallback adds requests. So each
+  adapter must also enforce `CALL_DEADLINE_SECONDS` (240 s) across one `complete()` call and
+  raise `LLMUnavailable` when it would be exceeded, proven in its own tests with a stubbed large
+  `Retry-After` and a slow response. The shared test only checks that the deadline leaves room
+  under the soft limit; until the adapters enforce it, Celery's soft limit is the backstop.
+  Open for PR 2/PR 3 to agree: `MAX_RETRIES = 0`, leaving all retries to Celery, would remove
+  in-process `Retry-After` sleeps entirely. `LLMUnavailable` is a `TransientJobError`, so
+  Celery retries the *task* with backoff: AI tasks must make one `complete()` call each, or
+  cache results per finding (#25), so a retry doesn't pay again for calls that succeeded.
+  *Superseded by ADR 0024: `MAX_RETRIES` is 0, which settles the open question.*
+  How the Anthropic adapter (PR 2) enforces the deadline:
+  - Each request gets `min(REQUEST_TIMEOUT_SECONDS, time left)`, and no request starts once
+    the time is up.
+  - Each request runs in its own thread, which the adapter abandons at the deadline. No client
+    timeout bounds a whole response, because a server can keep one alive by trickling bytes.
+  - An abandoned request ends on its own timeouts and may still be billed.
 - **Config resolution** (`ai/config.resolve_llm_config`): the org's own key wins and brings its
   own provider, model and base URL; otherwise the instance config (`LLM_*`) applies if it has
   both a key and a model; otherwise AI is off. Sources never mix, and a failing org key never

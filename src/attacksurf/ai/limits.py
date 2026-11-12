@@ -3,8 +3,9 @@
 The SDKs default to a 600 s timeout, longer than a Celery task may run, so each adapter builds
 its client with `REQUEST_TIMEOUT_SECONDS` and `MAX_RETRIES` (its tests assert it).
 
-`MAX_RETRIES` is 0: Celery retries the whole task on `LLMUnavailable` (with backoff, recorded on
-the job), so SDK retries would only multiply requests and park a worker in `Retry-After` sleeps.
+`MAX_RETRIES` is 0 (ADR 0024): Celery retries the whole task on `LLMUnavailable` (with backoff,
+recorded on the job), so SDK retries would only multiply requests and park a worker in
+`Retry-After` sleeps.
 
 The request timeout still doesn't bound a call's total time: a read timeout limits the wait for
 each chunk of a response, not the whole response, and one `complete()` call can make several

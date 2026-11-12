@@ -102,10 +102,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   `grimp` 3.18 so `import-linter` installs on 3.15 (#154).
 - The LLM contract has no `temperature` any more: Anthropic API version `2026-10-21` (sent by
   the `anthropic` 2.x SDK) rejects sampling parameters on every model, and nothing used it, so
-  models run with their defaults (ADR 0019, #23).
+  models run with their defaults (ADR 0024, #23).
 - LLM SDK clients no longer retry (`ai/limits.MAX_RETRIES = 0`): Celery's task retry is the
   only retry layer, so errors don't multiply requests or park an `ai` worker in `Retry-After`
-  sleeps (ADR 0019, #23).
+  sleeps (ADR 0024, #23).
 - Dependencies: add the `anthropic` SDK (2.3.0, the newest release at least two weeks old;
   `jiter` and `opentelemetry-api` pinned back the same way). The scanner network-boundary test
   also bans its `httpx2`/`httpcore2` HTTP stack and the LLM SDKs (#23).

@@ -181,7 +181,7 @@ def test_environment_cannot_redirect_requests(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_no_sampling_parameters_are_sent(harness: AnthropicHarness) -> None:
-    # API version 2026-10-21 rejects them with a 400 on every model (ADR 0019).
+    # API version 2026-10-21 rejects them with a 400 on every model (ADR 0024).
     harness.reply(VALID)
 
     harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
