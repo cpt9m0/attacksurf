@@ -69,7 +69,7 @@ def persist_scan_output(
         keep = _admit(
             session, scan.org_id, scan.root_asset_id, asset, output, limit=discovered_limit
         )
-        admitted = {(ref.type, ref.value) for ref in keep}
+        admitted = {(ref.type, ref.value) for ref in keep} | {root_ref}
         output = output.model_copy(update={"assets": keep})
     seen = scan.started_at or scan.created_at
     rows: dict[tuple[AssetType, str], Asset] = {

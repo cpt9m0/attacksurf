@@ -715,7 +715,9 @@ def test_persist_allows_a_subdomain_cname_to_its_root(
         )
     )
 
-    persist_scan_output(db_session, scan, subdomain.id, output, catalog=catalog)
+    persist_scan_output(
+        db_session, scan, subdomain.id, output, catalog=catalog, discovered_limit=1000
+    )
 
     relation = db_session.scalars(scoped(AssetRelation, scan.org_id)).one()
     assert (relation.from_asset_id, relation.to_asset_id, relation.kind) == (
