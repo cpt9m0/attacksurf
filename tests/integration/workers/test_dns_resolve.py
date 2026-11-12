@@ -225,3 +225,73 @@ def test_dns_resolve_preserves_details_when_a_record_query_fails(
     db_session.expire_all()
     assert job.status is JobStatus.COMPLETED
     assert root.details == previous
+
+
+def test_dns_resolve_escapes_nul_bytes_in_txt_records(
+    db_session: Session,
+) -> None:
+    scan = make_scan(db_session)
+    root = db_session.get_one(Asset, scan.root_asset_id)
+    job = _job(db_session, scan, root.id)
+    runtime = ScannerRuntime(
+        FakeDns({(ROOT, DnsRecordType.TXT): ("a\x00b",)}),
+        FakeHttp(),
+    )
+
+    run_check(
+        db_session,
+        scan.org_id,
+        job.id,
+        registry=registry,
+        gate=FakeGate(runtime),
+        events=Events(),
+        retry_allowed=False,
+        profiles=PROFILES,
+    )
+
+    db_session.expire_all()
+    assert job.status is JobStatus.COMPLETED
+    assert root.details["dns"]["txt"] == ["a\\0b"]
+
+
+def test_dns_resolve_preserves_ip_details_when_reverse_dns_fails(
+    db_session: Session,
+) -> None:
+    scan = make_scan(db_session)
+    root = db_session.get_one(Asset, scan.root_asset_id)
+    ip = record_asset(
+        db_session,
+        scan.org_id,
+        AssetType.IP,
+        "93.184.216.34",
+        source=AssetSource.DISCOVERED,
+        parent_id=root.id,
+    )
+    previous = {"ip": {"ptr": "old.example.net", "asn": 1}}
+    ip.details = previous
+    ip_id = ip.id
+    db_session.flush()
+    job = _job(db_session, scan, root.id)
+    runtime = ScannerRuntime(
+        FakeDns(
+            {(ROOT, DnsRecordType.A): ("93.184.216.34",)},
+            errors={("34.216.184.93.in-addr.arpa", DnsRecordType.PTR)},
+        ),
+        FakeHttp(),
+        ip_intel=FakeIntel(),
+    )
+
+    run_check(
+        db_session,
+        scan.org_id,
+        job.id,
+        registry=registry,
+        gate=FakeGate(runtime),
+        events=Events(),
+        retry_allowed=False,
+        profiles=PROFILES,
+    )
+
+    db_session.expire_all()
+    assert job.status is JobStatus.COMPLETED
+    assert db_session.get_one(Asset, ip_id).details == previous

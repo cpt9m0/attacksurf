@@ -18,7 +18,7 @@ from attacksurf.domain import scope
 from attacksurf.domain.net import DnsError, DnsLookup, DnsQuery, DnsRecordType, DnsStatus
 from attacksurf.domain.scope import PublicSuffix
 from attacksurf.infra import public_suffix
-from attacksurf.infra.dns import DnsPythonResolver
+from attacksurf.infra.dns import DnsPythonResolver, _record_text
 from attacksurf.scanners import registry
 
 
@@ -250,3 +250,10 @@ def test_lookup_many_runs_queries_concurrently_under_the_limit(
 
 def test_lookup_many_without_queries_does_not_start_an_event_loop() -> None:
     assert DnsPythonResolver().lookup_many(()) == ()
+
+
+def test_txt_record_text_escapes_nul_bytes() -> None:
+    class TxtRecord:
+        strings = (b"a\x00b",)
+
+    assert _record_text(TxtRecord(), DnsRecordType.TXT) == "a\\0b"

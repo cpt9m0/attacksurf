@@ -314,6 +314,29 @@ def test_resolve_adds_reverse_dns_to_ip_details() -> None:
     assert ip_observation.details["ip"] == {"ptr": "host.acme.example"}
 
 
+def test_resolve_preserves_ip_details_when_reverse_dns_fails() -> None:
+    output, _dns = run(
+        {(ASSET, DnsRecordType.A): ("93.184.216.34",)},
+        errors={("34.216.184.93.in-addr.arpa", DnsRecordType.PTR)},
+        intel=FakeIntel({"93.184.216.34": IpInfo(asn=13335, org="CLOUDFLARENET", country="US")}),
+    )
+
+    assert not any(item.asset.type is AssetType.IP for item in output.observations)
+
+
+def test_resolve_clears_ip_details_when_reverse_dns_is_absent() -> None:
+    output, _dns = run({(ASSET, DnsRecordType.A): ("93.184.216.34",)})
+
+    ip_observation = next(item for item in output.observations if item.asset.type is AssetType.IP)
+    assert ip_observation.details == {"ip": {}}
+
+
+def test_resolve_escapes_nul_bytes_in_txt_records() -> None:
+    output, _dns = run({(ASSET, DnsRecordType.TXT): ("a\x00b",)})
+
+    assert dns_details(output)["txt"] == ["a\\0b"]
+
+
 def test_resolve_does_not_deactivate_a_wildcard_zone() -> None:
     output, _dns = run({}, default_status=DnsStatus.NXDOMAIN, wildcard=True)
 

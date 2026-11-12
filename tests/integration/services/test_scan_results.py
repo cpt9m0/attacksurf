@@ -567,7 +567,9 @@ def test_persist_merges_observation_details_and_keeps_existing_keys(
 
     persist_scan_output(db_session, scan, root.id, output, catalog=catalog)
 
-    assert root.details == {"wildcard": True, "dns": {"a": ["93.184.216.34"]}}
+    assert root.details["wildcard"] is True
+    assert root.details["dns"] == {"a": ["93.184.216.34"]}
+    assert "observed_at" in root.details
 
 
 def test_persist_deactivates_a_non_resolving_discovered_subdomain(
@@ -635,12 +637,19 @@ def test_persist_ignores_an_older_deactivation_result(
 ) -> None:
     scan = make_scan(db_session)
     subdomain = _subdomain(db_session, scan)
+    previous = {
+        "dns": {"a": ["93.184.216.34"]},
+        "observed_at": (subdomain.last_seen + timedelta(hours=1)).isoformat(),
+    }
+    subdomain.details = previous
     scan.started_at = subdomain.last_seen - timedelta(hours=1)
     db_session.flush()
     output = ScanOutput(
         observations=(
             AssetObservation(
-                asset=AssetRef(type=AssetType.SUBDOMAIN, value=subdomain.value), active=False
+                asset=AssetRef(type=AssetType.SUBDOMAIN, value=subdomain.value),
+                details={"dns": {}},
+                active=False,
             ),
         )
     )
@@ -648,6 +657,7 @@ def test_persist_ignores_an_older_deactivation_result(
     persist_scan_output(db_session, scan, subdomain.id, output, catalog=catalog)
 
     assert subdomain.is_active is True
+    assert subdomain.details == previous
 
 
 def test_observation_for_a_cap_dropped_asset_is_skipped(

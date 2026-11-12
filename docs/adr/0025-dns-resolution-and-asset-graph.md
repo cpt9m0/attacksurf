@@ -34,8 +34,13 @@ ever deactivating a root the org added itself.
   another scanner's keys. DNS records live under `details["dns"]` (`a`, `aaaa`, `cname`, `mx`,
   `ns`, `txt`, `caa`, `soa`, `cname_chain`, `private_ips`); IP enrichment lives under
   `details["ip"]` (`ptr`, `asn`, `org`, `country`). Values are normalized, deduplicated and
-  capped (5 records/type, 256 characters, 16 KiB per observation). A transient lookup error does
-  not erase the last good details; a confirmed empty answer does.
+  capped (5 records/type, 256 characters, 16 KiB per observation). Details carry a top-level
+  `observed_at` marker: only an observation at least as new may replace them, so a delayed
+  older scan cannot erase newer records. A partial lookup failure withholds the whole `dns`
+  replacement (a top-level merge would otherwise drop the failed record type); a confirmed
+  empty answer does replace it with an empty subtree. Reverse DNS failures likewise withhold
+  that IP's `ip` subtree instead of erasing a known PTR. NUL bytes in DNS character-strings
+  are stored as a visible `\0`, because PostgreSQL JSONB cannot represent U+0000.
 - **Graph:** A/AAAA answers create `ip` assets and `resolves_to` edges from the scanned asset to
   each address (effective resolution). CNAME hops create assets and `cname_to` edges only for
   names at or under the scan root; external targets stay in `cname_chain` and are neither tenant

@@ -68,13 +68,20 @@ PRIVATE_IP_RULE = "dns.records.private_ip_exposed"
 
 
 @dataclass(frozen=True)
+class _PtrLookup:
+    names: dict[str, str]
+    queried: frozenset[str]
+    failed: frozenset[str]
+
+
+@dataclass(frozen=True)
 class _Resolution:
     by_type: dict[DnsRecordType, DnsLookup]
     chain: tuple[str, ...]
     chain_error: bool
     addresses: tuple[tuple[DnsRecordType, str], ...]
     address_error: bool
-    ptr: dict[str, str]
+    ptr: _PtrLookup
 
 
 @register_scanner
@@ -185,10 +192,12 @@ def _addresses(
     return tuple(found), error
 
 
-def _reverse_dns(
-    dns: DnsResolver, addresses: tuple[tuple[DnsRecordType, str], ...]
-) -> dict[str, str]:
-    """PTR names for the first few addresses; failures are simply absent enrichment."""
+def _reverse_dns(dns: DnsResolver, addresses: tuple[tuple[DnsRecordType, str], ...]) -> _PtrLookup:
+    """PTR names for the first few addresses, plus which queries were inconclusive.
+
+    A failed PTR query must not be mistaken for "no PTR": the IP observation is withheld for
+    that address so a top-level `ip` merge cannot erase the last known value.
+    """
     targets = addresses[:MAX_REVERSE_LOOKUPS]
     queries: list[DnsQuery] = []
     reverse: dict[str, str] = {}
@@ -199,21 +208,31 @@ def _reverse_dns(
             continue
         reverse[reverse_name] = address
         queries.append(DnsQuery(reverse_name, DnsRecordType.PTR))
+    queried = frozenset(reverse.values())
     if not queries:
-        return {}
+        return _PtrLookup({}, queried, queried)
     try:
         results = dns.lookup_many(tuple(queries))
     except DnsError:
-        return {}
+        return _PtrLookup({}, queried, queried)
     names: dict[str, str] = {}
+    failed: set[str] = set()
     for result in results:
+        address = reverse.get(result.query.name)
+        if address is None:
+            continue
+        if result.status is DnsStatus.ERROR:
+            failed.add(address)
+            continue
         if result.status is not DnsStatus.OK or not result.values:
             continue
         host = _hostname(result.values[0])
-        address = reverse.get(result.query.name)
-        if host is not None and address is not None:
+        if host is not None:
             names[address] = host
-    return names
+        else:
+            # A successful but unusable PTR is not evidence that the old value disappeared.
+            failed.add(address)
+    return _PtrLookup(names, queried, frozenset(failed))
 
 
 def _output(ctx: ScanContext, asset: AssetRef, resolution: _Resolution) -> ScanOutput:
@@ -250,10 +269,13 @@ def _output(ctx: ScanContext, asset: AssetRef, resolution: _Resolution) -> ScanO
     observations = [AssetObservation(asset=asset, details=details, active=active)]
     findings = _private_findings(asset, resolution.chain, private)
     for _record_type, address in resolution.addresses:
+        if address not in resolution.ptr.queried or address in resolution.ptr.failed:
+            # Unknown PTR (over the cap or a failed query): keep the previous `ip` subtree.
+            continue
         info = runtime.ip_intel.lookup(address)
         ip_details: dict[str, JsonValue] = {}
-        if address in resolution.ptr:
-            ip_details["ptr"] = resolution.ptr[address]
+        if address in resolution.ptr.names:
+            ip_details["ptr"] = resolution.ptr.names[address]
         if info is not None:
             if info.asn is not None:
                 ip_details["asn"] = info.asn
@@ -261,14 +283,14 @@ def _output(ctx: ScanContext, asset: AssetRef, resolution: _Resolution) -> ScanO
                 ip_details["org"] = info.org[:200]
             if info.country:
                 ip_details["country"] = info.country[:8]
-        if ip_details:
-            observations.append(
-                AssetObservation(
-                    asset=AssetRef(type=AssetType.IP, value=address),
-                    details={"ip": ip_details},
-                    active=True,
-                )
+        # Emit even when empty: a confirmed missing PTR must clear a stale one.
+        observations.append(
+            AssetObservation(
+                asset=AssetRef(type=AssetType.IP, value=address),
+                details={"ip": ip_details},
+                active=True,
             )
+        )
     return ScanOutput(
         assets=tuple(assets),
         relations=tuple(relations),
@@ -470,7 +492,8 @@ def _records(
     result: list[str] = []
     seen: set[str] = set()
     for raw in values:
-        value = raw.strip()
+        # PostgreSQL JSONB cannot store U+0000; keep TXT content visible as an escape.
+        value = raw.strip().replace("\x00", "\\0")
         if not value or value in seen:
             continue
         seen.add(value)

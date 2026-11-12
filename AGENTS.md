@@ -97,8 +97,9 @@ sync" rule below is satisfied**. Do not claim done without running them.
    references use `(type, value)`, not row IDs. Scanner tasks persist data + completed job
    atomically before returning a chord receipt; never return evidence through Redis (ADR 0011).
    Per-asset metadata and lifecycle claims go through `ScanOutput.observations`
-   (`AssetObservation`): details merge top-level into `Asset.details`, are capped, and only
-   discovered assets can be deactivated (ADR 0025).
+   (`AssetObservation`): details merge top-level into `Asset.details`, are capped, carry an
+   `observed_at` marker so stale observations cannot replace newer ones, and only discovered
+   assets can be deactivated (ADR 0025).
 6. **All outbound network traffic from scanners goes through ScopeGuard and its adapters**
    (`infra/scope_guard.py`; ADR 0013). Scanners use `ctx.runtime.dns` / `ctx.runtime.http` only,
    never raw `requests`/`httpx`/sockets/dnspython (a test enforces it), and declare a

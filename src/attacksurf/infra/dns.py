@@ -144,11 +144,17 @@ class DnsPythonResolver:
 
 
 def _record_text(record: Any, record_type: DnsRecordType) -> str:
-    """TXT chunks are joined without their presentation quotes; other types keep `str()`."""
+    """TXT chunks are joined without their presentation quotes; other types keep `str()`.
+
+    U+0000 is replaced with a visible `\\0`: DNS character-strings may contain it, but
+    PostgreSQL JSONB rejects the JSON escape, so a single NUL would fail the whole scan.
+    """
     if record_type is DnsRecordType.TXT:
         strings = getattr(record, "strings", ())
-        return b"".join(strings).decode("utf-8", errors="replace")
-    return str(record)
+        text = b"".join(strings).decode("utf-8", errors="replace")
+    else:
+        text = str(record)
+    return text.replace("\x00", "\\0")
 
 
 def _strip_dot(name: str) -> str:

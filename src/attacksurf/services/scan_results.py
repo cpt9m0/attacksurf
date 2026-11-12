@@ -3,7 +3,7 @@
 import hashlib
 import json
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid5
 
 from sqlalchemy import case, func, tuple_
@@ -22,6 +22,8 @@ from attacksurf.infra.db.models import Asset, Evidence, Finding, Scan
 from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.services.assets import record_asset, record_relation
 from attacksurf.services.scans import TERMINAL
+
+OBSERVED_AT = "observed_at"
 
 
 def persist_scan_output(
@@ -221,11 +223,18 @@ def _observe(row: Asset, observation: AssetObservation, seen: datetime) -> None:
     """Merge details and apply a lifecycle claim without moving state backwards.
 
     A scanner may deactivate only a discovered asset: roots are user-owned and stay active even
-    when their DNS no longer resolves. A late older result can extend details but never
-    reactivates or deactivates over a newer sighting.
+    when their DNS no longer resolves. Details are only replaced by an observation at least as
+    new as the stored one, so a delayed older result cannot erase newer records; lifecycle has
+    its own monotonic checks below.
     """
     if observation.details:
-        row.details = {**(row.details or {}), **observation.details}
+        observed_at = _details_time(row.details)
+        if observed_at is None or seen >= observed_at:
+            row.details = {
+                **(row.details or {}),
+                **observation.details,
+                OBSERVED_AT: seen.isoformat(),
+            }
     if observation.active is None:
         return
     if observation.active:
@@ -237,6 +246,20 @@ def _observe(row: Asset, observation: AssetObservation, seen: datetime) -> None:
     if row.parent_id is not None and row.is_active and seen >= row.last_seen:
         row.is_active = False
         row.deactivated_at = seen
+
+
+def _details_time(details: object) -> datetime | None:
+    """When the stored details were observed, or None for rows written before this marker."""
+    if not isinstance(details, dict):
+        return None
+    raw = details.get(OBSERVED_AT)
+    if not isinstance(raw, str):
+        return None
+    try:
+        value = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def _upsert_evidence(
