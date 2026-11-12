@@ -12,7 +12,8 @@ details, IP/CNAME graph edges, inactive non-resolving subdomains, offline ip2asn
 `dns.records.private_ip_exposed` info finding, and the asset-detail DNS/IP cards. ADR 0025 records
 the decisions. No migration and no new dependency. Local checks (ruff, format, pyright,
 pytest/coverage, import-linter) pass. The work is committed in four logical commits and pushed
-as draft PR #161 (https://github.com/cpt9m0/attacksurf/pull/161).
+as draft PR #161 (https://github.com/cpt9m0/attacksurf/pull/161). CI is green: lint, tests on
+3.12/3.13/3.15, web-e2e, secrets, compose and pr-title all pass.
 
 ## Last task
 - Added `DnsResolver.lookup_many`/`DnsQuery`/`DnsLookup`/`IpIntel` ports and the async
@@ -27,7 +28,7 @@ as draft PR #161 (https://github.com/cpt9m0/attacksurf/pull/161).
 1. From the worktree run the full gate again:
    `ruff check`, `ruff format --check`, `pyright`, `pytest` (with `TEST_DATABASE_URL`),
    `lint-imports`, `pre-commit run --all-files`.
-2. Wait for CI on draft PR #161; fix any failures.
+2. Add light/dark screenshots and do the manual real-scan acceptance, then mark PR #161 ready.
 3. Manual acceptance: `make up`, add a real domain, start a scan through `scans.start_scan`
    (scan trigger UI is still #21), then open `/assets/<id>` and verify the CNAME → IP chain and
    records. Capture light/dark screenshots for the PR.
