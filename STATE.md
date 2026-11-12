@@ -11,8 +11,8 @@ Implementation is complete in the worktree `.worktrees/16-dns-resolution` (branc
 details, IP/CNAME graph edges, inactive non-resolving subdomains, offline ip2asn enrichment, the
 `dns.records.private_ip_exposed` info finding, and the asset-detail DNS/IP cards. ADR 0025 records
 the decisions. No migration and no new dependency. Local checks (ruff, format, pyright,
-pytest/coverage, import-linter) pass. The work is committed in four logical commits on this
-branch; it is not pushed or opened as a PR yet.
+pytest/coverage, import-linter) pass. The work is committed in four logical commits and pushed
+as draft PR #161 (https://github.com/cpt9m0/attacksurf/pull/161).
 
 ## Last task
 - Added `DnsResolver.lookup_many`/`DnsQuery`/`DnsLookup`/`IpIntel` ports and the async
@@ -27,8 +27,7 @@ branch; it is not pushed or opened as a PR yet.
 1. From the worktree run the full gate again:
    `ruff check`, `ruff format --check`, `pyright`, `pytest` (with `TEST_DATABASE_URL`),
    `lint-imports`, `pre-commit run --all-files`.
-2. Commit in the planned logical commits, push `16-dns-resolution`, and open a draft PR
-   `feat(dns): resolve DNS records and build the asset graph (#16)`.
+2. Wait for CI on draft PR #161; fix any failures.
 3. Manual acceptance: `make up`, add a real domain, start a scan through `scans.start_scan`
    (scan trigger UI is still #21), then open `/assets/<id>` and verify the CNAME → IP chain and
    records. Capture light/dark screenshots for the PR.
