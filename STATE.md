@@ -2,46 +2,35 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-11 · **Branch:** `main` · **Issue:** #15 · **PR:** #155 (merged)
+**Updated:** 2026-11-12 · **Branch:** `main` · **PRs:** #151–#154 (merged)
 
 ## Status
-Issue #15 is merged into `main` as `dfc8111` (PR #155). The Cert Spotter pagination review
-comment is addressed: the source follows the last issuance id as `after`, repeats until an empty
-page, and never caches a partial result. All local checks are green: ruff, pyright,
-import-linter, pre-commit, `uv lock --check`, and `pytest` with Postgres (1333 passed, 18 skipped,
-coverage 97.24%); all PR CI checks passed. A real `dns_passive` scan of `example.com` in the dev
-Compose stack completed and persisted `dev`, `m`, `products`, `support` and `www` subdomains with
-five `subdomain_of` relations. The test org was removed afterwards.
+All four open Dependabot PRs are merged; `main` is `c77df93`. The runtime image is Python 3.15
+(`python:3.15-slim`), pydantic 2.14.1 / pydantic-core 2.50.1, and CI tests 3.12, 3.13 and 3.15.
+Image digests: postgres 18.6, redis 8.10.3, cloudflared 2026.10.7. All checks are green.
 
 ## Last task
-- Added the `dns.discovery.ct` scanner (crt.sh + Cert Spotter fallback), the namespaced
-  fail-open Redis source cache (`ctx.runtime.cache`), wildcard-zone detection and
-  `Asset.details["wildcard"]` persistence, and the `dns_passive` discovery cap (ADR 0022).
-- Added unit/integration/fixture tests; updated architecture, security, add-scanner skill,
-  AGENTS, CHANGELOG and ADR 0022.
-- Addressed the Cert Spotter pagination review comment: cursor-based `after` pagination until
-  an empty page, with incomplete results never cached.
-- Squash-merged PR #155 into `main` as `dfc8111`; the remote issue branch was deleted and the
-  local checkout is on `main`.
-- Local `worker-passive` was restarted to load the new scanner; the Compose stack is still up.
+- Merged #151 (redis), #152 (cloudflared 2026.10.0 → 2026.10.7) and #153 (postgres) digest bumps.
+- Merged #154 (Python 3.13 → 3.15) with a follow-up commit: pydantic 2.14.1 and grimp 3.18 are
+  needed because pydantic-core 2.46.5 has no cp315 wheel and the 3.15 build failed without one;
+  added `test (3.15)` to CI, updated `docs/development.md`, the pre-PR skill and `CHANGELOG.md`.
+- Verified pytest on 3.12/3.14/3.15 (1269 passed, 18 skipped each), dev/prod image builds,
+  ruff/pyright/import-linter/pre-commit, and worker smoke tests on the rebuilt dev stack.
 
 ## Next step
-Implement #16 (DNS resolution + asset graph); it should
-read `Asset.details["wildcard"]` before treating wildcard answers as real hosts and can reuse
-`ctx.runtime.cache` for RDAP-style source data.
+Implement #16 (DNS resolution + asset graph); read `Asset.details["wildcard"]` before treating
+wildcard answers as real hosts and reuse `ctx.runtime.cache` for RDAP-style source data.
 
 ## Open threads
-- The live scan seeded the shared Redis cache with the public CT result for `example.com`
-  (`attacksurf:scan-cache:v1:ct:v1:example.com`, TTL 6 h). It is safe to leave; delete the key if
-  a fresh live source query is needed.
-- The dev Compose stack and the `.venv` remain from this session; no production deploy was done.
+- The dev Compose stack is up on Python 3.15 and the new postgres/redis digests; no production
+  deploy was done.
+- Redis still holds the public CT result for `example.com`
+  (`attacksurf:scan-cache:v1:ct:v1:example.com`, TTL 6 h); safe to leave.
 
 ## Notes for the next agent
 - Production plugins are registered explicitly in `src/attacksurf/app.py` and
-  `src/attacksurf/workers/app.py`; a new plugin needs both imports. `scanners/__init__.py`
-  intentionally only holds the package docstring (importing a subpackage there breaks the
-  import-linter entry-point contract).
-- `ScanOutput.wildcard_zones` is validated by `services.scan_results`; persistence marks only
-  the root and admitted discovered zones. A marker for a non-root input is rejected.
-- Tests that need Redis behavior use `tests.fakes.FakeCache`; `workers.runtime.scan_cache` is
-  `lru_cache`d and cleared on worker fork.
+  `src/attacksurf/workers/app.py`; a new plugin needs both imports.
+- `ScanOutput.wildcard_zones` is validated by `services.scan_results`; a marker for a non-root
+  input is rejected. Tests that need Redis behavior use `tests.fakes.FakeCache`.
+- Bumping the Python base image again needs a `pydantic-core` release with wheels for that
+  CPython; `grimp` 3.18 is the first with aarch64 cp315 wheels (dev only).
