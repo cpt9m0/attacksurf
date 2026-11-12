@@ -6,8 +6,8 @@
 sandbox), PR 3b of the 3a to 3d launcher split
 
 ## Status
-PR 3b (sandbox launcher building blocks) is code- and docs-complete on `84-sandbox-launcher-core`:
-five commits, local gates green, branch not pushed, no PR open yet.
+PR 3b (sandbox launcher building blocks) is open as draft #158 on `84-sandbox-launcher-core`;
+CI green.
 
 ## Last task
 - `SandboxLauncherSettings` in `config.py` (env only, wall time at most 840 s, `runc` refused in prod).
@@ -18,10 +18,8 @@ five commits, local gates green, branch not pushed, no PR open yet.
   `CHANGELOG.md`.
 
 ## Next step
-Run `pre-pr-check` over the whole branch and check that `git diff main...HEAD --stat` is about 400
-changed lines or fewer excluding tests. Then push and open a draft PR titled
-`feat(infra): add sandbox launcher building blocks`, with
-`Merge order: 3b of #84. Merge after #157, before <3c PR>. See #84.`
+Get #157 (3a) and then #158 (3b) reviewed and merged, then start PR 3c (`runner.py`,
+`server.py` with `POST /runs`, `__main__.py`) per `docs/plans/84-pr3-sandbox-launcher-split-4-prs.md`.
 
 ## Open threads
 - PR 3a (#157, `84-sandbox-runtime-info`, proxy `GET /info`) is open as a draft. PR 3c needs
