@@ -1,7 +1,7 @@
 import contextlib
 import threading
 import time
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -735,3 +735,53 @@ def test_persist_allows_a_subdomain_cname_to_its_root(
         root.id,
         RelationKind.CNAME_TO,
     )
+
+
+def test_later_negative_observation_outranks_a_delayed_positive(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    subdomain = _subdomain(db_session, scan)
+    base = datetime.now(UTC)
+    first_negative = base + timedelta(hours=1)
+    delayed_positive = base + timedelta(hours=2)
+    latest_negative = base + timedelta(hours=3)
+
+    for seen, active in ((first_negative, False), (latest_negative, False)):
+        scan.started_at = seen
+        persist_scan_output(
+            db_session,
+            scan,
+            subdomain.id,
+            ScanOutput(
+                observations=(
+                    AssetObservation(
+                        asset=AssetRef(type=AssetType.SUBDOMAIN, value=subdomain.value),
+                        details={"dns": {}},
+                        active=active,
+                    ),
+                )
+            ),
+            catalog=catalog,
+        )
+
+    scan.started_at = delayed_positive
+    persist_scan_output(
+        db_session,
+        scan,
+        subdomain.id,
+        ScanOutput(
+            observations=(
+                AssetObservation(
+                    asset=AssetRef(type=AssetType.SUBDOMAIN, value=subdomain.value),
+                    details={"dns": {"a": ["93.184.216.34"]}},
+                    active=True,
+                ),
+            )
+        ),
+        catalog=catalog,
+    )
+
+    assert subdomain.is_active is False
+    assert subdomain.deactivated_at == latest_negative
+    assert subdomain.details["dns"] == {}

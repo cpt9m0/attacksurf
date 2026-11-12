@@ -44,13 +44,17 @@ ever deactivating a root the org added itself.
 - **Graph:** A/AAAA answers create `ip` assets and `resolves_to` edges from the scanned asset to
   each address (effective resolution). CNAME hops create assets and `cname_to` edges only for
   names at or under the scan root; external targets stay in `cname_chain` and are neither tenant
-  assets nor scanned. The asset detail page renders the chain and the records, so the acceptance
-  criterion is visible even when the terminal CNAME target is external.
+  assets nor scanned. Assets and relations are emitted in a stable type/value order, so
+  concurrent scans that share IP rows take their upsert locks in the same order. The asset
+  detail page renders the chain and the records, so the acceptance criterion is visible even
+  when the terminal CNAME target is external.
 - **Lifecycle:** a discovered subdomain with no records at all becomes `is_active=false` with
   `deactivated_at` set to the scan's sighting time; a name with only MX/TXT/NS stays active.
   Only rows with a parent can be deactivated, so roots/user assets never are. Out-of-order
-  results never move lifecycle backwards, and a wildcard-marked zone (`target_is_wildcard`) is
-  never deactivated on an empty answer. CT rediscovery can reactivate a name later; a full
+  results never move lifecycle backwards: repeated negative observations advance
+  `deactivated_at` even while the row is already inactive, so a delayed positive result cannot
+  reactivate it. A wildcard-marked zone (`target_is_wildcard`) is never deactivated on an empty
+  answer. CT rediscovery can reactivate a name later; a full
   reconciliation policy belongs to #20.
 - **Exposure finding:** each private, loopback, link-local or special-purpose address found in
   public A/AAAA data emits `dns.records.private_ip_exposed` at info severity, with the address

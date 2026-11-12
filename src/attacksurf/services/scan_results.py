@@ -243,9 +243,12 @@ def _observe(row: Asset, observation: AssetObservation, seen: datetime) -> None:
             row.is_active = True
             row.deactivated_at = None
         return
-    if row.parent_id is not None and row.is_active and seen >= row.last_seen:
+    if row.parent_id is not None and seen >= row.last_seen:
+        # Advance even when already inactive: a later negative observation must outrank a
+        # delayed positive one that would otherwise pass the reactivation check.
+        if row.deactivated_at is None or seen > row.deactivated_at:
+            row.deactivated_at = seen
         row.is_active = False
-        row.deactivated_at = seen
 
 
 def _details_time(details: object) -> datetime | None:

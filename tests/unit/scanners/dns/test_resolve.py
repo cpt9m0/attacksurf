@@ -137,8 +137,8 @@ def test_resolve_creates_ip_assets_and_resolves_to_relations() -> None:
     )
 
     assert [(item.type, item.value) for item in output.assets] == [
-        (AssetType.IP, "93.184.216.34"),
         (AssetType.IP, "2606:2800:220:1::1"),
+        (AssetType.IP, "93.184.216.34"),
     ]
     assert {(rel.kind, rel.from_asset.value, rel.to_asset.value) for rel in output.relations} == {
         (RelationKind.RESOLVES_TO, ASSET, "93.184.216.34"),
@@ -148,6 +148,12 @@ def test_resolve_creates_ip_assets_and_resolves_to_relations() -> None:
         "a": ["93.184.216.34"],
         "aaaa": ["2606:2800:220:1::1"],
     }
+
+
+def test_resolve_sorts_ip_assets_independent_of_answer_order() -> None:
+    output, _dns = run({(ASSET, DnsRecordType.A): ("93.184.216.2", "93.184.216.1")})
+
+    assert [item.value for item in output.assets] == ["93.184.216.1", "93.184.216.2"]
 
 
 def test_resolve_follows_cname_chain_and_only_graphs_in_root_hops() -> None:

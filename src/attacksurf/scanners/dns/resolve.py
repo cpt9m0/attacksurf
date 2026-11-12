@@ -65,6 +65,7 @@ MAX_RECORDS_PER_TYPE = 5
 MAX_RECORD_LENGTH = 256
 MAX_HOSTNAME_LENGTH = 253
 PRIVATE_IP_RULE = "dns.records.private_ip_exposed"
+_ASSET_ORDER = {asset_type: index for index, asset_type in enumerate(AssetType)}
 
 
 @dataclass(frozen=True)
@@ -397,7 +398,25 @@ def _graph(
             seen_assets.add(key)
             assets.append(target)
         _add_relation(relations, seen_relations, asset, target, RelationKind.RESOLVES_TO)
+    # Upserts take row locks in output order. Two roots resolving the same IPs in opposite DNS
+    # order would deadlock; a stable order makes every persistence transaction lock them alike.
+    assets.sort(key=_asset_key)
+    relations.sort(key=_relation_key)
     return assets, relations
+
+
+def _asset_key(ref: AssetRef) -> tuple[int, str]:
+    return (_ASSET_ORDER[ref.type], ref.value)
+
+
+def _relation_key(relation: DiscoveredRelation) -> tuple[int, str, int, str, str]:
+    return (
+        _ASSET_ORDER[relation.from_asset.type],
+        relation.from_asset.value,
+        _ASSET_ORDER[relation.to_asset.type],
+        relation.to_asset.value,
+        relation.kind.value,
+    )
 
 
 def _chain_ref(ctx: ScanContext, asset: AssetRef, hop: str) -> AssetRef | None:
