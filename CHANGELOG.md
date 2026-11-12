@@ -6,11 +6,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
-- Sandbox launcher building blocks: env-only settings, an analyzer catalog (empty until the first
-  analyzer ships), an artifact resolver that refuses symlinks and anything outside the artifact
-  root, a create-body builder checked against the proxy's policy, and a stdout reader that drops
-  stderr, caps output at 2 MiB and rejects truncated streams. The launcher service that runs
-  them is not built yet (#84).
+- Sandbox launcher building blocks: env-only settings (the proxy URL is a `SecretStr`, since it
+  may embed credentials), an analyzer catalog (empty until the first analyzer ships), an artifact
+  resolver that refuses symlinks and anything outside the artifact root, a create-body builder
+  checked against the proxy's policy, and a stdout reader that drops stderr, caps output at 2 MiB
+  and rejects truncated streams. The launcher service that runs them is not built yet (#84).
 - Subdomain discovery from Certificate Transparency: `dns.discovery.ct` queries crt.sh's JSON
   endpoint with Cert Spotter as fallback, normalizes and caps names per root (1000), caches
   complete results in a namespaced Redis cache for six hours, and detects wildcard DNS zones.

@@ -7,20 +7,24 @@ sandbox), PR 3b of the 3a to 3d launcher split
 
 ## Status
 `main` has PR 3a (#157, merged): the sandbox proxy answers `GET /info` with the registered
-runtime names (ADR 0023). PR 3b (sandbox launcher building blocks) is open as draft #158 on
-`84-sandbox-launcher-core`, now merged with `main`, pending codex review.
+runtime names (ADR 0023). PR 3b (sandbox launcher building blocks) is open as #158 on
+`84-sandbox-launcher-core`, merged with `main`, CI green, Codex reviewed with no findings, and
+mergeable. It contains the settings, catalog, artifact resolver, create-body builder and capped
+stdout reader; the launcher service itself is PR 3c.
 
 ## Last task
 - `SandboxLauncherSettings` in `config.py` (env only, wall time at most 840 s, `runc` refused in prod).
 - `sandbox_launcher/catalog.py` + `artifacts.py`, and the launcher import-linter contract.
 - `sandbox_launcher/container.py`: `build_create_body`, tested against the real proxy policy.
 - `sandbox_launcher/stream.py`: `read_stdout` keeps stdout, drops stderr, caps at 2 MiB, fails closed.
+- Codex review fix: `SANDBOX_PROXY_URL` is a `SecretStr` validated on its unwrapped value and
+  masked in `repr()`/serialization; tests cover the mask.
 - Docs: `AGENTS.md` layout, `docs/architecture.md` (launcher building blocks), `docs/security.md`,
   `CHANGELOG.md`.
 
 ## Next step
-Get #158 (3b) reviewed and merged, then start PR 3c (`runner.py`, `server.py` with `POST /runs`,
-`__main__.py`) per issue #84's merge-order checklist.
+Merge #158 (3b), then start PR 3c (`runner.py`, `server.py` with `POST /runs`, `__main__.py`)
+per issue #84's merge-order checklist.
 
 ## Open threads
 - PR 3c needs both 3a and 3b merged (or stacks on them as a draft).
