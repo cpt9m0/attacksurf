@@ -217,13 +217,16 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 ## AI layer
 
 - `LLMProvider` protocol (`domain/llm.py`, ADR 0019) with `AnthropicProvider`
-  (`ai/providers/anthropic.py`) and `OpenAICompatProvider` (configurable `base_url`). Official
+  (`ai/providers/anthropic.py`) and `OpenAICompatProvider` (`ai/providers/openai_compat.py`,
+  configurable `base_url`). Official
   SDKs, no meta-library; only `ai/providers/` imports one (an import-linter contract). No
   sampling settings: models run with their defaults (ADR 0024).
 - A provider is built from one `LLMConfig` chosen by `ai/config.resolve_llm_config`: the org's
   own key (and its provider/model/base URL), else the instance `LLM_*` config (capped per org,
   #24), else AI off. Sources never mix; no failover between keys. Model names only from config.
-- Structured output via each API's JSON-schema format; validation plus one corrective retry is
+- Structured output via each API's JSON-schema format (`OpenAICompatProvider` falls back on HTTP
+  400 to `json_object` mode with the schema in the system message, then plain text); validation
+  plus one corrective retry is
   shared (`ai/structured.complete_structured`). Errors map to `LLMError` subclasses
   (`ai/errors.py`). Adapters pass `ai/limits.py`'s timeout and retry count (0: no SDK retries, ADR 0024)
   to their SDK and enforce its total `CALL_DEADLINE_SECONDS` per call (which leaves room under

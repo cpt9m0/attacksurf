@@ -6,6 +6,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- OpenAI-compatible provider (`ai/providers/openai_compat.py`, #23): Chat Completions requests
+  with `max_completion_tokens`, native `json_schema` structured output with HTTP 400 fallback to
+  `json_object` and then plain text (including the schema in the system prompt), the base URL
+  always passed explicitly so `OPENAI_BASE_URL` can't redirect a key, `finish_reason`
+  `length`/`content_filter` and `message.refusal` failing at once with usage, unreadable 2xx
+  replies treated as transient, missing usage recorded as unreported, and `CALL_DEADLINE_SECONDS`
+  enforced across format fallbacks and the corrective retry. Passes the shared provider contract
+  against a stubbed API, adds an opt-in `llm_live` test (`tests/e2e/test_openai_compat_live.py`),
+  and adds `openai` (`>=3.41.0,<3.42`, two-week supply-chain policy) to the import-linter SDK
+  contract (ADR 0019, ADR 0024).
 - Sandbox launcher building blocks: env-only settings (the proxy URL is a `SecretStr`, since it
   may embed credentials), an analyzer catalog (empty until the first analyzer ships), an artifact
   resolver that refuses symlinks and anything outside the artifact root, a create-body builder

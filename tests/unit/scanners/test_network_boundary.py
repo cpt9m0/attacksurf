@@ -70,5 +70,7 @@ def test_detector_catches_a_direct_network_import(tmp_path: Path) -> None:
 
 def test_detector_catches_the_sdk_http_stack_and_llm_sdks(tmp_path: Path) -> None:
     sample = tmp_path / "plugin.py"
-    sample.write_text("import httpx2\nfrom httpcore2 import Request\nimport anthropic\n")
-    assert _violations(sample) == {"httpx2", "httpcore2", "anthropic"}
+    sample.write_text(
+        "import httpx2\nfrom httpcore2 import Request\nimport anthropic\nimport openai\n"
+    )
+    assert _violations(sample) == {"httpx2", "httpcore2", "anthropic", "openai"}

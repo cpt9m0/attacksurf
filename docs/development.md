@@ -148,10 +148,11 @@ LLM_API_KEY=...                              # your own key, only in .env
 `muse-spark-1.3-contributor` is cheaper because Meta may train on everything you send and get
 back: use it only with test fixtures, never with scan results of real domains.
 
-The same key works in the Anthropic format. Environment variables override `.env`, so you can
-switch formats for one command, e.g. the Anthropic adapter's live test:
+The same key works in both formats. Environment variables override `.env`, so you can run either
+adapter's live test without editing `.env`:
 
 ```bash
+RUN_LLM_TESTS=1 uv run pytest tests/e2e/test_openai_compat_live.py -m llm_live --no-cov
 LLM_PROVIDER=anthropic LLM_BASE_URL=https://api.meta.ai RUN_LLM_TESTS=1 \
     uv run pytest tests/e2e/test_anthropic_live.py -m llm_live --no-cov
 ```
@@ -202,8 +203,9 @@ pyright and pytest versions come from `uv.lock`.
 - No live network in tests: use fixtures under `tests/fixtures/` and fake providers.
 - LLM: tests use `tests.fakes.FakeLLMProvider` (queued replies, shared schema validation). A
   provider adapter's tests subclass `tests/unit/ai/contract.ProviderContract` with a harness that
-  stubs its HTTP (the Anthropic SDK takes `http_client=httpx2.Client(transport=
-  httpx2.MockTransport(...))`; see `tests/unit/ai/providers/test_anthropic.py`). Tests that call a real provider are marked `llm_live`; `tests/conftest.py`
+  stubs its HTTP (both SDKs take `http_client=httpx2.Client(transport=
+  httpx2.MockTransport(...))`; see `tests/unit/ai/providers/test_anthropic.py` and
+  `tests/unit/ai/providers/test_openai_compat.py`). Tests that call a real provider are marked `llm_live`; `tests/conftest.py`
   skips them unless you run `RUN_LLM_TESTS=1 uv run pytest -m llm_live --no-cov` with
   `LLM_API_KEY` and `LLM_MODEL` in your `.env`, and always in CI. `--no-cov` because a
   handful of live tests can't meet the whole-app coverage gate, which still applies to the
