@@ -22,7 +22,8 @@ Browser ─► web    ├────────────►│ Redis  ├�
             └──────────────────► PostgreSQL ◄───────────────┘
 ```
 
-Analysis path (ADR 0016, not built yet): only `sandbox-proxy` holds the Docker socket, and the
+Analysis path (ADR 0016; `sandbox-proxy` and the launcher's building blocks exist, the launcher
+service and the analysis worker do not yet): only `sandbox-proxy` holds the Docker socket, and the
 sandbox that reads the artifact has no network and no credentials.
 
 ```
@@ -34,6 +35,30 @@ worker-analysis ─ run(artifact ID, analyzer) ─► sandbox-launcher ─► sa
                                                           no network · read-only /input
                                                           tmpfs /scratch · CPU/mem/pids/time caps
 ```
+
+### Sandbox launcher building blocks
+
+`sandbox_launcher/` holds the pure parts of `sandbox-launcher`; nothing runs them yet. Each one
+refuses rather than guesses:
+
+- `config.SandboxLauncherSettings`: process env only (no `.env`, no app secrets); the proxy URL
+  must be plain `http://` with a host; wall time is at most 840 s, below the proxy's 900 s, so
+  the launcher's own kill fires first; `runc` is refused in prod.
+- `catalog.py`: each analyzer's command and limits are code, its image digest comes from
+  `sandbox-images.lock`; `load_catalog` keeps only analyzers present in both. `CATALOG` is empty
+  until the first analyzer ships.
+- `artifacts.py`: `resolve_artifact` returns `{root}/{uuid}` only if it is a real directory
+  directly inside the root, never a symlink; `ArtifactNotFound` never names the path.
+- `container.py`: `build_create_body` is the one place the ADR 0016 create body is spelled out;
+  tests run every body through the real `sandbox_proxy.policy.validate_create`.
+- `stream.py`: `read_stdout` demultiplexes Docker's attach frames, keeps stdout and drops stderr.
+  It caps stdout at 2 MiB (ADR 0011) on each frame's *declared* size, before the payload is
+  read, and raises on a cut-off or unknown frame, so partial output is never returned.
+
+The package imports nothing from the app or `sandbox_proxy` (import-linter). The values it
+shares with them (proxy limit ceilings, the digest pattern, create-body constants,
+`MAX_STDOUT_BYTES`) are copies that unit tests keep equal. PR 3c of #84 adds the service around
+them: `runner.py` (create, attach, start, kill), `server.py` (`POST /runs`) and `__main__.py`.
 
 ## Layers
 
@@ -217,7 +242,7 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 | `ai` | LLM calls | rate-limited per org |
 | `fetch` *(later)* | git smart-HTTP fetches | egress to allowlisted forges through ScopeGuard; no access to `sandbox-launcher`; never parses repository content (ADR 0017) |
 | `active` *(later)* | port/web probes on verified targets | separate network, egress rules |
-| `analysis` *(later)* | code/binary analysis (`sandbox_proxy/` is implemented; launcher and worker are not yet) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
+| `analysis` *(later)* | code/binary analysis (`sandbox_proxy/` and the `sandbox_launcher/` building blocks are implemented; the launcher service and the worker are not yet) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
 
 - `infra/queue.py`: `create_celery(settings)` (Redis broker + result backend from `REDIS_URL`,
   JSON only, `acks_late` + `reject_on_worker_lost`, prefetch 1, results ignored unless a

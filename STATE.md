@@ -2,46 +2,40 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-11 · **Branch:** `main` · **Issue:** #15 · **PR:** #155 (merged)
+**Updated:** 2026-11-12 · **Branch:** `84-sandbox-launcher-core` · **Issue:** #84 (analysis
+sandbox), PR 3b of the 3a to 3d launcher split
 
 ## Status
-Issue #15 is merged into `main` as `dfc8111` (PR #155). The Cert Spotter pagination review
-comment is addressed: the source follows the last issuance id as `after`, repeats until an empty
-page, and never caches a partial result. All local checks are green: ruff, pyright,
-import-linter, pre-commit, `uv lock --check`, and `pytest` with Postgres (1333 passed, 18 skipped,
-coverage 97.24%); all PR CI checks passed. A real `dns_passive` scan of `example.com` in the dev
-Compose stack completed and persisted `dev`, `m`, `products`, `support` and `www` subdomains with
-five `subdomain_of` relations. The test org was removed afterwards.
+PR 3b (sandbox launcher building blocks) is code- and docs-complete on `84-sandbox-launcher-core`:
+five commits, local gates green, branch not pushed, no PR open yet.
 
 ## Last task
-- Added the `dns.discovery.ct` scanner (crt.sh + Cert Spotter fallback), the namespaced
-  fail-open Redis source cache (`ctx.runtime.cache`), wildcard-zone detection and
-  `Asset.details["wildcard"]` persistence, and the `dns_passive` discovery cap (ADR 0022).
-- Added unit/integration/fixture tests; updated architecture, security, add-scanner skill,
-  AGENTS, CHANGELOG and ADR 0022.
-- Addressed the Cert Spotter pagination review comment: cursor-based `after` pagination until
-  an empty page, with incomplete results never cached.
-- Squash-merged PR #155 into `main` as `dfc8111`; the remote issue branch was deleted and the
-  local checkout is on `main`.
-- Local `worker-passive` was restarted to load the new scanner; the Compose stack is still up.
+- `SandboxLauncherSettings` in `config.py` (env only, wall time at most 840 s, `runc` refused in prod).
+- `sandbox_launcher/catalog.py` + `artifacts.py`, and the launcher import-linter contract.
+- `sandbox_launcher/container.py`: `build_create_body`, tested against the real proxy policy.
+- `sandbox_launcher/stream.py`: `read_stdout` keeps stdout, drops stderr, caps at 2 MiB, fails closed.
+- Docs: `AGENTS.md` layout, `docs/architecture.md` (launcher building blocks), `docs/security.md`,
+  `CHANGELOG.md`.
 
 ## Next step
-Implement #16 (DNS resolution + asset graph); it should
-read `Asset.details["wildcard"]` before treating wildcard answers as real hosts and can reuse
-`ctx.runtime.cache` for RDAP-style source data.
+Run `pre-pr-check` over the whole branch and check that `git diff main...HEAD --stat` is about 400
+changed lines or fewer excluding tests. Then push and open a draft PR titled
+`feat(infra): add sandbox launcher building blocks`, with
+`Merge order: 3b of #84. Merge after #157, before <3c PR>. See #84.`
 
 ## Open threads
-- The live scan seeded the shared Redis cache with the public CT result for `example.com`
-  (`attacksurf:scan-cache:v1:ct:v1:example.com`, TTL 6 h). It is safe to leave; delete the key if
-  a fresh live source query is needed.
-- The dev Compose stack and the `.venv` remain from this session; no production deploy was done.
+- PR 3a (#157, `84-sandbox-runtime-info`, proxy `GET /info`) is open as a draft. PR 3c needs
+  both 3a and 3b merged (or stacks on them as a draft).
+- `docs/plans/` (split plan and the per-commit PR 3b plans) is untracked on purpose.
 
 ## Notes for the next agent
-- Production plugins are registered explicitly in `src/attacksurf/app.py` and
-  `src/attacksurf/workers/app.py`; a new plugin needs both imports. `scanners/__init__.py`
-  intentionally only holds the package docstring (importing a subpackage there breaks the
-  import-linter entry-point contract).
-- `ScanOutput.wildcard_zones` is validated by `services.scan_results`; persistence marks only
-  the root and admitted discovered zones. A marker for a non-root input is rejected.
-- Tests that need Redis behavior use `tests.fakes.FakeCache`; `workers.runtime.scan_cache` is
-  `lru_cache`d and cleared on worker fork.
+- PR 3c `runner.py` must decide the outcome from its own flags (`timed_out`, cap tripped) before
+  any stream error: a kill mid-frame reaches `read_stdout` as `MalformedStream`. It strips the
+  proxy's HTTP response head before handing frames to `read_stdout`.
+- PR 3c moves `FakeDocker` to `tests/docker_fakes.py`; it must be able to script stdout/stderr
+  frames split across writes.
+- PR 3d's ~3 MiB reply cap assumes stdout is at most 2 MiB (base64 about 2.67 MiB).
+- The launcher copies proxy constants and `domain.scanners.MAX_OUTPUT_BYTES` on purpose (it may
+  not import them); a parity test guards each copy. Don't "fix" that by importing.
+- Plan docs for this PR: `docs/plans/84-pr3-sandbox-launcher-split-4-prs.md` and
+  `docs/plans/84-pr3b-launcher-building-blocks/`.
