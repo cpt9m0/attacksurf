@@ -2,35 +2,43 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-11 · **Branch:** `84-sandbox-runtime-info` · **Issue:** #84 (analysis sandbox), PR 3a of the split PR 3
+**Updated:** 2026-11-12 · **Branch:** `main` · **PR:** #157 (merged)
 
 ## Status
-PR 3a is committed (code + tests + ADR 0023, then docs) and pushed, and a PR is open
-(`gh pr view 84-sandbox-runtime-info`). It is waiting on CI and review.
+`main` has PR 3a of the #84 analysis sandbox: the sandbox proxy answers `GET /info` with the
+registered runtime names (ADR 0023), so the launcher can refuse to start in prod without
+`runsc`. Full suite: 1395 passed, 18 skipped, coverage 97.40%; ruff, pyright and lint-imports
+are clean. The runtime image is Python 3.15 (`python:3.15-slim`), pydantic 2.14.1 /
+pydantic-core 2.50.1, and CI tests 3.12, 3.13 and 3.15.
 
 ## Last task
-- `sandbox-proxy` allows one read call, `GET /info`. It answers with runtime names only,
-  caches a good answer for 60 s with one daemon call at a time, logs failure reasons (status
-  code only), and reads up to 8 MiB. Docker round trips share `_docker_call`.
-- ADR 0023 records the change (ADR 0016 has an "amended by" pointer); security.md and
-  CHANGELOG are updated.
-- Tests in the existing `tests/unit/sandbox_proxy/test_{policy,server}.py` cover the happy path,
-  boundaries, invalid requests, Docker failures, caching and concurrency. `FakeDocker` serves
-  `/info`. Full suite: 1395 passed, 18 skipped, coverage 97.48%.
+- Merged #157 (`84-sandbox-runtime-info`); the code merged cleanly and only `STATE.md`
+  conflicted with `main`.
+- `sandbox-proxy` allows exactly one read call, `GET /info`. It answers with sorted runtime
+  names only, caches a good answer for 60 s with one daemon call at a time, logs the failure
+  status code, and reads up to 8 MiB. The three Docker round trips share `_docker_call`.
+- ADR 0023 records the change (ADR 0016 has an "amended by" pointer); `docs/security.md` and
+  `CHANGELOG.md` are updated.
 
 ## Next step
-Start PR 3b (`84-sandbox-launcher-core`) from up-to-date `main`, following
-`docs/plans/84-pr3-sandbox-launcher-split-4-prs.md` (it doesn't depend on 3a). Merge 3a first
-when its review passes.
+PR 3b (`84-sandbox-launcher-core`, #158) is open and now needs a merge of `main`, which
+conflicts only in `STATE.md`. Then 3c (launcher service and the `runsc` startup check) and 3d
+(worker-side client). Order and scope: issue #84's merge-order checklist.
 
 ## Open threads
-- Issue #84's merge-order checklist lists 3a to 3d; `84-analysis-sandbox.md` (untracked) still
-  shows a single PR 3.
 - Optional one-line `/info` note in the `docs/architecture.md` proxy box: user hasn't decided.
+- The PR 3 plan (4 PRs, commits, testing gate) lived in
+  `docs/plans/84-pr3-sandbox-launcher-split-4-prs.md`, which is untracked and absent from this
+  checkout, so issue #84 is the current source of truth for the split.
 
 ## Notes for the next agent
-- The PR 3 plan (4 PRs, commits, testing gate) is in `docs/plans/84-pr3-sandbox-launcher-split-4-prs.md`
-  (untracked).
-- The user wants explanations in plain language, and tests run before every commit.
+- Production plugins are registered explicitly in `src/attacksurf/app.py` and
+  `src/attacksurf/workers/app.py`; a new plugin needs both imports.
+- `ScanOutput.wildcard_zones` is validated by `services.scan_results`; a marker for a non-root
+  input is rejected. Tests that need Redis behavior use `tests.fakes.FakeCache`.
+- Bumping the Python base image again needs a `pydantic-core` release with wheels for that
+  CPython; `grimp` 3.18 is the first with aarch64 cp315 wheels (dev only).
+- DB tests need `TEST_DATABASE_URL`; the dev Compose stack exposes PostgreSQL on
+  `127.0.0.1:5432` with an `attacksurf_test` database (`make test` runs them in `web`).
 - The ruff format hook strips imports that aren't used yet: add imports together with their
   first use.
