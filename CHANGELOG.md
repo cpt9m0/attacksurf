@@ -90,6 +90,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   silently.
 
 ### Changed
+- The runtime image moves to Python 3.15 (`python:3.15-slim`) and CI also tests 3.15; this
+  needs `pydantic` 2.14.1 (`pydantic-core` 2.50.1), the first releases with CPython 3.15
+  wheels, and `grimp` 3.18 so `import-linter` installs on 3.15 (#154).
 - The LLM contract has no `temperature` any more: Anthropic API version `2026-10-21` (sent by
   the `anthropic` 2.x SDK) rejects sampling parameters on every model, and nothing used it, so
   models run with their defaults (ADR 0019, #23).
