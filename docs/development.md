@@ -130,6 +130,18 @@ limits key on the visitor address Cloudflare forwards (`CF-Connecting-IP`, else 
 http://127.0.0.1:5000, sign up; the first account owns a new org. Production setup:
 [deployment.md](deployment.md).
 
+### DNS resolution (#16)
+
+`DNS_RESOLVERS` is a comma-separated list of public recursive resolvers (default
+`1.1.1.1,8.8.8.8`); private, loopback and link-local addresses are refused at startup.
+`DNS_TIMEOUT_SECONDS` and `DNS_LIFETIME_SECONDS` bound each query and each resolution, and
+`DNS_MAX_CONCURRENCY` caps concurrent queries per scanner run. Search domains stay disabled.
+
+`IP_ASN_DB_PATH` optionally points at a combined public ip2asn TSV (one
+`start end asn country organisation` row per line; IPv4 and IPv6 can be concatenated). The file
+is read once per worker process, no network is used, and a missing file simply leaves ASN/
+organisation details empty. Reverse DNS is always attempted for resolved addresses.
+
 ### AI provider (instance key)
 
 `LLM_PROVIDER` (`anthropic` or `openai_compat`), `LLM_MODEL`, `LLM_BASE_URL` and `LLM_API_KEY`
