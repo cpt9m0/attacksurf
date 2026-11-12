@@ -18,6 +18,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   all network access stays behind ScopeGuard (ADR 0022, #15).
 - `sandbox-proxy` service: the only holder of the Docker socket, allowing six container actions
   on containers it created and refusing any create request outside the sandbox policy (#84).
+- `sandbox-proxy` answers `GET /info` with the registered runtime names only, so the launcher
+  can refuse to start in prod without `runsc` (ADR 0023, #84).
 - CD is verified end-to-end: a merge to `main` reaches production within one timer
   interval, and the running `web` image tag matches the recorded deployed SHA (#29).
 - Pull-based CD: `scripts/deploy.sh` (also `make deploy`) fetches `origin/main`, builds the
@@ -100,6 +102,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   silently.
 
 ### Changed
+- The runtime image moves to Python 3.15 (`python:3.15-slim`) and CI also tests 3.15; this
+  needs `pydantic` 2.14.1, whose pinned `pydantic-core` 2.50.1 ships CPython 3.15 wheels, and
+  `grimp` 3.18 so `import-linter` installs on 3.15 (#154).
 - The LLM contract has no `temperature` any more: Anthropic API version `2026-10-21` (sent by
   the `anthropic` 2.x SDK) rejects sampling parameters on every model, and nothing used it, so
   models run with their defaults (ADR 0019, #23).

@@ -29,10 +29,14 @@ _SEGMENT = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")
 _SCRATCH_SIZE = re.compile(r"size=([1-9][0-9]{0,18})")
 # Before API 1.30 Docker ignores the removed-wait condition; before 1.25 it disables
 # AutoRemove. Accept only canonical modern v1 versions (unversioned uses daemon defaults).
+_API_VERSION = r"(?:/v1\.(?:3[0-9]|[4-9][0-9]))?"
 _CONTAINER_PATH = re.compile(
-    r"(?P<version>/v1\.(?:3[0-9]|[4-9][0-9]))?/containers/"
+    _API_VERSION + r"/containers/"
     r"(?:create|(?P<id>[0-9a-f]{64})(?:/(?P<verb>start|wait|attach|kill))?)"
 )
+# The launcher's startup check that `runsc` is registered (ADR 0023); the server relays
+# runtime names only, never the rest of the daemon's info.
+_INFO_PATH = re.compile(_API_VERSION + r"/info")
 
 _TOP_REQUIRED = frozenset({"Image", "User", "HostConfig"})
 _TOP_OPTIONAL = frozenset(
@@ -58,6 +62,7 @@ _ALLOWED_QUERIES: dict[str, tuple[dict[str, str], ...]] = {
     "attach": ({"stream": "1", "stdout": "1"},),
     "kill": ({}, {"signal": "SIGKILL"}),
     "remove": ({}, {"force": "1"}, {"force": "true"}),
+    "info": ({},),
 }
 
 
@@ -97,23 +102,32 @@ def load_images(lock_path: Path) -> tuple[frozenset[str], str | None]:
 def classify_request(method: str, raw_target: str) -> Route:
     """Map a request to one allowed Docker call, or raise `PolicyViolation`."""
     parts = urlsplit(raw_target)
-    match = _CONTAINER_PATH.fullmatch(parts.path)
-    if match is None or parts.fragment:
+    if parts.fragment:
         raise PolicyViolation("Docker call not allowed.")
-    container_id, verb = match["id"], match["verb"]
-    if method == "DELETE" and container_id and not verb:
-        action = "remove"
-    elif method == "POST" and container_id and verb:
-        action = verb
-    elif method == "POST" and not container_id:
-        action = "create"
-    else:
-        raise PolicyViolation("Docker call not allowed.")
+    action, container_id = _action(method, parts.path)
     query = _single_valued_query(parts.query)
     if query not in _ALLOWED_QUERIES[action]:
         raise PolicyViolation("Docker call options not allowed.")
     target = parts.path + (f"?{urlencode(sorted(query.items()))}" if query else "")
     return Route(action, container_id, target)
+
+
+def _action(method: str, path: str) -> tuple[str, str | None]:
+    if _INFO_PATH.fullmatch(path):
+        if method == "GET":
+            return "info", None
+        raise PolicyViolation("Docker call not allowed.")
+    match = _CONTAINER_PATH.fullmatch(path)
+    if match is None:
+        raise PolicyViolation("Docker call not allowed.")
+    container_id, verb = match["id"], match["verb"]
+    if method == "DELETE" and container_id and not verb:
+        return "remove", container_id
+    if method == "POST" and container_id and verb:
+        return verb, container_id
+    if method == "POST" and not container_id:
+        return "create", None
+    raise PolicyViolation("Docker call not allowed.")
 
 
 def _single_valued_query(raw: str) -> dict[str, str]:

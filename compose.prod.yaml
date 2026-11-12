@@ -46,7 +46,7 @@ services:
   # Publishes the app at attacksurf.dev and www.attacksurf.dev; routes are configured in the
   # Cloudflare dashboard (remote-managed tunnel), not here.
   cloudflared:
-    image: cloudflare/cloudflared:2026.10.0@sha256:9b49eed8f62806d5d45ddf59ecefb5710429598ea6d3fcccd2af938f621b2b07
+    image: cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba
     restart: unless-stopped
     command: ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:20241", "run"]
     environment:
@@ -91,7 +91,7 @@ services:
       retries: 3
 
   postgres:
-    image: postgres:18@sha256:3a4264520e121176619f54ff867d12774bc81e95e7b84db58d63bccdb6144b81
+    image: postgres:18@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
     restart: unless-stopped
     environment:
       POSTGRES_USER: attacksurf
@@ -110,7 +110,7 @@ services:
     networks: [internal]
 
   redis:
-    image: redis:8@sha256:2c2dff791878316e3b083188be0d578423b24813cdda5de0e80ea4f7b3e6bfd6
+    image: redis:8@sha256:1f88291b4c57bdf249f02eb085a8669889b2d2954e91d4de5118a5da6b78dd53
     restart: unless-stopped
     # The image entrypoint drops privileges to `redis` before exec'ing the server. It must keep
     # running: replacing it with a shell would leave redis-server as root. The secret is read

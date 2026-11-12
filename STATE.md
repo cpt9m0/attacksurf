@@ -6,8 +6,9 @@
 sandbox), PR 3b of the 3a to 3d launcher split
 
 ## Status
-PR 3b (sandbox launcher building blocks) is open as draft #158 on `84-sandbox-launcher-core`;
-CI green.
+`main` has PR 3a (#157, merged): the sandbox proxy answers `GET /info` with the registered
+runtime names (ADR 0023). PR 3b (sandbox launcher building blocks) is open as draft #158 on
+`84-sandbox-launcher-core`, now merged with `main`, pending codex review.
 
 ## Last task
 - `SandboxLauncherSettings` in `config.py` (env only, wall time at most 840 s, `runc` refused in prod).
@@ -18,13 +19,14 @@ CI green.
   `CHANGELOG.md`.
 
 ## Next step
-Get #157 (3a) and then #158 (3b) reviewed and merged, then start PR 3c (`runner.py`,
-`server.py` with `POST /runs`, `__main__.py`) per `docs/plans/84-pr3-sandbox-launcher-split-4-prs.md`.
+Get #158 (3b) reviewed and merged, then start PR 3c (`runner.py`, `server.py` with `POST /runs`,
+`__main__.py`) per issue #84's merge-order checklist.
 
 ## Open threads
-- PR 3a (#157, `84-sandbox-runtime-info`, proxy `GET /info`) is open as a draft. PR 3c needs
-  both 3a and 3b merged (or stacks on them as a draft).
-- `docs/plans/` (split plan and the per-commit PR 3b plans) is untracked on purpose.
+- PR 3c needs both 3a and 3b merged (or stacks on them as a draft).
+- The PR 3 plan (4 PRs, commits, testing gate) lived in
+  `docs/plans/84-pr3-sandbox-launcher-split-4-prs.md`, which is untracked and absent from this
+  checkout, so issue #84 is the current source of truth for the split.
 
 ## Notes for the next agent
 - PR 3c `runner.py` must decide the outcome from its own flags (`timed_out`, cap tripped) before
@@ -37,3 +39,7 @@ Get #157 (3a) and then #158 (3b) reviewed and merged, then start PR 3c (`runner.
   not import them); a parity test guards each copy. Don't "fix" that by importing.
 - Plan docs for this PR: `docs/plans/84-pr3-sandbox-launcher-split-4-prs.md` and
   `docs/plans/84-pr3b-launcher-building-blocks/`.
+- DB tests need `TEST_DATABASE_URL`; the dev Compose stack exposes PostgreSQL on
+  `127.0.0.1:5432` with an `attacksurf_test` database (`make test` runs them in `web`).
+- The ruff format hook strips imports that aren't used yet: add imports together with their
+  first use.
