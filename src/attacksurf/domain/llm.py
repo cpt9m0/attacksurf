@@ -102,7 +102,7 @@ class LLMProvider(Protocol):
     ) -> LLMResult[T]:
         """Ask the configured model for a reply that validates against `schema`.
 
-        No sampling settings: the model's defaults always apply (ADR 0019). Raises an
+        No sampling settings: the model's defaults always apply (ADR 0024). Raises an
         `LLMError` subclass on failure.
         """
         ...
