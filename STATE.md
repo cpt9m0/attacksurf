@@ -2,30 +2,34 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-12 · **Branch:** `main` · **PRs:** #151–#154 (merged)
+**Updated:** 2026-11-12 · **Branch:** `main` · **PR:** #157 (merged)
 
 ## Status
-All four open Dependabot PRs are merged; `main` is `c77df93`. The runtime image is Python 3.15
-(`python:3.15-slim`), pydantic 2.14.1 / pydantic-core 2.50.1, and CI tests 3.12, 3.13 and 3.15.
-Image digests: postgres 18.6, redis 8.10.3, cloudflared 2026.10.7. All checks are green.
+`main` has PR 3a of the #84 analysis sandbox: the sandbox proxy answers `GET /info` with the
+registered runtime names (ADR 0023), so the launcher can refuse to start in prod without
+`runsc`. Full suite: 1395 passed, 18 skipped, coverage 97.40%; ruff, pyright and lint-imports
+are clean. The runtime image is Python 3.15 (`python:3.15-slim`), pydantic 2.14.1 /
+pydantic-core 2.50.1, and CI tests 3.12, 3.13 and 3.15.
 
 ## Last task
-- Merged #151 (redis), #152 (cloudflared 2026.10.0 → 2026.10.7) and #153 (postgres) digest bumps.
-- Merged #154 (Python 3.13 → 3.15) with a follow-up commit: pydantic 2.14.1 and grimp 3.18 are
-  needed because pydantic-core 2.46.5 has no cp315 wheel and the 3.15 build failed without one;
-  added `test (3.15)` to CI, updated `docs/development.md`, the pre-PR skill and `CHANGELOG.md`.
-- Verified pytest on 3.12/3.14/3.15 (1269 passed, 18 skipped each), dev/prod image builds,
-  ruff/pyright/import-linter/pre-commit, and worker smoke tests on the rebuilt dev stack.
+- Merged #157 (`84-sandbox-runtime-info`); the code merged cleanly and only `STATE.md`
+  conflicted with `main`.
+- `sandbox-proxy` allows exactly one read call, `GET /info`. It answers with sorted runtime
+  names only, caches a good answer for 60 s with one daemon call at a time, logs the failure
+  status code, and reads up to 8 MiB. The three Docker round trips share `_docker_call`.
+- ADR 0023 records the change (ADR 0016 has an "amended by" pointer); `docs/security.md` and
+  `CHANGELOG.md` are updated.
 
 ## Next step
-Implement #16 (DNS resolution + asset graph); read `Asset.details["wildcard"]` before treating
-wildcard answers as real hosts and reuse `ctx.runtime.cache` for RDAP-style source data.
+PR 3b (`84-sandbox-launcher-core`, #158) is open and now needs a merge of `main`, which
+conflicts only in `STATE.md`. Then 3c (launcher service and the `runsc` startup check) and 3d
+(worker-side client). Order and scope: issue #84's merge-order checklist.
 
 ## Open threads
-- The dev Compose stack is up on Python 3.15 and the new postgres/redis digests; no production
-  deploy was done.
-- Redis still holds the public CT result for `example.com`
-  (`attacksurf:scan-cache:v1:ct:v1:example.com`, TTL 6 h); safe to leave.
+- Optional one-line `/info` note in the `docs/architecture.md` proxy box: user hasn't decided.
+- The PR 3 plan (4 PRs, commits, testing gate) lived in
+  `docs/plans/84-pr3-sandbox-launcher-split-4-prs.md`, which is untracked and absent from this
+  checkout, so issue #84 is the current source of truth for the split.
 
 ## Notes for the next agent
 - Production plugins are registered explicitly in `src/attacksurf/app.py` and
@@ -34,3 +38,7 @@ wildcard answers as real hosts and reuse `ctx.runtime.cache` for RDAP-style sour
   input is rejected. Tests that need Redis behavior use `tests.fakes.FakeCache`.
 - Bumping the Python base image again needs a `pydantic-core` release with wheels for that
   CPython; `grimp` 3.18 is the first with aarch64 cp315 wheels (dev only).
+- DB tests need `TEST_DATABASE_URL`; the dev Compose stack exposes PostgreSQL on
+  `127.0.0.1:5432` with an `attacksurf_test` database (`make test` runs them in `web`).
+- The ruff format hook strips imports that aren't used yet: add imports together with their
+  first use.

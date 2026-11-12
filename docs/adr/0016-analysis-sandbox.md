@@ -3,6 +3,9 @@
 - Status: accepted
 - Date: 2026-11-04
 
+The proxy's allowed calls are amended by [ADR 0023](0023-sandbox-runtime-check.md): one
+read-only `GET /info`, answered with runtime names only, for the launcher's `runsc` check.
+
 ## Context
 The code and binary modules (#67) will analyse artifacts an attacker can craft: repositories,
 archives, ELF/PE/Mach-O files, APKs. The tools that read them (git, archive readers, LIEF,
