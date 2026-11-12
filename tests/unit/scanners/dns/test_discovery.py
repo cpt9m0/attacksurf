@@ -1,6 +1,7 @@
 """`dns.discovery.ct` orchestration: sources, cache, cap and wildcard detection (no network)."""
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from uuid import uuid4
 
@@ -8,7 +9,7 @@ import pytest
 
 from attacksurf.domain.assets import AssetType, RelationKind
 from attacksurf.domain.jobs import TransientJobError
-from attacksurf.domain.net import DnsError, HttpBody, ScannerRuntime
+from attacksurf.domain.net import DnsError, DnsLookup, DnsQuery, HttpBody, ScannerRuntime
 from attacksurf.domain.scanners import AssetRef, ScanContext, ScannerError
 from attacksurf.domain.scope import ScopeError
 from attacksurf.scanners.dns.discovery import CACHE_TTL_SECONDS, MAX_WILDCARD_CHECKS, CtDiscovery
@@ -42,6 +43,9 @@ class FakeDns:
 
     def resolve_ipv4(self, host: str) -> tuple[str, ...]:
         return self.resolve_name(host)
+
+    def lookup_many(self, queries: Sequence[DnsQuery]) -> tuple[DnsLookup, ...]:
+        raise AssertionError("CT discovery must not use raw record lookups")
 
 
 class FakeHttp:

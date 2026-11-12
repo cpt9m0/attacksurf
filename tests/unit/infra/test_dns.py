@@ -1,13 +1,21 @@
 """Resolvers and PSL classification: bounded, search-list free, and no runtime downloads."""
 
+import asyncio
 from dataclasses import dataclass
+from typing import cast
 
+import dns.message
+import dns.name
+import dns.rdata
+import dns.rdataclass
+import dns.rdatatype
 import dns.resolver
+import dns.rrset
 import pytest
 import tldextract
 
 from attacksurf.domain import scope
-from attacksurf.domain.net import DnsError
+from attacksurf.domain.net import DnsError, DnsLookup, DnsQuery, DnsRecordType, DnsStatus
 from attacksurf.domain.scope import PublicSuffix
 from attacksurf.infra import public_suffix
 from attacksurf.infra.dns import DnsPythonResolver
@@ -119,3 +127,126 @@ def test_tldextract_is_not_imported_by_scanner_code() -> None:
     assert not hasattr(scope, "tldextract")
     assert not hasattr(registry, "tldextract")
     assert tldextract is not None
+
+
+def _answer(qname: str, rdtype: str, *values: str) -> dns.resolver.Answer:
+    query = dns.message.make_query(qname, rdtype)
+    response = dns.message.make_response(query)
+    if values:
+        rrset = response.find_rrset(
+            response.answer,
+            dns.name.from_text(qname),
+            dns.rdataclass.IN,
+            dns.rdatatype.from_text(rdtype),
+            create=True,
+        )
+        for value in values:
+            rrset.add(
+                dns.rdata.from_text(dns.rdataclass.IN, dns.rdatatype.from_text(rdtype), value),
+                ttl=300,
+            )
+    return dns.resolver.Answer(
+        dns.name.from_text(qname),
+        dns.rdatatype.from_text(rdtype),
+        dns.rdataclass.IN,
+        cast(dns.message.QueryMessage, response),
+    )
+
+
+class FakeAsyncResolver:
+    def __init__(self, answers: dict[tuple[str, str], object]) -> None:
+        self.answers = answers
+
+    async def resolve(
+        self, qname: str, rdtype: str, *, search: bool, raise_on_no_answer: bool
+    ) -> dns.resolver.Answer:
+        outcome = self.answers.get((qname, rdtype))
+        if isinstance(outcome, Exception):
+            raise outcome
+        if isinstance(outcome, dns.resolver.Answer):
+            return outcome
+        return _answer(qname, rdtype)
+
+
+def test_resolver_uses_configured_public_nameservers_and_limits() -> None:
+    resolver = DnsPythonResolver(
+        nameservers=("1.1.1.1", "8.8.8.8"), timeout=1.5, lifetime=2.5, max_concurrency=3
+    )
+
+    assert resolver._resolver.nameservers == ["1.1.1.1", "8.8.8.8"]
+    assert resolver._resolver.timeout == 1.5
+    assert resolver._resolver.lifetime == 2.5
+    async_resolver = resolver._make_async_resolver()
+    assert async_resolver.nameservers == ["1.1.1.1", "8.8.8.8"]
+    assert async_resolver.use_search_by_default is False
+
+
+def test_resolver_requires_at_least_one_nameserver() -> None:
+    with pytest.raises(ValueError, match="at least one"):
+        DnsPythonResolver(nameservers=())
+
+
+def test_lookup_many_maps_each_query_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+    resolver = DnsPythonResolver()
+    fake = FakeAsyncResolver(
+        {
+            ("example.com", "A"): _answer("example.com", "A", "93.184.216.34"),
+            ("missing.example", "A"): dns.resolver.NXDOMAIN(),
+            ("empty.example", "A"): None,
+            ("broken.example", "A"): dns.resolver.NoNameservers(),
+            ("example.com", "TXT"): _answer("example.com", "TXT", '"hello" "world"'),
+        }
+    )
+    monkeypatch.setattr(resolver, "_make_async_resolver", lambda: fake)
+    queries = (
+        DnsQuery("example.com", DnsRecordType.A),
+        DnsQuery("missing.example", DnsRecordType.A),
+        DnsQuery("empty.example", DnsRecordType.A),
+        DnsQuery("broken.example", DnsRecordType.A),
+        DnsQuery("example.com", DnsRecordType.TXT),
+    )
+
+    results = resolver.lookup_many(queries)
+
+    assert [result.status for result in results] == [
+        DnsStatus.OK,
+        DnsStatus.NXDOMAIN,
+        DnsStatus.NO_ANSWER,
+        DnsStatus.ERROR,
+        DnsStatus.OK,
+    ]
+    assert results[0].values == ("93.184.216.34",)
+    assert results[4].values == ("helloworld",)
+
+
+def test_lookup_many_runs_queries_concurrently_under_the_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolver = DnsPythonResolver(max_concurrency=2)
+    active = 0
+    peak = 0
+
+    async def fake_lookup(_resolver: object, query: DnsQuery) -> DnsLookup:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return DnsLookup(query)
+
+    def make_resolver() -> object:
+        return object()
+
+    monkeypatch.setattr(resolver, "_make_async_resolver", make_resolver)
+    monkeypatch.setattr(resolver, "_lookup_one", fake_lookup)
+
+    results = resolver.lookup_many(
+        tuple(DnsQuery(f"h{index}.example", DnsRecordType.A) for index in range(6))
+    )
+
+    assert len(results) == 6
+    assert peak == 2
+
+
+def test_lookup_many_without_queries_does_not_start_an_event_loop() -> None:
+    assert DnsPythonResolver().lookup_many(()) == ()

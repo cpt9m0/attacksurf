@@ -5,7 +5,9 @@ plugin can only reach what its declared permissions allow. The cache is process-
 target) and uses its own namespace and bounds.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 from attacksurf.domain.cache import NullCache, ScanCache
@@ -16,6 +18,48 @@ class DnsError(Exception):
     """A lookup failed (timeout, resolver error). Never carries resolver internals."""
 
 
+class DnsRecordType(StrEnum):
+    """Record types scanners may ask for; `PTR` names come from `ipaddress.reverse_pointer`."""
+
+    A = "A"
+    AAAA = "AAAA"
+    CNAME = "CNAME"
+    MX = "MX"
+    NS = "NS"
+    TXT = "TXT"
+    CAA = "CAA"
+    SOA = "SOA"
+    PTR = "PTR"
+
+
+class DnsStatus(StrEnum):
+    """Per-query outcome: an absent record is data, not a failed run."""
+
+    OK = "ok"
+    NXDOMAIN = "nxdomain"
+    NO_ANSWER = "no_answer"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class DnsQuery:
+    name: str
+    record_type: DnsRecordType
+
+
+@dataclass(frozen=True)
+class DnsLookup:
+    """One query's answer; `values` are raw, unvalidated record strings (scan data)."""
+
+    query: DnsQuery
+    values: tuple[str, ...] = ()
+    status: DnsStatus = DnsStatus.OK
+
+    @property
+    def found(self) -> bool:
+        return self.status is DnsStatus.OK and bool(self.values)
+
+
 class DnsResolver(Protocol):
     def resolve_ipv4(self, host: str) -> tuple[str, ...]:
         """A records for `host`; every address is validated against the scope policy."""
@@ -24,6 +68,36 @@ class DnsResolver(Protocol):
     def resolve_name(self, host: str) -> tuple[str, ...]:
         """A and AAAA records for `host`, all validated: what an HTTP connection could use."""
         ...
+
+    def lookup_many(self, queries: Sequence[DnsQuery]) -> tuple[DnsLookup, ...]:
+        """Raw records for scanners; answers are data and are not address-validated.
+
+        Connection paths still use `resolve_ipv4`/`resolve_name`, so a private answer can be
+        reported (e.g. as exposure) but never dialed. Each query costs one DNS-budget unit.
+        """
+        ...
+
+
+@dataclass(frozen=True)
+class IpInfo:
+    """Offline ASN/organisation data for an address; every field is optional."""
+
+    asn: int | None = None
+    org: str | None = None
+    country: str | None = None
+
+
+class IpIntel(Protocol):
+    def lookup(self, address: str) -> IpInfo | None:
+        """Enrichment for `address`, or None when the offline database has no answer."""
+        ...
+
+
+class UnconfiguredIpIntel:
+    """No database configured: scans run without ASN/organisation enrichment."""
+
+    def lookup(self, address: str) -> IpInfo | None:
+        return None
 
 
 class TxtError(DnsError):
@@ -74,7 +148,7 @@ class SafeHttpClient(Protocol):
 class ScannerRuntime:
     """Run-scoped adapters handed to a plugin after the gate approved it."""
 
-    __slots__ = ("cache", "dns", "http", "sandbox")
+    __slots__ = ("cache", "dns", "http", "ip_intel", "sandbox")
 
     def __init__(
         self,
@@ -82,11 +156,13 @@ class ScannerRuntime:
         http: SafeHttpClient,
         sandbox: SandboxRunner | None = None,
         cache: ScanCache | None = None,
+        ip_intel: IpIntel | None = None,
     ) -> None:
         self.dns = dns
         self.http = http
         self.sandbox = sandbox or UnconfiguredSandboxRunner()
         self.cache = cache if cache is not None else NullCache()
+        self.ip_intel = ip_intel or UnconfiguredIpIntel()
 
     def close(self) -> None:
         self.http.close()

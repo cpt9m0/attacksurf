@@ -1,10 +1,11 @@
 """Deterministic, no-network plugins. Never imported by production worker startup."""
 
+from collections.abc import Sequence
 from uuid import UUID
 
 from attacksurf.domain.assets import AssetType, RelationKind
 from attacksurf.domain.findings import Severity
-from attacksurf.domain.net import HttpBody, ScannerRuntime
+from attacksurf.domain.net import DnsLookup, DnsQuery, HttpBody, ScannerRuntime
 from attacksurf.domain.rules import Rule
 from attacksurf.domain.sandbox import SandboxResult
 from attacksurf.domain.scanners import (
@@ -57,6 +58,9 @@ class StubDns:
 
     def resolve_name(self, host: str) -> tuple[str, ...]:
         return ("93.184.216.34",)
+
+    def lookup_many(self, queries: Sequence[DnsQuery]) -> tuple[DnsLookup, ...]:
+        return tuple(DnsLookup(query) for query in queries)
 
 
 class StubHttp:
