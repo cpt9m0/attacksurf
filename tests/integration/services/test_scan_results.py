@@ -3,6 +3,7 @@ import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from sqlalchemy import Engine, delete, select
@@ -23,6 +24,7 @@ from attacksurf.domain.scans import JobStatus, ScanCancelled, ScanStatus, ScanTr
 from attacksurf.infra.db.models import Asset, AssetRelation, Evidence, Finding, Job, Org, Scan
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services import assets as assets_service
+from attacksurf.services import scan_results as scan_results_service
 from attacksurf.services.assets import archive_root_domain
 from attacksurf.services.scan_results import persist_scan_output
 from tests.integration.factories import make_scan
@@ -910,3 +912,39 @@ def test_persist_refreshes_the_input_after_locking_the_root(  # noqa: PLR0915
             assert older_seen < newer_seen
     finally:
         _forget(db_engine, org_id)
+
+
+def test_persist_locks_input_and_discovered_assets_in_one_order(
+    db_session: Session, catalog: dict[str, Rule], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scan = make_scan(db_session)
+    input_asset = _subdomain(db_session, scan, "z.acme.example")
+    calls: list[str] = []
+    real_record = scan_results_service.record_asset
+    real_lock = scan_results_service._lock_input
+
+    def record(
+        session: Session, org_id: UUID, asset_type: AssetType, value: str, **kwargs: object
+    ) -> Asset:
+        calls.append(f"upsert:{value}")
+        return real_record(session, org_id, asset_type, value, **kwargs)  # type: ignore[arg-type]
+
+    def lock(session: Session, owner: Scan, asset_id: UUID) -> Asset:
+        calls.append("input")
+        return real_lock(session, owner, asset_id)
+
+    monkeypatch.setattr(scan_results_service, "record_asset", record)
+    monkeypatch.setattr(scan_results_service, "_lock_input", lock)
+
+    persist_scan_output(
+        db_session,
+        scan,
+        input_asset.id,
+        ScanOutput(
+            assets=(AssetRef(type=AssetType.SUBDOMAIN, value="a.acme.example"),),
+        ),
+        catalog=catalog,
+        discovered_limit=1000,
+    )
+
+    assert calls == ["upsert:a.acme.example", "input"]

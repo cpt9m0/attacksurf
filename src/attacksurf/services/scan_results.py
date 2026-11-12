@@ -50,7 +50,8 @@ def persist_scan_output(
     archived (ADR 0021). Locks are taken in the order `archive_root_domain` uses (scan rows, then
     the root): the caller already holds the scan row lock. The root is read `FOR KEY SHARE`,
     which never conflicts with the archive, or locked `FOR UPDATE` once when the cap or a root
-    wildcard marker needs it.
+    wildcard marker needs it. The input and discovered assets are then locked/upserted in a
+    stable type/value order, so overlapping roots can't deadlock on opposite answer orders.
     """
     asset = get_scoped(session, Asset, asset_id, scan.org_id)
     if asset is None:
@@ -59,15 +60,11 @@ def persist_scan_output(
         raise ScanCancelled("Scan was cancelled.")
     input_ref = (asset.type, asset.value)
     root = _lock_root(session, scan, asset, output, discovered_limit=discovered_limit)
-    # The input was read before the root lock. A concurrent persist may have changed it while
-    # we waited, so refresh it under a row lock before comparing timestamps or details.
-    asset = _refresh_input(session, scan, asset_id, asset, root)
     root_ref = (root.type, root.value)
-    refs = {input_ref: asset.id, root_ref: root.id}
     # Every name the plugin reported is a valid reference, including ones the cap will drop
     # (a reference to a name it never reported is still a plugin bug and fails the job). The
     # scan root is always valid: a subdomain may CNAME to its apex.
-    declared = set(refs) | {(a.type, a.value) for a in output.assets}
+    declared = {input_ref, root_ref} | {(a.type, a.value) for a in output.assets}
     _validate_references(output, declared, catalog)
     admitted: set[tuple[AssetType, str]] | None = None
     if discovered_limit is not None:
@@ -77,25 +74,28 @@ def persist_scan_output(
         admitted = {(ref.type, ref.value) for ref in keep} | {root_ref}
         output = output.model_copy(update={"assets": keep})
     seen = scan.started_at or scan.created_at
-    rows: dict[tuple[AssetType, str], Asset] = {
-        input_ref: root if asset.id == scan.root_asset_id else asset,
-        root_ref: root,
-    }
+    rows: dict[tuple[AssetType, str], Asset] = {root_ref: root}
+    refs: dict[tuple[AssetType, str], UUID] = {root_ref: root.id}
     # The root exists independently of this output; `_usable` may link a subdomain's CNAME to it.
     written: set[tuple[AssetType, str]] = {root_ref}
-    for discovered in output.assets:
-        row = record_asset(
-            session,
-            scan.org_id,
-            discovered.type,
-            discovered.value,
-            source=AssetSource.DISCOVERED,
-            parent_id=scan.root_asset_id,
-            seen_at=seen,
-        )
-        written.add((row.type, row.value))
-        refs[(row.type, row.value)] = row.id
-        rows[(row.type, row.value)] = row
+    for asset_type, value in _ordered_asset_refs(input_ref, root_ref, output.assets):
+        key = (asset_type, value)
+        if key == input_ref:
+            row = _lock_input(session, scan, asset_id)
+        else:
+            row = record_asset(
+                session,
+                scan.org_id,
+                asset_type,
+                value,
+                source=AssetSource.DISCOVERED,
+                parent_id=scan.root_asset_id,
+                seen_at=seen,
+            )
+        written.add(key)
+        refs[key] = row.id
+        rows[key] = row
+    asset = rows[input_ref]
     _apply_observations(
         output, rows=rows, written=written, input_ref=input_ref, admitted=admitted, seen=seen
     )
@@ -205,18 +205,29 @@ def _validate_references(
             _resolve(declared, raw.asset)
 
 
-def _refresh_input(
-    session: Session, scan: Scan, asset_id: UUID, asset: Asset, root: Asset
-) -> Asset:
-    if asset.id == scan.root_asset_id:
-        return root
-    refreshed = session.scalars(
+_ASSET_ORDER = {asset_type: index for index, asset_type in enumerate(AssetType)}
+
+
+def _ordered_asset_refs(
+    input_ref: tuple[AssetType, str],
+    root_ref: tuple[AssetType, str],
+    assets: tuple[AssetRef, ...],
+) -> tuple[tuple[AssetType, str], ...]:
+    """Input + discovered refs in the one order every persistence transaction locks them."""
+    refs = {input_ref, root_ref}
+    refs.update((asset.type, asset.value) for asset in assets)
+    refs.discard(root_ref)
+    return tuple(sorted(refs, key=lambda ref: (_ASSET_ORDER[ref[0]], ref[1])))
+
+
+def _lock_input(session: Session, scan: Scan, asset_id: UUID) -> Asset:
+    row = session.scalars(
         scoped(Asset, scan.org_id).where(Asset.id == asset_id).with_for_update(),
         execution_options={"populate_existing": True},
     ).one_or_none()
-    if refreshed is None:
+    if row is None:
         raise AssetNotFound("Asset not found.")
-    return refreshed
+    return row
 
 
 def _apply_observations(

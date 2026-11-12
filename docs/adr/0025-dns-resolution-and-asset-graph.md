@@ -53,9 +53,10 @@ ever deactivating a root the org added itself.
   Only rows with a parent can be deactivated, so roots/user assets never are. Out-of-order
   results never move lifecycle backwards: repeated negative observations advance
   `deactivated_at` even while the row is already inactive, so a delayed positive result cannot
-  reactivate it. Persistence refreshes the input row under the root lock before applying an
-  observation, so a transaction that waited on the lock cannot use a stale copy. A
-  wildcard-marked zone (`target_is_wildcard`) is never deactivated on an empty answer. CT rediscovery can reactivate a name later; a full
+  reactivate it. Persistence refreshes the input row as part of the same stable asset-lock
+  order it uses for discovered assets, so a transaction that waited on the root lock cannot
+  use a stale copy and overlapping roots cannot deadlock. A wildcard-marked zone
+  (`target_is_wildcard`) is never deactivated on an empty answer. CT rediscovery can reactivate a name later; a full
   reconciliation policy belongs to #20.
 - **Exposure finding:** each private, loopback, link-local or special-purpose address found in
   public A/AAAA data emits `dns.records.private_ip_exposed` at info severity, with the address
