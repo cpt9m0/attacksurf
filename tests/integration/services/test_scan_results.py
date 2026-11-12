@@ -785,3 +785,128 @@ def test_later_negative_observation_outranks_a_delayed_positive(
     assert subdomain.is_active is False
     assert subdomain.deactivated_at == latest_negative
     assert subdomain.details["dns"] == {}
+
+
+def test_persist_refreshes_the_input_after_locking_the_root(  # noqa: PLR0915
+    db_engine: Engine, catalog: dict[str, Rule]
+) -> None:
+    """A stale input row must not overwrite a newer result after waiting for the root lock."""
+    with Session(db_engine) as setup:
+        scan = make_scan(setup, name="refresh")
+        root = setup.get_one(Asset, scan.root_asset_id)
+        subdomain = assets_service.record_asset(
+            setup,
+            scan.org_id,
+            AssetType.SUBDOMAIN,
+            "www.refresh.example",
+            source=AssetSource.DISCOVERED,
+            parent_id=root.id,
+        )
+        base = datetime.now(UTC)
+        scan.started_at = base + timedelta(hours=1)
+        newer_scan = Scan(
+            org_id=scan.org_id,
+            root_asset_id=root.id,
+            profile="dns_passive",
+            status=ScanStatus.RUNNING,
+            triggered_by=ScanTrigger.USER,
+            started_at=base + timedelta(hours=2),
+        )
+        setup.add(newer_scan)
+        setup.commit()
+        org_id, subdomain_id = scan.org_id, subdomain.id
+        older_scan_id, newer_scan_id = scan.id, newer_scan.id
+        older_seen, newer_seen = scan.started_at, newer_scan.started_at
+        assert older_seen is not None
+        assert newer_seen is not None
+
+    newer_ready = threading.Event()
+    release_newer = threading.Event()
+    older_loaded = threading.Event()
+    errors: list[BaseException] = []
+
+    def newer_result() -> None:
+        try:
+            with Session(db_engine) as session:
+                newer = session.get(Scan, newer_scan_id)
+                assert newer is not None
+                persist_scan_output(
+                    session,
+                    newer,
+                    subdomain_id,
+                    ScanOutput(
+                        observations=(
+                            AssetObservation(
+                                asset=AssetRef(
+                                    type=AssetType.SUBDOMAIN, value="www.refresh.example"
+                                ),
+                                details={"dns": {"a": ["93.184.216.34"]}},
+                                active=False,
+                            ),
+                        )
+                    ),
+                    catalog=catalog,
+                    discovered_limit=1000,
+                )
+                newer_ready.set()
+                assert release_newer.wait(timeout=5)
+                session.commit()
+        except BaseException as exc:
+            errors.append(exc)
+            newer_ready.set()
+
+    def older_result() -> None:
+        try:
+            with Session(db_engine) as session:
+                older = session.get(Scan, older_scan_id)
+                assert older is not None
+                # Read the input before blocking on the root, as the real persistence path does.
+                stale = session.get(Asset, subdomain_id)
+                assert stale is not None
+                older_loaded.set()
+                assert newer_ready.wait(timeout=5)
+                persist_scan_output(
+                    session,
+                    older,
+                    subdomain_id,
+                    ScanOutput(
+                        observations=(
+                            AssetObservation(
+                                asset=AssetRef(
+                                    type=AssetType.SUBDOMAIN, value="www.refresh.example"
+                                ),
+                                details={"dns": {"a": ["198.51.100.1"]}},
+                                active=True,
+                            ),
+                        )
+                    ),
+                    catalog=catalog,
+                    discovered_limit=1000,
+                )
+                session.commit()
+        except BaseException as exc:
+            errors.append(exc)
+
+    newer_thread = threading.Thread(target=newer_result, daemon=True)
+    older_thread = threading.Thread(target=older_result, daemon=True)
+    try:
+        newer_thread.start()
+        assert newer_ready.wait(timeout=5)
+        older_thread.start()
+        assert older_loaded.wait(timeout=5)
+        release_newer.set()
+        older_thread.join(timeout=5)
+        newer_thread.join(timeout=5)
+        assert not older_thread.is_alive()
+        assert not newer_thread.is_alive()
+        assert errors == []
+
+        with Session(db_engine) as check:
+            final = check.get_one(Asset, subdomain_id)
+            assert final.details["dns"] == {"a": ["93.184.216.34"]}
+            assert final.is_active is False
+            assert final.deactivated_at == newer_seen
+            assert final.last_seen < newer_seen
+            assert older_seen < newer_seen
+    finally:
+        _forget(db_engine, org_id)

@@ -59,6 +59,9 @@ def persist_scan_output(
         raise ScanCancelled("Scan was cancelled.")
     input_ref = (asset.type, asset.value)
     root = _lock_root(session, scan, asset, output, discovered_limit=discovered_limit)
+    # The input was read before the root lock. A concurrent persist may have changed it while
+    # we waited, so refresh it under a row lock before comparing timestamps or details.
+    asset = _refresh_input(session, scan, asset_id, asset, root)
     root_ref = (root.type, root.value)
     refs = {input_ref: asset.id, root_ref: root.id}
     # Every name the plugin reported is a valid reference, including ones the cap will drop
@@ -200,6 +203,20 @@ def _validate_references(
         get_rule(raw.rule_id, catalog)
         if raw.asset:
             _resolve(declared, raw.asset)
+
+
+def _refresh_input(
+    session: Session, scan: Scan, asset_id: UUID, asset: Asset, root: Asset
+) -> Asset:
+    if asset.id == scan.root_asset_id:
+        return root
+    refreshed = session.scalars(
+        scoped(Asset, scan.org_id).where(Asset.id == asset_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).one_or_none()
+    if refreshed is None:
+        raise AssetNotFound("Asset not found.")
+    return refreshed
 
 
 def _apply_observations(
