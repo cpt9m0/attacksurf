@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, aliased
 
 from attacksurf.domain.assets import AssetNotFound, AssetSource, AssetType, RelationKind
 from attacksurf.domain.findings import (
+    ACTIVE_STATUSES,
     SEVERITY_RANK,
     Confidence,
     FindingStatus,
@@ -228,7 +229,7 @@ def list_asset_findings(
         scoped(Finding, org_id)
         .where(Finding.asset_id == asset_id)
         .order_by(
-            Finding.status != FindingStatus.OPEN,
+            Finding.status.not_in(tuple(ACTIVE_STATUSES)),
             _severity_rank().desc(),
             Finding.last_seen.desc(),
             Finding.id,
@@ -298,7 +299,7 @@ def _asset_rows(org_id: UUID) -> tuple[Select[Any], Any]:
     )
     stats = (
         scoped(Finding, org_id)
-        .where(Finding.status == FindingStatus.OPEN)
+        .where(Finding.status.in_(tuple(ACTIVE_STATUSES)))
         .with_only_columns(
             Finding.asset_id,
             func.count().label("open_findings"),

@@ -12,7 +12,7 @@ from attacksurf.infra.events import dispatcher
 from attacksurf.infra.queue import CeleryTaskQueue
 from attacksurf.scanners.profiles import PROFILES
 from attacksurf.scanners.registry import registry
-from attacksurf.services import jobs, scans
+from attacksurf.services import jobs, scan_diff, scans
 from attacksurf.services.scanner_jobs import run_check
 from attacksurf.workers import runtime
 from attacksurf.workers.app import app
@@ -94,7 +94,9 @@ def persist(*, org_id: str, job_id: str) -> None:
 
 @app.task(base=PipelineTask, name="passive.diff")
 def diff(*, org_id: str, job_id: str) -> None:
-    """Lifecycle diff/stats belong to #20; never infer fixes from absent/failed results."""
+    """Finding lifecycle and scan stats (ADR 0027); never infer fixes from absent results."""
+    with runtime.session_factory()() as session:
+        scan_diff.diff_scan(session, UUID(org_id), UUID(job_id), dispatcher)
 
 
 @app.task(base=PipelineTask, name="passive.triage")
