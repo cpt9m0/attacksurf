@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from uuid import UUID, uuid5
 
-from sqlalchemy import case, func, literal, tuple_
+from sqlalchemy import case, func, literal, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
@@ -530,9 +530,13 @@ def _upsert_finding(
         # An output without provenance (a direct caller) never erases what a scan recorded.
         updates["scanner"] = case((newer, new.scanner), else_=Finding.scanner)
     if reopen:
-        # Re-check the current row: only a row that is still suppressed is reopened.
+        # Re-check the current row and the observation order: a delayed older result must not
+        # reopen a decision a newer observation already left suppressed.
         updates["status"] = case(
-            (Finding.status.in_(tuple(SUPPRESSED_STATUSES)), literal(FindingStatus.OPEN.value)),
+            (
+                newer & Finding.status.in_(tuple(SUPPRESSED_STATUSES)),
+                literal(FindingStatus.OPEN.value),
+            ),
             else_=Finding.status,
         )
     updates.update(
@@ -577,16 +581,22 @@ def _evidence_keys(evidence: tuple[RawEvidence, ...]) -> set[tuple[EvidenceKind,
 def _previous_evidence_keys(
     session: Session, org_id: UUID, finding_id: UUID
 ) -> set[tuple[EvidenceKind, str]]:
-    """The finding's latest evidence batch (all rows at its most recent `captured_at`)."""
+    """The finding's latest evidence batch, fetched alone so history size never matters.
+
+    `_upsert_evidence` keeps one batch per distinct scan; loading all of them just to compare
+    the newest would grow with the finding's lifetime (ADR 0027).
+    """
+    latest = (
+        select(func.max(Evidence.captured_at))
+        .where(Evidence.org_id == org_id, Evidence.finding_id == finding_id)
+        .scalar_subquery()
+    )
     rows = session.execute(
         scoped(Evidence, org_id)
-        .where(Evidence.finding_id == finding_id)
-        .with_only_columns(Evidence.kind, Evidence.data, Evidence.captured_at)
+        .where(Evidence.finding_id == finding_id, Evidence.captured_at == latest)
+        .with_only_columns(Evidence.kind, Evidence.data)
     ).all()
-    if not rows:
-        return set()
-    latest = max(row.captured_at for row in rows)
-    return {(row.kind, _canonical_json(row.data)) for row in rows if row.captured_at == latest}
+    return {(row.kind, _canonical_json(row.data)) for row in rows}
 
 
 def _canonical_json(data: object) -> str:

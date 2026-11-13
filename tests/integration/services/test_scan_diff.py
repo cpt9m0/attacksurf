@@ -297,6 +297,46 @@ def test_diff_does_not_fix_a_finding_a_newer_scan_just_observed(db_session: Sess
     assert _finding(db_session, tenant.org_id, RULE_A).status is FindingStatus.OPEN
 
 
+def test_diff_does_not_regress_a_fix_established_by_a_newer_scan(
+    db_session: Session,
+) -> None:
+    """A delayed positive from an older scan must not undo a newer scan's fix."""
+    tenant = make_scan(db_session)
+    first = _scan(db_session, tenant, 0)
+    _observe(db_session, first)
+    _complete(db_session, first)
+    newer = _scan(db_session, tenant, 2)
+    _job(db_session, newer)
+    _diff(db_session, newer)
+    assert _finding(db_session, tenant.org_id, RULE_A).status is FindingStatus.FIXED
+
+    older = _scan(db_session, tenant, 1)
+    _job(db_session, older)
+    _observe(db_session, older)
+    events = _diff(db_session, older)
+
+    assert _finding(db_session, tenant.org_id, RULE_A).status is FindingStatus.FIXED
+    assert events == []
+
+
+def test_diff_does_not_report_disappeared_ips(db_session: Session) -> None:
+    """A failed resolution leaves an IP's last_seen stale: that is not evidence it is gone."""
+    tenant = make_scan(db_session)
+    first = _scan(db_session, tenant, 0)
+    _job(db_session, first, scanner=DISCOVERY, stage="discovery")
+    _child(db_session, tenant, "203.0.113.10", BASE, AssetType.IP)
+    _child(db_session, tenant, "a.acme.example", BASE)
+    _complete(db_session, first)
+    second = _scan(db_session, tenant, 1)
+    _job(db_session, second, scanner=DISCOVERY, stage="discovery")
+
+    _diff(db_session, second)
+
+    disappeared = second.stats["assets"]["disappeared"]
+    assert disappeared["total"] == 1
+    assert [item["value"] for item in disappeared["assets"]] == ["a.acme.example"]
+
+
 def _child(
     session: Session,
     tenant: Scan,

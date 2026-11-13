@@ -43,7 +43,7 @@ def diff_scan(session: Session, org_id: UUID, job_id: UUID, events: EventDispatc
         return
     seen = scan.started_at or scan.created_at
     fixed = _fix(session, org_id, scan, seen)
-    regressed = _regress(session, org_id, scan)
+    regressed = _regress(session, org_id, scan, seen)
     assets = _asset_changes(session, org_id, scan, seen)
     first_seen = _observed_severities(session, org_id, Finding.first_seen_scan_id, scan.id)
     last_seen = _observed_severities(session, org_id, Finding.last_seen_scan_id, scan.id)
@@ -85,8 +85,10 @@ def _fix(session: Session, org_id: UUID, scan: Scan, seen: datetime) -> list[tup
     """Fix active findings whose scanner completed for their asset in this scan, once.
 
     `last_seen <= seen` keeps a delayed older scan from fixing what a newer scan just observed.
-    The `EXISTS` ties coverage to the finding's own scanner and asset, so a successful check of
-    a different scanner on the same asset never hides a finding.
+    `fixed_at` is this scan's start (not wall-clock time), so `_regress` can compare it with a
+    later scan's start and an older delayed observation cannot undo a newer fix. The `EXISTS`
+    ties coverage to the finding's own scanner and asset, so a successful check of a different
+    scanner on the same asset never hides a finding.
     """
     covered = (
         select(Job.id)
@@ -110,21 +112,29 @@ def _fix(session: Session, org_id: UUID, scan: Scan, seen: datetime) -> list[tup
             Finding.last_seen <= seen,
             covered,
         )
-        .values(status=FindingStatus.FIXED, fixed_at=func.now(), updated_at=func.now())
+        .values(status=FindingStatus.FIXED, fixed_at=seen, updated_at=func.now())
         .returning(Finding.id, Finding.severity),
         execution_options={"synchronize_session": "fetch"},
     ).all()
     return [(row.id, row.severity) for row in rows]
 
 
-def _regress(session: Session, org_id: UUID, scan: Scan) -> list[tuple[UUID, Severity]]:
-    """A fixed finding observed again in this scan comes back as `regressed`."""
+def _regress(
+    session: Session, org_id: UUID, scan: Scan, seen: datetime
+) -> list[tuple[UUID, Severity]]:
+    """A fixed finding observed again in this scan comes back as `regressed`.
+
+    Only a fix established before this scan started regresses: a delayed positive result from
+    an older scan can update `last_seen_scan_id` after a newer scan already fixed the finding,
+    and that must not undo the newer decision.
+    """
     rows = session.execute(
         update(Finding)
         .where(
             Finding.org_id == org_id,
             Finding.last_seen_scan_id == scan.id,
             Finding.status == FindingStatus.FIXED,
+            Finding.fixed_at < seen,
         )
         .values(status=FindingStatus.REGRESSED, fixed_at=None, updated_at=func.now())
         .returning(Finding.id, Finding.severity),
@@ -160,10 +170,12 @@ def _severity_bucket(severities: Iterable[Severity]) -> dict[str, object]:
 def _asset_changes(
     session: Session, org_id: UUID, scan: Scan, seen: datetime
 ) -> dict[str, dict[str, object]]:
-    """Discovered assets new since this scan started, and ones the previous scan still saw.
+    """Discovered assets new since this scan started, and subdomains the previous scan still saw.
 
     "Disappeared" needs a completed discovery job for this scan and an earlier completed scan:
-    without both, a missing name only means we did not look (ADR 0011).
+    without both, a missing name only means we did not look (ADR 0011). IP assets are left out:
+    they come from `dns.resolve`, whose per-hostname success the diff cannot establish yet, so a
+    failed resolution would look like a disappeared address.
     """
     children = scoped(Asset, org_id).where(Asset.parent_id == scan.root_asset_id)
     columns = (Asset.id, Asset.type, Asset.value)
@@ -181,6 +193,7 @@ def _asset_changes(
     if previous is not None and previous.started_at is not None:
         disappeared = session.execute(
             children.where(
+                Asset.type != AssetType.IP,
                 Asset.first_seen < seen,
                 Asset.last_seen < seen,
                 Asset.last_seen >= previous.started_at,

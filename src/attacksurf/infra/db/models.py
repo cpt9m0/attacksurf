@@ -288,6 +288,7 @@ class Finding(TenantScoped, Timestamps, Base):
     )
     first_seen: Mapped[datetime]
     last_seen: Mapped[datetime]
+    # The fixing scan's start (ADR 0027), not wall-clock time: it orders fixes against scans.
     fixed_at: Mapped[datetime | None]
     remediation: Mapped[str] = mapped_column(Text, server_default="")
     references: Mapped[list[str]] = mapped_column(
