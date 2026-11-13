@@ -123,7 +123,7 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 | `AssetRelation` | graph edges: `subdomain_of`, `cname_to`, `resolves_to`, `serves`; unique per `(org_id, from, to, kind)`, no self-edges. `services.assets.record_asset` / `record_relation` upsert atomically (`INSERT … ON CONFLICT`): re-seen rows extend `last_seen`, never downgrade `source=user`, don't commit (the pipeline commits once), and raise `AssetNotFound` for a parent or endpoint that isn't the org's (locked `FOR KEY SHARE` so it can't vanish before the insert) |
 | `Verification` | proof of ownership of a root domain (`_attacksurf-verify.<root>` TXT, `pending`/`verified`/`revoked`, `verified_at`, `last_checked_at`, `recheck_at`, `expires_at`; unique per `(org_id, asset_id)`). Renewals are due after 20 hours; authorization expires after 24 hours. Subdomains inherit their root's proof; a `verified` row counts only while `expires_at` is in the future. Written by `services.verifications` / `services.ownership`, read by `DbOwnershipChecker` (ADRs 0014, 0015) |
 | `Scan`, `Job` | one run of a profile (`dns_passive`, …) against a root asset (`queued/running/completed/failed/cancelled`, triggered by `user`/`schedule`; `stats` holds the #20 diff: new/fixed/regressed findings by severity and new/disappeared assets, ADR 0027), and its jobs: a pipeline stage, or one scanner on one asset (`skipped` = not run, e.g. denied by ScopeGuard). `scan_id` is NULL for work that isn't part of a scan (ownership verification). Deleting the root asset deletes its scans (their jobs are kept with `scan_id` NULL); deleting another asset keeps the job with `asset_id` NULL |
-| `Finding`, `Evidence` | normalized result, one row per issue across scans: unique `(org_id, fingerprint)`, with `fingerprint = domain.findings.finding_fingerprint(org_id, asset_id, rule_id, location)` (SHA-256 of a versioned JSON array; `location` tells apart several issues of one rule on one asset). `rule_id` points into the rule catalog (`domain.rules`: title, default severity, remediation template, references). `scanner` is the `Job.scanner` that last observed it (`NULL` before #20: never auto-fixed). Status `open → fixed → regressed → fixed` (the diff stage `services.scan_diff` owns those transitions, ADR 0027), plus the user's `accepted_risk`/`false_positive`, which reopen to `open` only on a material change; `fixed_at` is set exactly when `fixed`. Deleting a scan keeps its findings (scan references become NULL); evidence (`dns_record`/`http_response`/`raw`) goes with its finding |
+| `Finding`, `Evidence` | normalized result, one row per issue across scans: unique `(org_id, fingerprint)`, with `fingerprint = domain.findings.finding_fingerprint(org_id, asset_id, rule_id, location)` (SHA-256 of a versioned JSON array; `location` tells apart several issues of one rule on one asset). `rule_id` points into the rule catalog (`domain.rules`: title, default severity, remediation template, references). `scanner` is the `Job.scanner` that last observed it (`NULL` before #20: never auto-fixed), and `evidence_digest` is the SHA-256 of the last observed evidence set (empty included) for material-change checks. Status `open → fixed → regressed → fixed` (the diff stage `services.scan_diff` owns those transitions, ADR 0027), plus the user's `accepted_risk`/`false_positive`, which reopen to `open` only on a material change; `fixed_at` is set exactly when `fixed`. `FindingObservation` records one row per `(scan, finding)` with the severity at observation time: it is what a scan's own stats and fix/regress decisions use, so they never depend on the mutable `last_seen_scan_id`; rows cascade with their scan and finding. Deleting a scan keeps its findings (scan references become NULL); evidence (`dns_record`/`http_response`/`raw`) goes with its finding |
 | `OrgSettings`, `LLMUsage` | LLM provider config (encrypted keys) and token/cost tracking |
 | `ScanSchedule`, `AuditLog` | continuous monitoring and an append-only audit trail (`services.audit.audit()`, written in the same transaction as the change) |
 
@@ -258,13 +258,15 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   this scan has its own `scanner` and `asset_id` and its `last_seen` is not newer than the scan
   start, so a failed/skipped check proves nothing and a delayed older scan never undoes a newer
   observation. `fixed_at` is the fixing scan's start, and only a fix older than this scan
-  regresses, so a delayed positive from an older scan cannot undo a newer fix. Suppressed
-  findings are never auto-fixed: persistence reopens them only when this observation is at least
-  as new as the stored one and severity/confidence changed or the evidence set differs from the
-  latest batch (read alone with `max(captured_at)`). The same
-  transaction diffs discovered assets (`new`; `disappeared` subdomains only, and only when this
-  scan's discovery completed and an earlier completed scan of the root exists: IPs need
-  per-hostname resolution coverage), writes `Scan.stats`
+  regresses, so a delayed positive from an older scan cannot undo a newer fix. What this scan
+  observed comes from its `finding_observations` rows, not `last_seen_scan_id`, so overlapping
+  scans cannot skew its totals or fix/regress decisions. Suppressed findings are never
+  auto-fixed: persistence reopens them only when this observation is at least as new as the
+  stored one and severity/confidence changed or the evidence digest (empty batch included)
+  differs from the last observed set. The same
+  transaction diffs discovered assets (`new`; `disappeared` = subdomains this scan deactivated
+  by resolving them to nothing, so it does not depend on discovery completeness; IPs need
+  per-hostname resolution coverage), writes `Scan.stats` from the scan's observation rows
   (`findings.{new,fixed,regressed,total}` with zero-filled `by_severity`, `assets.{new,
   disappeared}` capped at 1000 entries) and audits `scan.diffed`; `FindingFixed` and
   `FindingRegressed` publish after commit. A redelivery finds the stats already present and

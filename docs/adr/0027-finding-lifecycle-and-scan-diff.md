@@ -31,34 +31,42 @@ The pieces it left open:
 - **Coverage is per scanner and asset.** The diff fixes an active finding only when a
   `COMPLETED` `check`/`discovery` job for this scan has the finding's `scanner` and `asset_id`.
   Failed, skipped, exhausted-retry and unplanned checks confer no coverage.
+- **Scan-scoped observations.** `finding_observations` holds one row per `(scan, finding)` with
+  the severity at observation time, written by persistence (`ON CONFLICT DO NOTHING`, so replay
+  cannot duplicate it). "This scan saw it" is that row, never `Finding.last_seen_scan_id`: the
+  pointer follows the latest observation, which overlapping scans can move, and deriving a
+  scan's totals, fix eligibility or regressions from it made them wrong. The rows cascade with
+  their scan and finding.
 - **Suppressed findings stay suppressed unless the evidence changes materially.** Re-observation
   reopens an `accepted_risk`/`false_positive` finding only when its severity or confidence
   changed, or when the incoming evidence set (kind + canonical JSON, order-insensitive) differs
-  from the finding's latest recorded evidence batch (fetched alone with `max(captured_at)`, so
-  the finding's history size never slows persistence). The comparison happens in persistence,
-  before the upsert, and is applied as a conditional `CASE` that re-checks the current status
-  and the observation order, so neither a concurrent user decision nor a delayed older scan can
-  override the decision blindly. A reopen emits `FindingReopened`.
+  from the last observed set. `Finding.evidence_digest` stores the SHA-256 of that set, with an
+  empty batch as a batch of its own, so the comparison is O(1) and never loads evidence history;
+  `NULL` (a row from before this feature) is compared as the empty batch. The comparison happens
+  in persistence, before the upsert, and is applied as a conditional `CASE` that re-checks the
+  current status and the observation order, so neither a concurrent user decision nor a delayed
+  older scan can override the decision blindly. A reopen emits `FindingReopened`.
 - **The diff stage owns scan-level transitions.** `services.scan_diff.diff_scan` runs after the
   `persist` barrier: it marks re-observed fixed findings `regressed`, fixes active findings whose
   scanner completed and did not re-observe them, diffs assets, writes `Scan.stats` and audits
   `scan.diffed` in one transaction, then publishes `FindingFixed`/`FindingRegressed`.
   `FindingFixed`/`FindingRegressed`/`FindingReopened` carry identifiers only. `fixed_at` records
   the fixing scan's start, not wall-clock time, and a finding only regresses when that fix
-  predates the scanning scan: a delayed observation from an older scan can update
-  `last_seen_scan_id` after a newer scan already fixed the finding, and must not undo it.
+  predates the scanning scan: a delayed observation from an older scan can be persisted after a
+  newer scan already fixed the finding, and must not undo it.
 - **Asset diff.** `new` = discovered assets (subdomains and IPs under the scan root) with
-  `first_seen` at or after this scan's start. `disappeared` = subdomains the previous completed
-  scan of the same root still saw (`last_seen` between that scan's start and this one's),
-  reported only when this scan's discovery stage actually completed: a failed or absent
-  discovery means we did not look. IP assets are excluded: they come from `dns.resolve`, and a
-  failed resolution leaves their `last_seen` stale, so they would look gone when nothing was
+  `first_seen` at or after this scan's start. `disappeared` = subdomains this scan deactivated
+  (`is_active = false`, `deactivated_at >= scan start`, first seen earlier): that is a
+  resolution verdict from ADR 0025, not an inference from absence, so it does not depend on how
+  complete CT discovery was. IP assets are excluded: a failed `dns.resolve` leaves their
+  `last_seen` stale without deactivating them, so they would look gone when nothing was
   resolved (per-hostname resolution coverage is a follow-up).
 - **`Scan.stats` shape.** `findings.{new,fixed,regressed,total}` are `{total, by_severity}` with
-  every severity zero-filled; `total` counts findings observed by this scan in any post-diff
-  status (suppressed included). `assets.{new,disappeared}` are `{total, assets: [{id, type,
-  value}]}`, capped at 1000 entries while `total` stays exact. The diff is replay-safe: once the
-  stats hold a diff, a redelivery changes nothing.
+  every severity zero-filled; `total` counts this scan's observation rows in any post-diff
+  status (suppressed included), and `new` counts the ones whose finding this scan first saw.
+  `assets.{new,disappeared}` are `{total, assets: [{id, type, value}]}`, capped at 1000 entries
+  while `total` stays exact. The diff is replay-safe: once the stats hold a diff, a redelivery
+  changes nothing.
 
 ## Consequences
 - A scanner removed from a profile stops conferring coverage, so its findings stay open rather
@@ -70,13 +78,13 @@ The pieces it left open:
 - Findings on a deactivated asset are never fixed: no scanner runs on an inactive asset, so
   there is no coverage. The takeover finding on a dangling CNAME therefore survives the
   subdomain going inactive, which is the safe direction.
-- Suppressed findings are compared against their latest evidence batch, so two scans that share
-  a timestamp are compared as one batch. Batches are small (≤10 items) and the comparison is
-  order-insensitive.
-- Concurrent scans of the same root can both diff; the conditional updates, the `newer` reopen
-  gate, the `last_seen <= seen` fix guard and the `fixed_at < seen` regress guard keep an older
-  scan from undoing a newer observation or decision in either direction. #21 adds the
-  concurrent-scan prevention that makes the window rare.
+- Suppressed findings compare evidence digests, so two observations with the same evidence set
+  (in any order, or both empty) are the same batch.
+- Concurrent scans of the same root can both diff; the observation rows make each scan's own
+  set independent of the other, and the conditional updates, the `newer` reopen gate, the
+  `last_seen <= seen` fix guard and the `fixed_at < seen` regress guard keep an older scan from
+  undoing a newer observation or decision in either direction. #21 adds the concurrent-scan
+  prevention that makes the window rare.
 - IP assets are not reported as disappeared yet; a follow-up can add per-hostname resolution
   coverage (a completed `dns.resolve` job for each hostname that pointed at the address).
 - No UI is added here: #21 renders `Scan.stats`, #22 the finding timeline. The status and event
