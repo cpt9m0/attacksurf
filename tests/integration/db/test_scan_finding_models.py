@@ -200,6 +200,7 @@ def test_links_to_another_orgs_rows_are_rejected(
     [
         "UPDATE findings SET status = 'fixed'",  # fixed without fixed_at
         "UPDATE findings SET fixed_at = now()",  # fixed_at while open
+        "UPDATE findings SET status = 'regressed', fixed_at = now()",  # only fixed has one
         "UPDATE findings SET last_seen = first_seen - interval '1 day'",
         "UPDATE findings SET severity = 'urgent'",
         "UPDATE findings SET confidence = 'certain'",
@@ -241,6 +242,14 @@ def test_fixed_finding_records_when(db_session: Session, acme: Tenant) -> None:
     _add(db_session, finding)
 
     assert finding.fixed_at == NOW + timedelta(days=1)
+
+
+def test_regressed_finding_has_no_fixed_at(db_session: Session, acme: Tenant) -> None:
+    finding = _finding(acme, status=FindingStatus.REGRESSED)
+
+    _add(db_session, finding)
+
+    assert (finding.status, finding.fixed_at) == (FindingStatus.REGRESSED, None)
 
 
 def test_deleting_a_scan_keeps_findings_and_job_history_of_assets(

@@ -276,6 +276,9 @@ class Finding(TenantScoped, Timestamps, Base):
     rule_id: Mapped[str] = mapped_column(String(MAX_RULE_ID_LENGTH))
     fingerprint: Mapped[str] = mapped_column(String(FINGERPRINT_LENGTH))
     location: Mapped[str] = mapped_column(String(MAX_LOCATION_LENGTH), server_default="")
+    # The scanner that last observed it (a `Job.scanner` name). NULL for rows written before
+    # #20 or by a caller that didn't name one: those are never auto-fixed (ADR 0027).
+    scanner: Mapped[str | None] = mapped_column(String(100))
     title: Mapped[str] = mapped_column(String(300))
     description: Mapped[str] = mapped_column(Text)
     severity: Mapped[Severity] = mapped_column(_str_enum(Severity, "severity"))
