@@ -42,10 +42,16 @@ talks to authoritative servers for the ownership proof.
   hours as public data; failures are not cached and are fail-open.
 - **DNSSEC depth**: the check verifies the DS -> DNSKEY linkage (key tag, algorithm and digest
   per RFC 4034 section 5.1.4, digest types SHA-1/256/384), not RRSIG signature validity.
-  Unsupported digests or algorithms leave the zone unjudged.
+  Unsupported digests or algorithms leave the zone unjudged. Zone discovery retries a failed
+  stub lookup with DNSSEC checking disabled (CD, RFC 4035 section 3.2.2): a validating resolver
+  answers SERVFAIL for a zone with a stale DS, which would otherwise hide the very nameservers
+  the check must probe. The CD path is read-only, budgeted like any other lookup, and used only
+  by the authoritative adapter.
 - **Scope**: the zone-level checks (`dns.ns`, `dns.dnssec`, `dns.axfr`) run only on a zone apex;
-  MX/CAA/RDAP use the asset's own data with the registrable domain as fallback. All six are
-  `DOMAIN`-only, so they run once per scan root rather than per discovered subdomain.
+  `dns.mx`/`dns.whois` use the asset's own data with the registrable domain as fallback, while
+  `dns.caa` checks the asset and every ancestor up to the registrable domain (RFC 8659 section
+  3), failing open if the lookup budget cannot cover the chain. All six are `DOMAIN`-only, so
+  they run once per scan root rather than per discovered subdomain.
 
 ## Consequences
 - The grant contract grows in a backward-compatible way; existing scanners need no changes.

@@ -214,7 +214,8 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   `dns.ns.inconsistent_soa` (medium). `dns.mx` reports MX targets that are CNAMEs
   (`dns.mx.points_to_cname`, low) or have no address records (`dns.mx.unresolvable`, medium),
   skipping a null MX. `dns.caa` reports a missing CAA record (`dns.caa.missing`, info) after
-  checking the registrable parent. `dns.whois` reads RDAP registration data through the IANA
+  checking the asset and every ancestor up to the registrable domain. `dns.whois` reads RDAP
+  registration data through the IANA
   bootstrap (24 h cache) for `dns.whois.expiring_soon` (medium below 30 days, high below 7) and
   `dns.whois.registrar_lock_missing` (medium). `dns.axfr` is an active check on verified zone
   apexes: one AXFR per nameserver, `dns.axfr.allowed` (high) with only the first message's
