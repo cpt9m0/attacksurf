@@ -344,6 +344,44 @@ def test_persist_ignores_reordered_dns_record_values_for_material_change(
     assert events == []
 
 
+def test_persist_ignores_reordered_rdap_statuses_for_material_change(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+
+    def output(statuses: tuple[str, ...]) -> ScanOutput:
+        return ScanOutput(
+            findings=(
+                RawFinding(
+                    rule_id=RULE.id,
+                    evidence=(
+                        RawEvidence(
+                            kind=EvidenceKind.RAW,
+                            data={"source": "rdap", "statuses": list(statuses)},
+                        ),
+                    ),
+                ),
+            )
+        )
+
+    statuses = ("clientTransferProhibited", "active")
+    persist_scan_output(db_session, scan, scan.root_asset_id, output(statuses), catalog=catalog)
+    finding = db_session.scalars(scoped(Finding, scan.org_id)).one()
+    finding.status = FindingStatus.ACCEPTED_RISK
+    db_session.flush()
+
+    events = persist_scan_output(
+        db_session,
+        _later_scan(db_session, scan),
+        scan.root_asset_id,
+        output(tuple(reversed(statuses))),
+        catalog=catalog,
+    )
+
+    assert finding.status is FindingStatus.ACCEPTED_RISK
+    assert events == []
+
+
 def test_persist_ignores_evidence_order_for_material_change(
     db_session: Session, catalog: dict[str, Rule]
 ) -> None:

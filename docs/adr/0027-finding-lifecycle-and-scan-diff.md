@@ -42,8 +42,8 @@ The pieces it left open:
   changed, or when the incoming evidence set (kind + canonical JSON, order-insensitive) differs
   from the last observed set. `Finding.evidence_digest` stores the SHA-256 of that set, with an
   empty batch as a batch of its own, so the comparison is O(1) and never loads evidence history.
-  A DNS RRset's answer order is not meaningful, so `values` is sorted before hashing; a CNAME
-  chain's order is the path and is kept.
+  Collections whose order is not meaningful (a DNS RRset's values, an RDAP registration's
+  statuses) are sorted before hashing; a CNAME chain's order is the path and is kept.
   `NULL` (a row migrated from before this feature) has an unknown baseline: its first
   observation records the baseline and never reopens on its own, so a migration cannot discard
   a suppression. The comparison happens

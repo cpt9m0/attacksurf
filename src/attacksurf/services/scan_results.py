@@ -629,20 +629,25 @@ def _evidence_digest(evidence: tuple[RawEvidence, ...]) -> str:
     return hashlib.sha256(json.dumps(keys, ensure_ascii=False).encode()).hexdigest()
 
 
+# Evidence collections whose order carries no meaning: a DNS RRset's answer set and an RDAP
+# registration's statuses. A CNAME record's `values` is the chain path and keeps its order.
+_UNORDERED_EVIDENCE_KEYS = ("values", "statuses")
+
+
 def _digest_json(data: dict[str, Any]) -> str:
     """Canonical JSON for material-change comparison.
 
-    A DNS RRset's answer order is not meaningful (resolvers may return the same records in a
-    different order), so `values` is sorted; a CNAME chain's order is the path and is kept.
+    A resolver or registry may return the same set in a different order, so unordered
+    collections are sorted before hashing; a CNAME chain's order is the path and is kept.
     """
-    values = data.get("values")
-    if (
-        data.get("record") != "CNAME"
-        and isinstance(values, list)
-        and all(isinstance(value, str) for value in values)
-    ):
-        data = {**data, "values": sorted(values)}
-    return _canonical_json(data)
+    normalized = dict(data)
+    for key in _UNORDERED_EVIDENCE_KEYS:
+        items = normalized.get(key)
+        if key == "values" and normalized.get("record") == "CNAME":
+            continue
+        if isinstance(items, list) and all(isinstance(item, str) for item in items):
+            normalized[key] = sorted(items)
+    return _canonical_json(normalized)
 
 
 _EMPTY_EVIDENCE_DIGEST = _evidence_digest(())
