@@ -13,6 +13,8 @@ from attacksurf.infra.queue import celery_config
 from attacksurf.scanners.dns import discovery as _ct_discovery  # noqa: F401
 from attacksurf.scanners.dns import email as _dns_email  # noqa: F401
 from attacksurf.scanners.dns import resolve as _dns_resolve  # noqa: F401
+from attacksurf.scanners.dns import takeover as _dns_takeover  # noqa: F401
+from attacksurf.scanners.dns import takeover_http as _dns_takeover_http  # noqa: F401
 from attacksurf.workers import runtime
 
 TASK_MODULES = (
