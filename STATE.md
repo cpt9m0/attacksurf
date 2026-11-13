@@ -5,8 +5,8 @@
 **Updated:** 2026-11-13 · **Branch:** `17-dns-email-security` · **Issue:** #17 (DNS check: email security (SPF, DMARC, DKIM, MTA-STS))
 
 ## Status
-#17 is **implemented and verified on this branch**, not yet pushed or PR'd. Issue stays open
-until the PR merges (`Closes #17`).
+#17 is **implemented, verified, and open as PR #163** (branch pushed; pre-push pyright + pytest
+passed). Issue stays open until the PR merges (`Closes #17` in the PR body).
 
 ## Last task
 - Added the `dns.email` passive scanner (root domains only): one `lookup_many` round reads TXT
@@ -28,8 +28,8 @@ until the PR merges (`Closes #17`).
   rejected in favour of a stdlib parser).
 
 ## Next step
-1. Push `17-dns-email-security` and open the PR (`feat(scanners): add email security check
-   (#17)`, `Closes #17`), then start #18 (subdomain takeover; depends on #16, now unblocked).
+1. Watch PR #163 CI (`lint`, `test (3.12/3.13/3.15)`, `secrets`, `compose`, `pr-title`) and
+   merge when green; then start #18 (subdomain takeover; depends on #16, now unblocked).
 
 ## Open threads
 - SPF lookup counting is per published record (top-level DNS-querying terms); recursive
