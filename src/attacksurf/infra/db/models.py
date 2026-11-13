@@ -279,6 +279,9 @@ class Finding(TenantScoped, Timestamps, Base):
     # The scanner that last observed it (a `Job.scanner` name). NULL for rows written before
     # #20 or by a caller that didn't name one: those are never auto-fixed (ADR 0027).
     scanner: Mapped[str | None] = mapped_column(String(100))
+    # SHA-256 of the last observed evidence set, empty set included, so a material change is an
+    # O(1) comparison instead of loading the finding's evidence history (ADR 0027).
+    evidence_digest: Mapped[str | None] = mapped_column(String(FINGERPRINT_LENGTH))
     title: Mapped[str] = mapped_column(String(300))
     description: Mapped[str] = mapped_column(Text)
     severity: Mapped[Severity] = mapped_column(_str_enum(Severity, "severity"))
@@ -295,6 +298,26 @@ class Finding(TenantScoped, Timestamps, Base):
         ARRAY(String(MAX_URL_LENGTH)), default=list, server_default=text("'{}'")
     )
     ai_triage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class FindingObservation(TenantScoped, Base):
+    """One finding seen by one scan: the per-scan set `Scan.stats` and the diff work from.
+
+    `Finding.last_seen_scan_id` follows the latest observation, which overlapping scans can
+    move; this row belongs to the scan that observed the finding, so a scan's own totals and
+    fix/regress decisions never depend on that mutable pointer (ADR 0027).
+    """
+
+    __tablename__ = "finding_observations"
+    __table_args__ = (
+        UniqueConstraint("org_id", "scan_id", "finding_id"),
+        _same_org_fk("scan_id", "scans"),
+        _same_org_fk("finding_id", "findings"),
+    )
+
+    scan_id: Mapped[UUID] = mapped_column(index=True)
+    finding_id: Mapped[UUID] = mapped_column(index=True)
+    severity: Mapped[Severity] = mapped_column(_str_enum(Severity, "severity"))
 
 
 class Evidence(TenantScoped, Base):

@@ -234,6 +234,23 @@ def test_consecutive_scans_report_new_fixed_and_regressed_sets(db_session: Sessi
     assert third.stats["findings"]["total"] == _bucket(1, medium=1)
 
 
+def test_diff_counts_a_finding_observed_after_a_later_scan_moved_the_pointer(
+    db_session: Session,
+) -> None:
+    """Overlapping scans: the stats come from this scan's observations, not `last_seen_scan_id`."""
+    tenant = make_scan(db_session)
+    earlier = _scan(db_session, tenant, 1)
+    _observe(db_session, earlier)
+    later = _scan(db_session, tenant, 2)
+    _observe(db_session, later)
+    assert _finding(db_session, tenant.org_id, RULE_A).last_seen_scan_id == later.id
+
+    _diff(db_session, earlier)
+
+    assert earlier.stats["findings"]["new"] == _bucket(1, medium=1)
+    assert earlier.stats["findings"]["total"] == _bucket(1, medium=1)
+
+
 def test_a_regressed_finding_is_fixed_again_when_it_disappears(db_session: Session) -> None:
     tenant = make_scan(db_session)
     first = _scan(db_session, tenant, 0)
@@ -320,15 +337,19 @@ def test_diff_does_not_regress_a_fix_established_by_a_newer_scan(
 
 
 def test_diff_does_not_report_disappeared_ips(db_session: Session) -> None:
-    """A failed resolution leaves an IP's last_seen stale: that is not evidence it is gone."""
+    """IPs are excluded: a failed resolution leaves their last_seen stale without deactivating."""
     tenant = make_scan(db_session)
     first = _scan(db_session, tenant, 0)
     _job(db_session, first, scanner=DISCOVERY, stage="discovery")
-    _child(db_session, tenant, "203.0.113.10", BASE, AssetType.IP)
-    _child(db_session, tenant, "a.acme.example", BASE)
+    address = _child(db_session, tenant, "203.0.113.10", BASE, AssetType.IP)
+    gone = _child(db_session, tenant, "a.acme.example", BASE)
     _complete(db_session, first)
     second = _scan(db_session, tenant, 1)
     _job(db_session, second, scanner=DISCOVERY, stage="discovery")
+    for asset in (address, gone):
+        asset.is_active = False
+        asset.deactivated_at = BASE + timedelta(hours=1)
+    db_session.flush()
 
     _diff(db_session, second)
 
@@ -359,7 +380,7 @@ def test_diff_reports_new_and_disappeared_assets(db_session: Session) -> None:
     tenant = make_scan(db_session)
     first = _scan(db_session, tenant, 0)
     _job(db_session, first, scanner=DISCOVERY, stage="discovery")
-    _child(db_session, tenant, "a.acme.example", BASE)
+    gone = _child(db_session, tenant, "a.acme.example", BASE)
     _child(db_session, tenant, "b.acme.example", BASE)
     _complete(db_session, first)
 
@@ -368,6 +389,10 @@ def test_diff_reports_new_and_disappeared_assets(db_session: Session) -> None:
     _child(db_session, tenant, "c.acme.example", BASE + timedelta(hours=1))
     _child(db_session, tenant, "b.acme.example", BASE + timedelta(hours=1))
     _child(db_session, tenant, "203.0.113.10", BASE + timedelta(hours=1), AssetType.IP)
+    # This scan's resolver found `a` no longer resolves; that is the disappearance verdict.
+    gone.is_active = False
+    gone.deactivated_at = BASE + timedelta(hours=1)
+    db_session.flush()
     _diff(db_session, second)
 
     assets = second.stats["assets"]
@@ -393,22 +418,15 @@ def test_first_scan_reports_no_disappeared_assets(db_session: Session) -> None:
     assert first.stats["assets"]["disappeared"] == {"total": 0, "assets": []}
 
 
-@pytest.mark.parametrize(
-    "discovery",
-    ["missing", "failed"],
-    ids=["no-discovery-job", "failed-discovery"],
-)
-def test_diff_does_not_report_disappeared_assets_without_discovery(
-    db_session: Session, discovery: str
-) -> None:
+def test_diff_does_not_report_assets_that_still_resolve(db_session: Session) -> None:
+    """Stale `last_seen` alone is not evidence: only a resolution verdict deactivates an asset."""
     tenant = make_scan(db_session)
     first = _scan(db_session, tenant, 0)
     _job(db_session, first, scanner=DISCOVERY, stage="discovery")
     _child(db_session, tenant, "a.acme.example", BASE)
     _complete(db_session, first)
     second = _scan(db_session, tenant, 1)
-    if discovery == "failed":
-        _job(db_session, second, scanner=DISCOVERY, stage="discovery", status=JobStatus.FAILED)
+    _job(db_session, second, scanner=DISCOVERY, stage="discovery")
 
     _diff(db_session, second)
 

@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from uuid import UUID, uuid5
 
-from sqlalchemy import case, func, literal, select, tuple_
+from sqlalchemy import case, func, literal, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
@@ -16,7 +16,6 @@ from attacksurf.domain.events import FindingCreated, FindingReopened
 from attacksurf.domain.findings import (
     SUPPRESSED_STATUSES,
     Confidence,
-    EvidenceKind,
     FindingStatus,
     Severity,
     finding_fingerprint,
@@ -31,7 +30,7 @@ from attacksurf.domain.scanners import (
     ScanOutput,
 )
 from attacksurf.domain.scans import ScanCancelled
-from attacksurf.infra.db.models import Asset, Evidence, Finding, Scan
+from attacksurf.infra.db.models import Asset, Evidence, Finding, FindingObservation, Scan
 from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.services.assets import record_asset, record_relation
 from attacksurf.services.scans import TERMINAL
@@ -447,29 +446,37 @@ def _upsert_finding(
     """Insert or refresh one finding; returns `(id, created, reopened)`.
 
     A suppressed finding is reopened only when this output differs materially from what the user
-    suppressed: changed severity/confidence, or an evidence set other than the finding's last
-    recorded batch (ADR 0027). The comparison is read before the upsert and applied as a
-    conditional `CASE`, so a status change committed in between is never overwritten blindly.
+    suppressed: changed severity/confidence, or an evidence set other than the last observed one
+    (compared by digest, so an empty batch is a batch and history is never loaded). The
+    comparison is read before the upsert and applied as a conditional `CASE`, so a status change
+    committed in between is never overwritten blindly. Every observation is also recorded for
+    this scan, which is what `Scan.stats` counts (ADR 0027).
     """
     seen = scan.started_at or scan.created_at
     severity = raw.severity or rule.default_severity
+    digest = _evidence_digest(raw.evidence)
     fingerprint = finding_fingerprint(scan.org_id, asset_id, rule.id, raw.location)
     existing = session.execute(
         scoped(Finding, scan.org_id)
         .where(Finding.fingerprint == fingerprint)
-        .with_only_columns(Finding.id, Finding.status, Finding.severity, Finding.confidence)
+        .with_only_columns(
+            Finding.id,
+            Finding.status,
+            Finding.severity,
+            Finding.confidence,
+            Finding.evidence_digest,
+        )
     ).one_or_none()
     reopen = (
         existing is not None
         and existing.status in SUPPRESSED_STATUSES
         and _materially_changed(
-            session,
-            scan.org_id,
-            existing.id,
             existing.severity,
             existing.confidence,
-            raw=raw,
+            existing.evidence_digest,
             new_severity=severity,
+            new_confidence=raw.confidence,
+            new_digest=digest,
         )
     )
     stmt = insert(Finding).values(
@@ -486,6 +493,7 @@ def _upsert_finding(
         severity=severity,
         confidence=raw.confidence,
         scanner=scanner,
+        evidence_digest=digest,
         first_seen=seen,
         last_seen=seen,
         remediation=rule.render_remediation(raw.remediation_context),
@@ -497,6 +505,7 @@ def _upsert_finding(
         )
     )
     if created_id is not None:
+        _record_observation(session, scan, created_id, severity)
         return created_id, True, False
     new = stmt.excluded
     # Equal timestamps still need a deterministic order: replay must not move scan pointers.
@@ -524,6 +533,7 @@ def _upsert_finding(
             "remediation",
             "references",
             "last_seen_scan_id",
+            "evidence_digest",
         )
     }
     if scanner is not None:
@@ -555,48 +565,53 @@ def _upsert_finding(
         ).returning(Finding),
         execution_options={"populate_existing": True},
     ).one()
+    _record_observation(session, scan, finding.id, severity)
     return finding.id, False, reopen and finding.status is FindingStatus.OPEN
 
 
+def _record_observation(session: Session, scan: Scan, finding_id: UUID, severity: Severity) -> None:
+    """Remember that this scan observed the finding; a replay cannot add a second row."""
+    session.execute(
+        insert(FindingObservation)
+        .values(
+            id=uuid7(),
+            org_id=scan.org_id,
+            scan_id=scan.id,
+            finding_id=finding_id,
+            severity=severity,
+        )
+        .on_conflict_do_nothing(
+            index_elements=[
+                FindingObservation.org_id,
+                FindingObservation.scan_id,
+                FindingObservation.finding_id,
+            ]
+        )
+    )
+
+
 def _materially_changed(
-    session: Session,
-    org_id: UUID,
-    finding_id: UUID,
     severity: Severity,
     confidence: Confidence,
+    digest: str | None,
     *,
-    raw: RawFinding,
     new_severity: Severity,
+    new_confidence: Confidence,
+    new_digest: str,
 ) -> bool:
     """Whether this observation differs from what the user suppressed (ADR 0027)."""
-    if severity != new_severity or confidence != raw.confidence:
+    if severity != new_severity or confidence != new_confidence:
         return True
-    return _evidence_keys(raw.evidence) != _previous_evidence_keys(session, org_id, finding_id)
+    return new_digest != (digest or _EMPTY_EVIDENCE_DIGEST)
 
 
-def _evidence_keys(evidence: tuple[RawEvidence, ...]) -> set[tuple[EvidenceKind, str]]:
-    return {(item.kind, _canonical_json(item.data)) for item in evidence}
+def _evidence_digest(evidence: tuple[RawEvidence, ...]) -> str:
+    """SHA-256 of the evidence set, order-insensitive; an empty set has its own digest."""
+    keys = sorted({(item.kind.value, _canonical_json(item.data)) for item in evidence})
+    return hashlib.sha256(json.dumps(keys, ensure_ascii=False).encode()).hexdigest()
 
 
-def _previous_evidence_keys(
-    session: Session, org_id: UUID, finding_id: UUID
-) -> set[tuple[EvidenceKind, str]]:
-    """The finding's latest evidence batch, fetched alone so history size never matters.
-
-    `_upsert_evidence` keeps one batch per distinct scan; loading all of them just to compare
-    the newest would grow with the finding's lifetime (ADR 0027).
-    """
-    latest = (
-        select(func.max(Evidence.captured_at))
-        .where(Evidence.org_id == org_id, Evidence.finding_id == finding_id)
-        .scalar_subquery()
-    )
-    rows = session.execute(
-        scoped(Evidence, org_id)
-        .where(Evidence.finding_id == finding_id, Evidence.captured_at == latest)
-        .with_only_columns(Evidence.kind, Evidence.data)
-    ).all()
-    return {(row.kind, _canonical_json(row.data)) for row in rows}
+_EMPTY_EVIDENCE_DIGEST = _evidence_digest(())
 
 
 def _canonical_json(data: object) -> str:

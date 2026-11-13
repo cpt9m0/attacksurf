@@ -138,6 +138,36 @@ def test_persist_does_not_reopen_from_a_delayed_older_scan(
     assert events == []
 
 
+def test_persist_treats_an_empty_evidence_batch_as_a_batch(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    with_evidence = ScanOutput(
+        findings=(RawFinding(rule_id=RULE.id, evidence=(RawEvidence(data={"v": 1}),)),)
+    )
+    persist_scan_output(db_session, scan, scan.root_asset_id, with_evidence, catalog=catalog)
+    second = _later_scan(db_session, scan, hours=1)
+    empty = ScanOutput(findings=(RawFinding(rule_id=RULE.id),))
+    persist_scan_output(db_session, second, scan.root_asset_id, empty, catalog=catalog)
+    finding = db_session.scalars(scoped(Finding, scan.org_id)).one()
+    finding.status = FindingStatus.ACCEPTED_RISK
+    db_session.flush()
+
+    # The latest observation carried no evidence; another empty one is not a change.
+    third = _later_scan(db_session, second, hours=1)
+    events = persist_scan_output(db_session, third, scan.root_asset_id, empty, catalog=catalog)
+    assert finding.status is FindingStatus.ACCEPTED_RISK
+    assert events == []
+
+    # Returning to the older evidence differs from the empty batch and reopens.
+    fourth = _later_scan(db_session, third, hours=1)
+    events = persist_scan_output(
+        db_session, fourth, scan.root_asset_id, with_evidence, catalog=catalog
+    )
+    assert finding.status is FindingStatus.OPEN
+    assert [type(event) for event in events] == [FindingReopened]
+
+
 def test_persist_compares_only_the_latest_evidence_batch(
     db_session: Session, catalog: dict[str, Rule]
 ) -> None:

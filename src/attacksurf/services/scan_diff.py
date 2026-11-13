@@ -3,6 +3,8 @@
 Runs after every scanner result is committed (`persist` barrier) and before `finalize`. A
 finding is never fixed just because it is missing from this scan: its own scanner must have
 completed for its asset here, so a failed, skipped or unplanned check proves nothing (ADR 0011).
+"Seen by this scan" always means a `finding_observations` row for this scan, never the mutable
+`Finding.last_seen_scan_id` pointer that overlapping scans can move.
 """
 
 from collections.abc import Iterable, Sequence
@@ -10,13 +12,14 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import Row, func, select, update
-from sqlalchemy.orm import InstrumentedAttribute, Session
+from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from attacksurf.domain.assets import AssetType
 from attacksurf.domain.events import EventDispatcher, FindingFixed, FindingRegressed
 from attacksurf.domain.findings import ACTIVE_STATUSES, FindingStatus, Severity
-from attacksurf.domain.scans import JobStatus, ScanStatus
-from attacksurf.infra.db.models import Asset, Finding, Job, Scan
+from attacksurf.domain.scans import JobStatus
+from attacksurf.infra.db.models import Asset, Finding, FindingObservation, Job, Scan
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services.audit import audit
 from attacksurf.services.scans import TERMINAL, load_job_scan, root_is_active
@@ -45,13 +48,11 @@ def diff_scan(session: Session, org_id: UUID, job_id: UUID, events: EventDispatc
     fixed = _fix(session, org_id, scan, seen)
     regressed = _regress(session, org_id, scan, seen)
     assets = _asset_changes(session, org_id, scan, seen)
-    first_seen = _observed_severities(session, org_id, Finding.first_seen_scan_id, scan.id)
-    last_seen = _observed_severities(session, org_id, Finding.last_seen_scan_id, scan.id)
     findings = {
-        "new": _severity_bucket(first_seen),
+        "new": _severity_bucket(_new_severities(session, org_id, scan.id)),
         "fixed": _severity_bucket(severity for _, severity in fixed),
         "regressed": _severity_bucket(severity for _, severity in regressed),
-        "total": _severity_bucket(last_seen),
+        "total": _severity_bucket(_observed_severities(session, org_id, scan.id)),
     }
     stats = {"findings": findings, "assets": assets}
     scan.stats = {**(scan.stats or {}), **stats}
@@ -81,14 +82,29 @@ def _already_diffed(scan: Scan) -> bool:
     return "findings" in stats and "assets" in stats
 
 
+def _observed_here(scan_id: UUID) -> ColumnElement[bool]:
+    """`EXISTS` a `finding_observations` row linking this finding to the scan."""
+    return (
+        select(FindingObservation.id)
+        .where(
+            FindingObservation.org_id == Finding.org_id,
+            FindingObservation.scan_id == scan_id,
+            FindingObservation.finding_id == Finding.id,
+        )
+        .exists()
+    )
+
+
 def _fix(session: Session, org_id: UUID, scan: Scan, seen: datetime) -> list[tuple[UUID, Severity]]:
     """Fix active findings whose scanner completed for their asset in this scan, once.
 
-    `last_seen <= seen` keeps a delayed older scan from fixing what a newer scan just observed.
-    `fixed_at` is this scan's start (not wall-clock time), so `_regress` can compare it with a
-    later scan's start and an older delayed observation cannot undo a newer fix. The `EXISTS`
-    ties coverage to the finding's own scanner and asset, so a successful check of a different
-    scanner on the same asset never hides a finding.
+    Findings this scan observed are excluded through its own observation rows, so an overlapping
+    scan moving `last_seen_scan_id` cannot make them look unseen. `last_seen <= seen` keeps a
+    delayed older scan from fixing what a newer scan just observed. `fixed_at` is this scan's
+    start (not wall-clock time), so `_regress` can compare it with a later scan's start and an
+    older delayed observation cannot undo a newer fix. The coverage `EXISTS` ties the job to the
+    finding's own scanner and asset, so a successful check of a different scanner on the same
+    asset never hides a finding.
     """
     covered = (
         select(Job.id)
@@ -108,7 +124,7 @@ def _fix(session: Session, org_id: UUID, scan: Scan, seen: datetime) -> list[tup
             Finding.org_id == org_id,
             Finding.status.in_(ACTIVE_STATUSES),
             Finding.scanner.is_not(None),
-            Finding.last_seen_scan_id.is_distinct_from(scan.id),
+            ~_observed_here(scan.id),
             Finding.last_seen <= seen,
             covered,
         )
@@ -122,17 +138,18 @@ def _fix(session: Session, org_id: UUID, scan: Scan, seen: datetime) -> list[tup
 def _regress(
     session: Session, org_id: UUID, scan: Scan, seen: datetime
 ) -> list[tuple[UUID, Severity]]:
-    """A fixed finding observed again in this scan comes back as `regressed`.
+    """A fixed finding this scan observed again comes back as `regressed`.
 
     Only a fix established before this scan started regresses: a delayed positive result from
-    an older scan can update `last_seen_scan_id` after a newer scan already fixed the finding,
-    and that must not undo the newer decision.
+    an older scan can be persisted after a newer scan already fixed the finding, and that must
+    not undo the newer decision. The observation row, not `last_seen_scan_id`, proves the
+    observation belongs to this scan.
     """
     rows = session.execute(
         update(Finding)
         .where(
             Finding.org_id == org_id,
-            Finding.last_seen_scan_id == scan.id,
+            _observed_here(scan.id),
             Finding.status == FindingStatus.FIXED,
             Finding.fixed_at < seen,
         )
@@ -143,13 +160,31 @@ def _regress(
     return [(row.id, row.severity) for row in rows]
 
 
-def _observed_severities(
-    session: Session, org_id: UUID, pointer: InstrumentedAttribute[UUID | None], scan_id: UUID
-) -> list[Severity]:
-    """Severities of the findings this scan first saw (`first_seen_scan_id`) or last saw."""
+def _observed_severities(session: Session, org_id: UUID, scan_id: UUID) -> list[Severity]:
+    """Severities of every finding this scan observed, from its own observation rows."""
     return list(
         session.scalars(
-            scoped(Finding, org_id).where(pointer == scan_id).with_only_columns(Finding.severity)
+            scoped(FindingObservation, org_id)
+            .where(FindingObservation.scan_id == scan_id)
+            .with_only_columns(FindingObservation.severity)
+        )
+    )
+
+
+def _new_severities(session: Session, org_id: UUID, scan_id: UUID) -> list[Severity]:
+    """Severities of the findings this scan was the first to observe."""
+    return list(
+        session.scalars(
+            scoped(FindingObservation, org_id)
+            .join(
+                Finding,
+                (Finding.id == FindingObservation.finding_id) & (Finding.org_id == org_id),
+            )
+            .where(
+                FindingObservation.scan_id == scan_id,
+                Finding.first_seen_scan_id == scan_id,
+            )
+            .with_only_columns(FindingObservation.severity)
         )
     )
 
@@ -170,12 +205,12 @@ def _severity_bucket(severities: Iterable[Severity]) -> dict[str, object]:
 def _asset_changes(
     session: Session, org_id: UUID, scan: Scan, seen: datetime
 ) -> dict[str, dict[str, object]]:
-    """Discovered assets new since this scan started, and subdomains the previous scan still saw.
+    """Discovered assets new since this scan started, and subdomains it found gone.
 
-    "Disappeared" needs a completed discovery job for this scan and an earlier completed scan:
-    without both, a missing name only means we did not look (ADR 0011). IP assets are left out:
-    they come from `dns.resolve`, whose per-hostname success the diff cannot establish yet, so a
-    failed resolution would look like a disappeared address.
+    "Disappeared" is a resolution verdict, not an absence: the asset was deactivated during this
+    scan because a scanner resolved it to nothing (ADR 0025), so it never depends on how
+    complete the discovery sources were. IPs are excluded until per-hostname resolution coverage
+    exists; a failed resolve leaves their `last_seen` stale without deactivating them.
     """
     children = scoped(Asset, org_id).where(Asset.parent_id == scan.root_asset_id)
     columns = (Asset.id, Asset.type, Asset.value)
@@ -184,23 +219,16 @@ def _asset_changes(
         .with_only_columns(*columns)
         .order_by(Asset.type, Asset.value)
     ).all()
-    disappeared: Sequence[Row[UUID, AssetType, str]] = ()
-    previous = (
-        _previous_scan(session, org_id, scan, seen)
-        if _discovery_ran(session, org_id, scan)
-        else None
-    )
-    if previous is not None and previous.started_at is not None:
-        disappeared = session.execute(
-            children.where(
-                Asset.type != AssetType.IP,
-                Asset.first_seen < seen,
-                Asset.last_seen < seen,
-                Asset.last_seen >= previous.started_at,
-            )
-            .with_only_columns(*columns)
-            .order_by(Asset.type, Asset.value)
-        ).all()
+    disappeared = session.execute(
+        children.where(
+            Asset.type != AssetType.IP,
+            Asset.is_active.is_(False),
+            Asset.deactivated_at >= seen,
+            Asset.first_seen < seen,
+        )
+        .with_only_columns(*columns)
+        .order_by(Asset.type, Asset.value)
+    ).all()
     return {"new": _asset_bucket(new), "disappeared": _asset_bucket(disappeared)}
 
 
@@ -212,34 +240,3 @@ def _asset_bucket(rows: Sequence[Row[UUID, AssetType, str]]) -> dict[str, object
             for row in rows[:MAX_STATS_ASSETS]
         ],
     }
-
-
-def _previous_scan(session: Session, org_id: UUID, scan: Scan, seen: datetime) -> Scan | None:
-    """The latest completed scan of the same root that ran before this one."""
-    return session.scalars(
-        scoped(Scan, org_id)
-        .where(
-            Scan.root_asset_id == scan.root_asset_id,
-            Scan.id != scan.id,
-            Scan.status == ScanStatus.COMPLETED,
-            Scan.started_at.is_not(None),
-            Scan.started_at < seen,
-        )
-        .order_by(Scan.started_at.desc(), Scan.id.desc())
-        .limit(1)
-    ).one_or_none()
-
-
-def _discovery_ran(session: Session, org_id: UUID, scan: Scan) -> bool:
-    return (
-        session.scalar(
-            scoped(Job, org_id)
-            .where(
-                Job.scan_id == scan.id,
-                Job.stage == "discovery",
-                Job.status == JobStatus.COMPLETED,
-            )
-            .with_only_columns(func.count())
-        )
-        or 0
-    ) > 0
