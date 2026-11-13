@@ -6,11 +6,13 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     Enum,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -21,6 +23,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from attacksurf.domain.accounts import Role
+from attacksurf.domain.artifacts import ArtifactKind
 from attacksurf.domain.assets import MAX_URL_LENGTH, AssetSource, AssetType, RelationKind
 from attacksurf.domain.findings import (
     FINGERPRINT_LENGTH,
@@ -217,6 +220,35 @@ class Verification(TenantScoped, Timestamps, Base):
     # broken domain can't occupy every batch slot and starve the rest (ADR 0014).
     failed_attempts: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     retry_after: Mapped[datetime | None]
+
+
+class Artifact(TenantScoped, Timestamps, Base):
+    """An uploaded or fetched repo/binary, stored encrypted (#85, ADR 0028).
+
+    The file at `storage_key` can only be decrypted with `key_envelope`, the per-artifact key
+    wrapped by the app key. Deleting an artifact erases that key and keeps the row as the
+    record; a cascade from its asset or org removes the row, and the key with it.
+    """
+
+    __tablename__ = "artifacts"
+    __table_args__ = (
+        _same_org_fk("asset_id", "assets"),
+        UniqueConstraint("storage_key"),
+        CheckConstraint("size_bytes >= 0", name="size_not_negative"),
+        CheckConstraint(
+            "(deleted_at IS NULL) = (key_envelope IS NOT NULL)", name="key_erased_on_delete"
+        ),
+        Index("ix_artifacts_delete_after", "delete_after"),  # the purge task's scan
+    )
+
+    asset_id: Mapped[UUID] = mapped_column(index=True)
+    kind: Mapped[ArtifactKind] = mapped_column(_str_enum(ArtifactKind, "artifact_kind"))
+    sha256: Mapped[str] = mapped_column(String(64))  # of the plaintext
+    size_bytes: Mapped[int] = mapped_column(BigInteger)  # plaintext bytes
+    storage_key: Mapped[str] = mapped_column(String(100))  # "{org_id}/{artifact_id}", server-built
+    key_envelope: Mapped[bytes | None] = mapped_column(LargeBinary(61))
+    delete_after: Mapped[datetime]
+    deleted_at: Mapped[datetime | None]
 
 
 class Scan(TenantScoped, Timestamps, Base):

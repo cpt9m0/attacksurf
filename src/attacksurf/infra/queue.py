@@ -73,7 +73,13 @@ def celery_config(settings: Settings) -> dict[str, Any]:
             "reverify-ownership": {
                 "task": "passive.reverify_ownership",
                 "schedule": crontab(minute=17),
-            }
+            },
+            # Bounds how long expired artifacts, and plaintext staged by a run that crashed,
+            # stay on disk (ADR 0028).
+            "purge-expired-artifacts": {
+                "task": "passive.purge_expired_artifacts",
+                "schedule": crontab(minute="*/10"),
+            },
         },
     }
 

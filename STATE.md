@@ -2,44 +2,38 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-13 · **Branch:** `20-finding-deduplication-scan-diffing` · **Issue:** #20 (Finding deduplication and scan diffing)
+**Updated:** 2026-11-13 · **Branch:** `85-artifact-storage` · **Issue:** #85 (Store uploaded and fetched artifacts encrypted, with retention limits)
 
 ## Status
-PR #167 (`feat(scanners): add finding deduplication and scan diffing`, `Closes #20`) is open,
-mergeable and green. Codex review passed on `29eb790` ("Didn't find any major issues") after
-three rounds; every review thread is resolved. Local checks: ruff check/format, lint-imports
-(6 kept), pyright, pytest 1911 passed / 19 skipped, coverage 95%.
+In progress: implemented, reviewed and committed locally; not pushed, no PR yet. Local checks pass (pytest 2049 passed, coverage 95.63%).
 
 ## Last task
-- Implemented #20: `FindingStatus.REGRESSED`, `Finding.scanner` provenance, and material-change
-  reopening of suppressed findings (`FindingReopened`), all in migration 0008.
-- `finding_observations` (one row per scan+finding) makes `Scan.stats` and the fix/regress
-  decisions scan-scoped instead of depending on `last_seen_scan_id`;
-  `assets.first_seen_scan_id` / `deactivated_by_scan_id` do the same for the asset diff.
-- `services.scan_diff.diff_scan` (wired into `passive.diff`) fixes only findings whose scanner
-  completed for the asset, marks re-observations of fixed findings `regressed`, records
-  new/disappeared subdomains (a resolution verdict), writes `Scan.stats` and audits
-  `scan.diffed` in one replay-safe transaction.
-- `Finding.evidence_digest` (unordered DNS/RDAP collections normalized) drives material-change
-  detection; a NULL baseline is initialized without reopening.
-- Tests: 24 diff-service cases, 15 persistence cases, plus pipeline task, asset-view, DB
-  invariant and tenant-isolation coverage. Docs: ADR 0027, architecture, CHANGELOG.
+- `Artifact` model + migration 0009; port, errors and limits in `domain/artifacts.py`.
+- `infra/crypto.py`: `EnvelopeCipher` (HKDF purpose-labelled key wrapping, 32-byte keys only)
+  and streaming AES-256-GCM; `infra/storage.py`: `LocalArtifactStore` (ciphertext in
+  `ARTIFACT_STORE_ROOT`, per-run plaintext in `SANDBOX_ARTIFACT_ROOT`).
+- `services/artifacts.py`: `store_artifact`, `open_artifact`, `stage_artifact`,
+  `delete_artifact`, `purge_expired`; beat task `passive.purge_expired_artifacts` (10 min).
+- Settings `APP_ENCRYPTION_KEY`, `ARTIFACT_*`; compose volume `artifact-store` (compose pins
+  `ARTIFACT_STORE_ROOT` to it); ADR 0028; dependency `cryptography`; seventh import contract.
 
 ## Next step
-1. Merge PR #167 (squash; `Closes #20` closes the issue), then delete the branch.
-2. Pick the next unblocked issue in epic #31: #21 (scans UI, consumes `Scan.stats`) or #22.
+Get the owner's OK on the PR size (below), then push and open the PR for #85 (`Closes #85`).
+After that #86 (archive extraction in the sandbox), #87 (codebase upload), #101.
 
 ## Open threads
-- Concurrent scans of the same root can still both diff (#21 adds prevention); scan-scoped
-  observation rows and the chronology guards keep them from corrupting each other's stats.
-- Findings on deactivated assets are never auto-fixed (no scanner runs on them): intentional.
-- A fail-open scanner (RDAP outage) can make its findings look fixed while the upstream is down.
-- `Scan.stats` asset lists are capped at 1000 entries; `total` stays exact.
-- Zone-level findings on two roots in one zone are not deduplicated across assets (from #19).
+- Non-test diff is about 1,090 changed lines, over the ~400 guideline. The owner has not
+  approved shipping it whole: ask, and say so in the PR, or move `stage`/`unstage`/
+  `sweep_staged`/`stage_artifact` to #84 (the design's cut line).
+- Nothing calls `stage`/`unstage`/`stage_artifact` yet: which process stages (and holds the
+  key) is #84's decision. #84 must also call `delete_artifact(reason="analysis_complete")`.
+- Known gaps (orphan ciphertext, no key rotation, no purge in prod until #29, key optional at
+  boot until #87) are recorded in ADR 0028, Consequences.
+- #24 should reuse `EnvelopeCipher`, not add Fernet.
 
 ## Notes for the next agent
-- `uv run` fails on the uv cache here (`/home/ubuntu/.cache`); use `.venv/bin/<tool>` directly.
-- Git hooks need caches redirected (`UV_CACHE_DIR`, `PRE_COMMIT_HOME`, `GOCACHE`, `GOPATH` under
-  /tmp) and the pre-push hook needs `TEST_DATABASE_URL` in the same command.
-- DB tests: `TEST_DATABASE_URL='postgresql+psycopg://attacksurf:attacksurf@127.0.0.1:5432/attacksurf_test'`
-  and `PATH="$PWD/.venv/bin:$PATH"` (the alembic CLI test shells out to `alembic`).
+- DB tests: `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@127.0.0.1:5432/attacksurf_test
+  uv run pytest -p no:cacheprovider --basetemp=/tmp/aspt` (short basetemp: macOS AF_UNIX limit).
+- `tests/unit/sandbox_proxy/test_server.py` has timing-flaky tests; rerun the file if one fails.
+- Artifact use cases call `session.rollback()` between steps: service tests must commit their
+  fixtures. Use `tmp_path` roots or `tests.fakes.FakeArtifactStore`.

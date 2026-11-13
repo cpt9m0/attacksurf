@@ -6,6 +6,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Encrypted artifact storage for uploaded and fetched repositories and binaries: an `Artifact`
+  model (migration 0009), streaming AES-256-GCM envelope encryption with a per-artifact key
+  wrapped by the new `APP_ENCRYPTION_KEY`, a per-artifact size limit enforced while reading
+  (`ARTIFACT_MAX_BYTES`), a per-organization quota (`ARTIFACT_ORG_QUOTA_BYTES`), plaintext
+  staged only for one sandbox run, and a retention task (`passive.purge_expired_artifacts`,
+  every 10 minutes) that deletes expired files and erases their keys
+  (`ARTIFACT_RETENTION_HOURS`; 0 = delete once analysis completes). Storage only: no upload
+  route yet. Adds the `cryptography` dependency (ADR 0028, #85).
 - Scan diffing and the finding lifecycle: a scan marks findings it no longer sees `fixed` only
   when their own scanner completed for that asset, a previously fixed finding observed again
   becomes `regressed`, suppressed (`accepted_risk`/`false_positive`) findings reopen only on

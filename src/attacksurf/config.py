@@ -1,8 +1,11 @@
 """Typed application settings, read from environment variables and `.env`."""
 
+import base64
+import binascii
 import ipaddress
 import secrets
 from functools import lru_cache
+from pathlib import PurePosixPath
 from typing import Literal, Self
 from urllib.parse import urlsplit
 
@@ -17,11 +20,31 @@ MIN_PROD_SECRET_KEY_LENGTH = 32
 _PLACEHOLDER_SECRET_KEYS = frozenset({"change-me", "changeme", "secret", "dev", "test"})
 # Below the proxy's 900 s wait timeout, so the launcher's own kill always fires first.
 SANDBOX_MAX_WALL_TIME_SECONDS = 840
+APP_ENCRYPTION_KEY_BYTES = 32
+# ADR 0017's extraction cap: a larger artifact could never be analysed.
+ARTIFACT_MAX_BYTES_CEILING = 512 * 1024**2
+
+
+def _decode_app_key(value: str) -> bytes:
+    """Bytes of an `APP_ENCRYPTION_KEY`; the error never repeats the value."""
+    try:
+        key = base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+    except (binascii.Error, ValueError):
+        key = b""
+    if len(key) != APP_ENCRYPTION_KEY_BYTES:
+        raise ValueError("APP_ENCRYPTION_KEY must be URL-safe base64 of exactly 32 bytes")
+    return key
 
 
 class Settings(BaseSettings):
+    # hide_input_in_errors: a rejected value (a key, a URL with a password) must not be printed
+    # by the startup error.
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", env_ignore_empty=True, extra="ignore"
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_ignore_empty=True,
+        extra="ignore",
+        hide_input_in_errors=True,
     )
 
     env: Literal["dev", "test", "prod"] = "dev"
@@ -59,6 +82,18 @@ class Settings(BaseSettings):
     llm_base_url: SecretStr | None = None
     llm_api_key: SecretStr | None = None
 
+    # Wraps data keys for encryption at rest (ADR 0028). Unset: artifact storage refuses to
+    # store or read (deleting still works). Losing it makes stored artifacts unreadable.
+    app_encryption_key: SecretStr | None = None
+    artifact_max_bytes: int = Field(default=256 * 1024**2, ge=1, le=ARTIFACT_MAX_BYTES_CEILING)
+    # 0: delete once analysis completes (never analysed: after 24 h).
+    artifact_retention_hours: int = Field(default=0, ge=0, le=720)
+    artifact_org_quota_bytes: int = Field(default=2 * 1024**3, ge=1, le=1024**4)
+    # Ciphertext only. Never inside `sandbox_artifact_root`, which the sandbox launcher mounts
+    # from and where the plaintext for one run is staged.
+    artifact_store_root: str = "/var/lib/attacksurf/artifact-store"
+    sandbox_artifact_root: str = "/var/lib/attacksurf/artifacts"
+
     _secret_key_generated: bool = PrivateAttr(default=False)
 
     @model_validator(mode="after")
@@ -82,6 +117,32 @@ class Settings(BaseSettings):
     def _empty_ip_asn_path(cls, value: str | None) -> str | None:
         return value.strip() or None if isinstance(value, str) else value
 
+    @field_validator("app_encryption_key")
+    @classmethod
+    def _check_app_encryption_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None:
+            _decode_app_key(value.get_secret_value())
+        return value
+
+    @model_validator(mode="after")
+    def _validate_artifacts(self) -> Self:
+        if self.artifact_org_quota_bytes < self.artifact_max_bytes:
+            raise ValueError("ARTIFACT_ORG_QUOTA_BYTES must be at least ARTIFACT_MAX_BYTES")
+        store, run = (
+            PurePosixPath(self.artifact_store_root),
+            PurePosixPath(self.sandbox_artifact_root),
+        )
+        for root in (store, run):
+            if not root.is_absolute() or root == root.parent or ".." in root.parts:
+                raise ValueError(
+                    "ARTIFACT_STORE_ROOT and SANDBOX_ARTIFACT_ROOT must be absolute paths below /"
+                )
+        if store == run or store in run.parents or run in store.parents:
+            raise ValueError(
+                "ARTIFACT_STORE_ROOT and SANDBOX_ARTIFACT_ROOT must not contain each other"
+            )
+        return self
+
     @model_validator(mode="after")
     def _validate_dns(self) -> Self:
         addresses = self.dns_resolver_addresses
@@ -101,6 +162,12 @@ class Settings(BaseSettings):
     @property
     def dns_resolver_addresses(self) -> tuple[str, ...]:
         return tuple(part.strip() for part in self.dns_resolvers.split(",") if part.strip())
+
+    @property
+    def app_encryption_key_bytes(self) -> bytes | None:
+        """The decoded key, or None when unset. Unwrap only where a cipher is built."""
+        key = self.app_encryption_key
+        return None if key is None else _decode_app_key(key.get_secret_value())
 
     @property
     def secret_key_generated(self) -> bool:

@@ -29,10 +29,11 @@ Open http://127.0.0.1:5000/signup to create an account (no default credentials).
 | `postgres` | 5432 | PostgreSQL 18, user/password/db `attacksurf` (dev only), volume `pgdata` |
 | `redis` | 6379 | Redis 8 |
 | `worker-passive`, `worker-ai` | n/a | Celery workers for the `passive` / `ai` queues; no hot reload: `docker compose restart worker-passive worker-ai` after code changes |
-| `beat` | n/a | Celery beat (schedules arrive with #27) |
+| `beat` | n/a | Celery beat: ownership re-verification (hourly), artifact purge (every 10 min) |
+| all app services | n/a | share the volume `artifact-store` (encrypted artifacts, ADR 0028) |
 
-Inside compose, `DATABASE_URL` / `REDIS_URL` point at the service names; your `.env` supplies the
-rest. Targets: `make up | down | logs | ps | build | shell | test | test-worker | check | migrate |
+Inside compose, `DATABASE_URL` / `REDIS_URL` point at the service names and
+`ARTIFACT_STORE_ROOT` at the `artifact-store` volume; your `.env` supplies the rest. Targets: `make up | down | logs | ps | build | shell | test | test-worker | check | migrate |
 revision`. `make test-worker` (after `make up`) checks signup against the existing schema
 (account writes roll back), then checks real worker jobs; CI's compose job runs the same suite
 (`make` lists them). `make down` keeps the database; `docker compose down -v` wipes it.
@@ -119,6 +120,11 @@ Nothing is needed on a fresh clone with `make up` running.
 All settings live in `src/attacksurf/config.py` and are read from environment variables or `.env`
 (see `.env.example`). Leave `SECRET_KEY` empty in dev (an ephemeral key is generated);
 `ENV=prod` refuses to start without a random `SECRET_KEY` of ≥ 32 characters. Never commit `.env`.
+
+Artifact storage (ADR 0028): `APP_ENCRYPTION_KEY` (URL-safe base64 of 32 bytes; without it
+artifacts can't be stored or read), `ARTIFACT_MAX_BYTES`, `ARTIFACT_ORG_QUOTA_BYTES`,
+`ARTIFACT_RETENTION_HOURS` (0 = delete once analysis completes) and `ARTIFACT_STORE_ROOT`
+(ciphertext; must not overlap `SANDBOX_ARTIFACT_ROOT`).
 
 Auth settings: `ALLOW_SIGNUP` (default `true`; when `false` only the first user can sign up),
 `SESSION_LIFETIME_HOURS` (default 12), `PROXY_COUNT` (trusted proxy hops in front of the app).

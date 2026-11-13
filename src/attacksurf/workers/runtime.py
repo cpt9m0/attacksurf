@@ -1,21 +1,25 @@
 """Per-process worker state: settings, the database session factory and the scanner gate."""
 
 from functools import lru_cache
+from pathlib import Path
 
 import redis
 from sqlalchemy.orm import Session, sessionmaker
 
 from attacksurf.config import Settings, get_settings
+from attacksurf.domain.artifacts import ArtifactPolicy, ArtifactStore
 from attacksurf.domain.cache import ScanCache
 from attacksurf.domain.net import IpIntel, TxtLookup
 from attacksurf.domain.scanners import ScannerGate
 from attacksurf.infra.authoritative_dns import AuthoritativeTxtLookup
 from attacksurf.infra.cache import RedisScanCache
+from attacksurf.infra.crypto import EnvelopeCipher
 from attacksurf.infra.db.session import create_db_engine, create_session_factory
 from attacksurf.infra.dns import DnsPythonResolver
 from attacksurf.infra.http import SafeHttpClient
 from attacksurf.infra.ip_intel import Ip2AsnLookup
 from attacksurf.infra.scope_guard import ScopeGuard
+from attacksurf.infra.storage import LocalArtifactStore
 from attacksurf.services.ownership import DbOwnershipChecker
 
 # crt.sh regularly takes several seconds; the client's 5 s default is too tight for it.
@@ -70,6 +74,28 @@ def scan_cache() -> ScanCache:
             socket_connect_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
             socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
         )
+    )
+
+
+@lru_cache(maxsize=1)
+def artifact_store() -> ArtifactStore:
+    """Encrypted artifact storage (ADR 0028). Without `APP_ENCRYPTION_KEY` it only deletes."""
+    current = settings()
+    key = current.app_encryption_key_bytes
+    return LocalArtifactStore(
+        Path(current.artifact_store_root),
+        Path(current.sandbox_artifact_root),
+        EnvelopeCipher(key, purpose=b"artifact") if key else None,
+    )
+
+
+@lru_cache(maxsize=1)
+def artifact_policy() -> ArtifactPolicy:
+    current = settings()
+    return ArtifactPolicy(
+        max_bytes=current.artifact_max_bytes,
+        org_quota_bytes=current.artifact_org_quota_bytes,
+        retention_hours=current.artifact_retention_hours,
     )
 
 
