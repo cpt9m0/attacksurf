@@ -13,13 +13,22 @@ from uuid import UUID
 from attacksurf.domain.assets import AssetType
 from attacksurf.domain.cache import NullCache, ScanCache
 from attacksurf.domain.net import (
+    AuthoritativeDns,
     DnsLookup,
     DnsQuery,
+    DnsRecordType,
     DnsResolver,
+    DomainRegistration,
     HttpBody,
     IpIntel,
+    RdapLookup,
+    RecordResolver,
     SafeHttpClient,
     ScannerRuntime,
+    ScopeHttp,
+    ZoneAnswers,
+    ZoneTransfer,
+    ZoneTransferAttempt,
 )
 from attacksurf.domain.sandbox import SandboxResult, SandboxRunner, UnconfiguredSandboxRunner
 from attacksurf.domain.scanners import AssetRef, ScanContext, Scanner, ScannerGate, ScannerGrant
@@ -34,10 +43,16 @@ from attacksurf.domain.scope import (
     hostname_allowed,
 )
 from attacksurf.infra import public_suffix
+from attacksurf.infra.authoritative_dns import AuthoritativeLookup
 from attacksurf.infra.http import bounded_limit
+from attacksurf.infra.rdap import RdapClient
 
 MAX_REDIRECTS = 4
 MAX_DNS_LOOKUPS = 40
+# Authoritative probes need the NS RRset plus A/AAAA for at least one server; RDAP resolves the
+# bootstrap host and the TLD's RDAP host.
+MIN_AUTHORITATIVE_LOOKUPS = 3
+MIN_RDAP_LOOKUPS = 2
 
 
 class OwnershipChecker(Protocol):
@@ -53,19 +68,11 @@ class UnverifiedOwnership:
         return False
 
 
-class ScopeHttp(SafeHttpClient, Protocol):
-    """A safe client that can hand out a run-scoped copy with this run's redirect policy."""
-
-    def with_redirect_policy(
-        self, resolver: DnsResolver, *, redirect_allowed: Callable[[str], bool], max_redirects: int
-    ) -> SafeHttpClient: ...
-
-
 class ScopeGuard(ScannerGate):
     def __init__(
         self,
         *,
-        dns: DnsResolver,
+        dns: RecordResolver,
         http: ScopeHttp,
         ownership: OwnershipChecker,
         classify: Callable[[str], PublicSuffix] = public_suffix.classify,
@@ -85,9 +92,13 @@ class ScopeGuard(ScannerGate):
         """Validate and authorize one run. Raises `ScopeError`, and the job is then skipped."""
         self._check_target(asset, scanner)
         grant = scanner.grant
-        # Target HTTP *is* the active check: the grant decides, not the plugin's own flag, so a
-        # scanner can't reach the scanned host by declaring `requires_verification=False` (#14).
-        needs_ownership = scanner.requires_verification or grant.http is HttpPermission.TARGET
+        # Target HTTP and zone transfer *are* active checks: the grant decides, not the plugin's
+        # own flag, so a scanner can't reach the target by declaring `requires_verification=False`.
+        needs_ownership = (
+            scanner.requires_verification
+            or grant.http is HttpPermission.TARGET
+            or grant.zone_transfer
+        )
         if needs_ownership and not self._ownership.is_verified(ctx.org_id, asset):
             raise ScopeError("Active checks need a verified asset.")
         self._check_services(grant)
@@ -99,6 +110,13 @@ class ScopeGuard(ScannerGate):
             check_host=self._check_host,
         )
         sandbox = _GuardedSandbox(self._sandbox, allowed=grant.sandbox_analyzers)
+        # One read-only authoritative client serves both capabilities; each guard exposes only
+        # the method its grant declared.
+        authoritative_dns = (
+            AuthoritativeLookup(guarded_dns)
+            if grant.authoritative_dns or grant.zone_transfer
+            else None
+        )
         return ScannerRuntime(
             guarded_dns,
             http.client_for(guarded_dns),
@@ -106,6 +124,25 @@ class ScopeGuard(ScannerGate):
             cache=self._cache,
             ip_intel=self._ip_intel,
             org_domain=public_suffix.registrable,
+            authoritative=(
+                _GuardedAuthoritative(authoritative_dns, target=asset.value)
+                if grant.authoritative_dns and authoritative_dns is not None
+                else None
+            ),
+            zone_transfer=(
+                _GuardedZoneTransfer(authoritative_dns, target=asset.value)
+                if grant.zone_transfer and authoritative_dns is not None
+                else None
+            ),
+            rdap=(
+                _GuardedRdap(
+                    RdapClient(self._http, guarded_dns, self._cache),
+                    target=asset.value,
+                    registrable=public_suffix.registrable(asset.value),
+                )
+                if grant.rdap
+                else None
+            ),
         )
 
     def _check_target(self, asset: AssetRef, scanner: Scanner) -> None:
@@ -130,6 +167,10 @@ class ScopeGuard(ScannerGate):
                 raise ScopePolicyError("A scanner's data service is out of scope.") from None
         # The run must be able to resolve each service before any request can be pinned.
         needed = len(grant.http_hosts) if grant.http is HttpPermission.SERVICES else 0
+        if grant.authoritative_dns or grant.zone_transfer:
+            needed = max(needed, MIN_AUTHORITATIVE_LOOKUPS)
+        if grant.rdap:
+            needed = max(needed, MIN_RDAP_LOOKUPS)
         if grant.dns_lookups < needed:
             raise ScopePolicyError("A scanner needs a DNS lookup for each data service.")
 
@@ -137,7 +178,7 @@ class ScopeGuard(ScannerGate):
 class _GuardedDns:
     """Per-run DNS budget. Connection answers are validated; raw records are data only."""
 
-    def __init__(self, inner: DnsResolver, *, max_lookups: int) -> None:
+    def __init__(self, inner: RecordResolver, *, max_lookups: int) -> None:
         self._inner = inner
         self._remaining = min(max_lookups, MAX_DNS_LOOKUPS)
 
@@ -159,6 +200,18 @@ class _GuardedDns:
         for _query in queries:
             self._take()
         return self._inner.lookup_many(queries)
+
+    def lookup_records(self, name: str, rdtype: str) -> tuple[str, tuple[str, ...]]:
+        """Owner-aware raw records (zone discovery); one budget unit per lookup."""
+        self._take()
+        return self._inner.lookup_records(name, rdtype)
+
+    def lookup_records_checking_disabled(
+        self, name: str, rdtype: str
+    ) -> tuple[str, tuple[str, ...]]:
+        """Diagnostic variant of `lookup_records` (CD flag); budgeted the same way."""
+        self._take()
+        return self._inner.lookup_records_checking_disabled(name, rdtype)
 
 
 class _GuardedSandbox:
@@ -217,6 +270,46 @@ class _GuardedHttp:
         return self._inner.with_redirect_policy(
             resolver, redirect_allowed=self.host_allowed, max_redirects=MAX_REDIRECTS
         )
+
+
+class _GuardedAuthoritative:
+    """Read-only authoritative probes, restricted to the scanned asset's own zone."""
+
+    def __init__(self, inner: AuthoritativeDns, *, target: str) -> None:
+        self._inner = inner
+        self._target = target
+
+    def query(self, name: str, record_type: DnsRecordType) -> ZoneAnswers:
+        if name != self._target:
+            raise ScopePolicyError("The scanner may only query the target's zone.")
+        return self._inner.query(name, record_type)
+
+
+class _GuardedZoneTransfer:
+    """AXFR attempts, restricted to the scanned asset itself (never a parent zone)."""
+
+    def __init__(self, inner: ZoneTransfer, *, target: str) -> None:
+        self._inner = inner
+        self._target = target
+
+    def attempt(self, zone: str) -> tuple[ZoneTransferAttempt, ...]:
+        if zone != self._target:
+            raise ScopePolicyError("The scanner may only transfer the target's zone.")
+        return self._inner.attempt(zone)
+
+
+class _GuardedRdap:
+    """RDAP lookups, restricted to the target or its registrable domain."""
+
+    def __init__(self, inner: RdapLookup, *, target: str, registrable: str | None) -> None:
+        self._inner = inner
+        self._target = target
+        self._registrable = registrable
+
+    def lookup(self, domain: str) -> DomainRegistration | None:
+        if domain not in (self._target, self._registrable):
+            raise ScopePolicyError("The scanner may only look up the target's registration.")
+        return self._inner.lookup(domain)
 
 
 def request_host(url: str) -> str:

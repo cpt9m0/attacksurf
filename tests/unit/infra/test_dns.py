@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import cast
 
+import dns.flags
 import dns.message
 import dns.name
 import dns.rdata
@@ -61,6 +62,45 @@ def fake(monkeypatch: pytest.MonkeyPatch) -> tuple[DnsPythonResolver, FakeResolv
 
 def test_resolver_disables_search_domains() -> None:
     assert DnsPythonResolver()._resolver.use_search_by_default is False
+
+
+class _RecordAnswer:
+    """Just enough of `dns.resolver.Answer` for the owner-aware lookup path."""
+
+    def __init__(self, owner: str, values: list[str]) -> None:
+        self.rrset = _RecordRrset(owner, values)
+        self.canonical_name = dns.name.from_text(owner)
+
+
+class _RecordRrset:
+    def __init__(self, owner: str, values: list[str]) -> None:
+        self.name = dns.name.from_text(owner)
+        self.values = values
+
+    def __iter__(self):
+        return iter(self.values)
+
+
+def test_checking_disabled_lookup_uses_a_cd_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bogus zone is only visible with CD, so the diagnostic path must send that flag."""
+    resolver = DnsPythonResolver()
+    calls: list[tuple[str, str]] = []
+
+    def resolve(qname: str, rdtype: str, *, search: bool, raise_on_no_answer: bool) -> object:
+        calls.append((qname, rdtype))
+        return _RecordAnswer(qname, [f"{qname}."])
+
+    monkeypatch.setattr(resolver._diagnostic_resolver, "resolve", resolve)
+
+    assert resolver.lookup_records_checking_disabled("example.com", "NS") == (
+        "example.com",
+        ("example.com.",),
+    )
+    assert calls == [("example.com", "NS")]
+    assert resolver._diagnostic_resolver.flags == dns.flags.RD | dns.flags.CD
+    assert resolver._resolver.flags is None  # ordinary lookups keep the resolver default
 
 
 def test_name_lookup_combines_and_deduplicates_families(

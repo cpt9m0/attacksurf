@@ -152,8 +152,9 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   import production plugin modules explicitly, so each process registers them once.
   `scanners/profiles.py`
   selects discovery/check plugins by name. `dns_passive` runs `dns.discovery.ct` for discovery
-  and `dns.resolve`, `dns.email`, `dns.takeover` and `dns.takeover.http` for checks, with `max_discovered_assets=1000`; empty/unknown profiles are
-  rejected. Profiles cannot route to
+  and `dns.resolve`, `dns.email`, `dns.takeover`, `dns.takeover.http`, `dns.dnssec`, `dns.ns`,
+  `dns.mx`, `dns.caa`, `dns.whois` and `dns.axfr` for checks, with `max_discovered_assets=1000`;
+  empty/unknown profiles are rejected. Profiles cannot route to
   the reserved `active`/`analysis` queues before those workers are implemented.
 - **CT discovery (#15, ADR 0022):** `dns.discovery.ct` queries crt.sh's JSON endpoint and falls
   back to Cert Spotter when crt.sh fails, times out or truncates. Names are normalized, filtered
@@ -204,6 +205,22 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   with a CNAME pattern and a usable signal; `scanners/dns/fingerprints-NOTICE.md`), matched as
   literal substrings, never regex. Neither plugin claims or registers anything; HTTP errors
   are no-finding, and only an all-error DNS round raises `TransientJobError`.
+- **DNS hygiene (#19, ADR 0026):** six check-only plugins. `dns.dnssec` reads the DS record at
+  the delegation (stub) and the zone's DNSKEY RRset from its own nameservers, reporting
+  `dns.dnssec.not_enabled` (info, low confidence) and `dns.dnssec.broken_chain` (high) when no
+  published key matches the DS; only the DS -> DNSKEY linkage is verified, not RRSIG
+  signatures. `dns.ns` probes each authoritative server for SOA and reports
+  `dns.ns.single_nameserver` (low), `dns.ns.lame_delegation` (medium, per server) and
+  `dns.ns.inconsistent_soa` (medium). `dns.mx` reports MX targets that are CNAMEs
+  (`dns.mx.points_to_cname`, low) or have no address records (`dns.mx.unresolvable`, medium),
+  skipping a null MX. `dns.caa` reports a missing CAA record (`dns.caa.missing`, info) after
+  checking the asset and every ancestor up to the registrable domain. `dns.whois` reads RDAP
+  registration data through the IANA
+  bootstrap (24 h cache) for `dns.whois.expiring_soon` (medium below 30 days, high below 7) and
+  `dns.whois.registrar_lock_missing` (medium). `dns.axfr` is an active check on verified zone
+  apexes: one AXFR per nameserver, `dns.axfr.allowed` (high) with only the first message's
+  record count as evidence. The zone-level checks run only when the asset is itself a zone apex;
+  all six accept `DOMAIN` assets only, so they run once per scan root.
 - `services.scans.start_scan` validates a tenant-owned, active domain root, audits and commits
   the scan/kickoff job, then enqueues `passive.discover`. Two waves use Celery chords:
   discovery on the root, then checks on the active root and its known direct children, filtered
@@ -244,7 +261,9 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   target (public domain under the bundled PSL; no internal/single-label names or IP literals;
   resolved addresses must be public), requires verified ownership for active checks, and returns
   run-scoped DNS/HTTP adapters bounded by the plugin's `ScannerGrant` (declared public data
-  services only, or the target after verification), plus the run cache and offline IP intel.
+  services only, or the target after verification; plus the #19 capabilities: read-only
+  authoritative SOA/DNSKEY probes, RDAP for the target's registration, and zone transfers on a
+  verified zone apex), plus the run cache and offline IP intel.
   `workers.runtime.scanner_gate()` wires it with `services.ownership.DbOwnershipChecker`, so an
   active check runs
   only while the target's root has a verified, unexpired TXT proof (ADR 0014).
