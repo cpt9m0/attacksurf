@@ -17,7 +17,7 @@ from attacksurf.domain.findings import (
     finding_fingerprint,
 )
 from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger
-from attacksurf.infra.db.models import Asset, Evidence, Finding, Job, Org, Scan
+from attacksurf.infra.db.models import Asset, Evidence, Finding, FindingObservation, Job, Org, Scan
 from attacksurf.infra.db.tenancy import scoped
 
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
@@ -166,7 +166,25 @@ def test_rediscovered_issue_maps_to_the_existing_finding(db_session: Session, ac
 
 
 @pytest.mark.parametrize(
-    "link", ["scan_root", "job_scan", "job_asset", "finding_asset", "finding_scan", "evidence"]
+    "link",
+    [
+        "scan_root",
+        "job_scan",
+        "job_asset",
+        "finding_asset",
+        "finding_scan",
+        "evidence",
+        "observation",
+    ],
+    ids=[
+        "scan_root",
+        "job_scan",
+        "job_asset",
+        "finding_asset",
+        "finding_scan",
+        "evidence",
+        "observation",
+    ],
 )
 def test_links_to_another_orgs_rows_are_rejected(
     db_session: Session, acme: Tenant, globex: Tenant, link: str
@@ -188,6 +206,12 @@ def test_links_to_another_orgs_rows_are_rejected(
             data={},
             captured_at=NOW,
         ),
+        "observation": FindingObservation(
+            org_id=acme.org.id,
+            scan_id=foreign_scan.id,
+            finding_id=foreign_finding.id,
+            severity=Severity.MEDIUM,
+        ),
     }
     db_session.add(rows[link])
 
@@ -200,6 +224,7 @@ def test_links_to_another_orgs_rows_are_rejected(
     [
         "UPDATE findings SET status = 'fixed'",  # fixed without fixed_at
         "UPDATE findings SET fixed_at = now()",  # fixed_at while open
+        "UPDATE findings SET status = 'regressed', fixed_at = now()",  # only fixed has one
         "UPDATE findings SET last_seen = first_seen - interval '1 day'",
         "UPDATE findings SET severity = 'urgent'",
         "UPDATE findings SET confidence = 'certain'",
@@ -241,6 +266,65 @@ def test_fixed_finding_records_when(db_session: Session, acme: Tenant) -> None:
     _add(db_session, finding)
 
     assert finding.fixed_at == NOW + timedelta(days=1)
+
+
+def test_regressed_finding_has_no_fixed_at(db_session: Session, acme: Tenant) -> None:
+    finding = _finding(acme, status=FindingStatus.REGRESSED)
+
+    _add(db_session, finding)
+
+    assert (finding.status, finding.fixed_at) == (FindingStatus.REGRESSED, None)
+
+
+def test_a_finding_is_observed_once_per_scan(db_session: Session, acme: Tenant) -> None:
+    scan = _scan(acme)
+    _add(db_session, scan)
+    finding = _finding(acme)
+    _add(db_session, finding)
+    _add(
+        db_session,
+        FindingObservation(
+            org_id=acme.org.id,
+            scan_id=scan.id,
+            finding_id=finding.id,
+            severity=Severity.MEDIUM,
+        ),
+    )
+    db_session.add(
+        FindingObservation(
+            org_id=acme.org.id,
+            scan_id=scan.id,
+            finding_id=finding.id,
+            severity=Severity.LOW,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+
+
+def test_deleting_a_scan_removes_its_observations_and_keeps_the_finding(
+    db_session: Session, acme: Tenant
+) -> None:
+    scan = _scan(acme)
+    _add(db_session, scan)
+    finding = _finding(acme)
+    _add(db_session, finding)
+    _add(
+        db_session,
+        FindingObservation(
+            org_id=acme.org.id,
+            scan_id=scan.id,
+            finding_id=finding.id,
+            severity=Severity.MEDIUM,
+        ),
+    )
+
+    db_session.execute(delete(Scan).where(Scan.id == scan.id))
+    db_session.expire_all()
+
+    assert db_session.scalars(select(FindingObservation)).all() == []
+    assert db_session.get_one(Finding, finding.id) is not None
 
 
 def test_deleting_a_scan_keeps_findings_and_job_history_of_assets(
@@ -320,15 +404,26 @@ def test_scan_results_are_tenant_isolated(
     db_session: Session, acme: Tenant, globex: Tenant
 ) -> None:
     acme_scan, globex_scan = _scan(acme), _scan(globex)
-    _add(db_session, acme_scan, globex_scan)
+    acme_finding, globex_finding = _finding(acme), _finding(globex)
+    _add(db_session, acme_scan, globex_scan, acme_finding, globex_finding)
     _add(
         db_session,
-        _finding(acme),
-        _finding(globex),
         _job(acme, acme_scan),
         _job(globex, globex_scan),
+        FindingObservation(
+            org_id=acme.org.id,
+            scan_id=acme_scan.id,
+            finding_id=acme_finding.id,
+            severity=Severity.MEDIUM,
+        ),
+        FindingObservation(
+            org_id=globex.org.id,
+            scan_id=globex_scan.id,
+            finding_id=globex_finding.id,
+            severity=Severity.LOW,
+        ),
     )
 
-    for model in (Scan, Job, Finding):
+    for model in (Scan, Job, Finding, FindingObservation):
         rows = db_session.scalars(scoped(model, acme.org.id)).all()
         assert {row.org_id for row in rows} == {acme.org.id}

@@ -218,6 +218,22 @@ def test_open_finding_stats_ignore_closed_findings(db_session: Session, acme: Tr
     )
 
 
+def test_regressed_findings_count_as_active(db_session: Session, acme: Tree) -> None:
+    _finding(db_session, acme.root, Severity.HIGH, FindingStatus.REGRESSED)
+    _finding(db_session, acme.root, Severity.LOW, rule_id="dns.caa.missing")
+
+    rows = {
+        r.value: r for r in asset_views.list_assets(db_session, acme.org.id, AssetFilter()).items
+    }
+    findings = asset_views.list_asset_findings(db_session, acme.org.id, acme.root.id)
+
+    assert (rows["example.com"].open_findings, rows["example.com"].max_severity) == (2, "high")
+    assert [finding.status for finding in findings] == [
+        FindingStatus.REGRESSED,
+        FindingStatus.OPEN,
+    ]
+
+
 def test_detail_has_relations_in_both_directions(db_session: Session, acme: Tree) -> None:
     cdn = _discovered(db_session, acme.org, acme.root, AssetType.SUBDOMAIN, "cdn.example.com")
     record_relation(db_session, acme.org.id, acme.www.id, cdn.id, RelationKind.CNAME_TO, seen_at=T0)
