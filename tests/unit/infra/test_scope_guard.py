@@ -52,6 +52,11 @@ class StubDns:
         self.calls.append((rdtype, name))
         return name, self.answers.get(name, ())
 
+    def lookup_records_checking_disabled(
+        self, name: str, rdtype: str
+    ) -> tuple[str, tuple[str, ...]]:
+        return self.lookup_records(name, rdtype)
+
 
 class StubHttp:
     def __init__(self) -> None:
@@ -302,6 +307,11 @@ class StaticAnswers:
 
     def lookup_records(self, name: str, rdtype: str) -> tuple[str, tuple[str, ...]]:
         return name, self.answers.get(name, ())
+
+    def lookup_records_checking_disabled(
+        self, name: str, rdtype: str
+    ) -> tuple[str, tuple[str, ...]]:
+        return self.lookup_records(name, rdtype)
 
 
 def test_dns_only_grant_denies_http_entirely() -> None:

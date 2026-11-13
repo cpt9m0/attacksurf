@@ -206,6 +206,13 @@ class _GuardedDns:
         self._take()
         return self._inner.lookup_records(name, rdtype)
 
+    def lookup_records_checking_disabled(
+        self, name: str, rdtype: str
+    ) -> tuple[str, tuple[str, ...]]:
+        """Diagnostic variant of `lookup_records` (CD flag); budgeted the same way."""
+        self._take()
+        return self._inner.lookup_records_checking_disabled(name, rdtype)
+
 
 class _GuardedSandbox:
     """Per-run analyzer allowlist, checked before anything reaches the launcher."""

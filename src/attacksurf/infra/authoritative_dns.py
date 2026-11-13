@@ -30,7 +30,6 @@ from attacksurf.domain.net import (
     DnsRecordType,
     DnsStatus,
     RecordResolver,
-    StubRecords,
     TxtError,
     ZoneAnswers,
     ZoneTransferAttempt,
@@ -70,7 +69,7 @@ class _Server:
 class AuthoritativeTxtLookup:
     """`TxtLookup` that asks the zone's nameservers directly, over validated addresses."""
 
-    def __init__(self, resolver: StubRecords, *, timeout: float = TX_TIMEOUT_SECONDS):
+    def __init__(self, resolver: RecordResolver, *, timeout: float = TX_TIMEOUT_SECONDS):
         self._resolver = resolver
         self._timeout = timeout
 
@@ -250,7 +249,7 @@ def _zone_of(resolver: RecordResolver, name: str) -> str | None:
     return public_suffix.registrable(normalized)
 
 
-def _servers(resolver: StubRecords, names: Sequence[str]) -> tuple[_Server, ...]:
+def _servers(resolver: RecordResolver, names: Sequence[str]) -> tuple[_Server, ...]:
     """One validated public address per nameserver, for at most MAX_NAMESERVERS of them."""
     servers: list[_Server] = []
     for ns_name in names[:MAX_NAMESERVERS]:
@@ -273,7 +272,7 @@ def _ns_names(values: Sequence[str]) -> tuple[str, ...]:
     return tuple(names)
 
 
-def _ns_at(resolver: StubRecords, name: dns.name.Name) -> tuple[str, ...]:
+def _ns_at(resolver: RecordResolver, name: dns.name.Name) -> tuple[str, ...]:
     """The NS records owned by `name` itself; empty when the stub answered for an alias.
 
     Without the owner check, a subdomain that CNAMEs elsewhere (`www` -> an attacker's apex)
@@ -284,7 +283,7 @@ def _ns_at(resolver: StubRecords, name: dns.name.Name) -> tuple[str, ...]:
     return values if owner == name.to_text(omit_final_dot=True) else ()
 
 
-def _addresses(resolver: StubRecords, host: str) -> tuple[str, ...]:
+def _addresses(resolver: RecordResolver, host: str) -> tuple[str, ...]:
     """A and AAAA answers; one failed family doesn't hide the other."""
     values: list[str] = []
     for rdtype in ("A", "AAAA"):
@@ -295,10 +294,18 @@ def _addresses(resolver: StubRecords, host: str) -> tuple[str, ...]:
     return tuple(values)
 
 
-def _resolve(resolver: StubRecords, host: str, rdtype: str) -> tuple[str, tuple[str, ...]]:
-    """Stub answers, translated: `DnsError` (the adapter's failure) becomes a lookup error."""
+def _resolve(resolver: RecordResolver, host: str, rdtype: str) -> tuple[str, tuple[str, ...]]:
+    """Stub answers, translated: `DnsError` (the adapter's failure) becomes a lookup error.
+
+    A failure is retried once with checking disabled: a validating resolver rejects a bogus
+    zone (SERVFAIL), and that zone's own nameservers are what the check must reach.
+    """
     try:
         return resolver.lookup_records(host, rdtype)
+    except DnsError:
+        pass
+    try:
+        return resolver.lookup_records_checking_disabled(host, rdtype)
     except DnsError:
         raise TxtError() from None
 

@@ -27,7 +27,7 @@ from attacksurf.domain.scanners import (
 )
 from attacksurf.scanners.registry import register_scanner
 
-DNS_LOOKUPS = 10
+DNS_LOOKUPS = 16
 MAX_EVIDENCE_VALUES = 5
 MAX_VALUE_LENGTH = 256
 _SOA_SERIAL_INDEX = 2

@@ -22,7 +22,7 @@ from attacksurf.domain.scanners import (
 )
 from attacksurf.scanners.registry import register_scanner
 
-DNS_LOOKUPS = 10
+DNS_LOOKUPS = 16
 
 
 @register_scanner

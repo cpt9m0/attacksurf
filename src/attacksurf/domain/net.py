@@ -89,6 +89,17 @@ class StubRecords(Protocol):
         """(owner name the stub answered for, values); raises `DnsError` on failure."""
         ...
 
+    def lookup_records_checking_disabled(
+        self, name: str, rdtype: str
+    ) -> tuple[str, tuple[str, ...]]:
+        """Same answer with DNSSEC checking disabled (the CD flag, RFC 4035 section 3.2.2).
+
+        A validating resolver answers SERVFAIL for a zone whose DS and DNSKEY disagree, hiding
+        the nameservers of the very zone a broken-chain check must probe. Only diagnostics use
+        this path; it still raises `DnsError` on failure.
+        """
+        ...
+
 
 class RecordResolver(DnsResolver, StubRecords, Protocol):
     """A resolver that can also report who owns a raw answer (zone discovery needs it)."""

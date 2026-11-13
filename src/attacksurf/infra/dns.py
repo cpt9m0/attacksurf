@@ -14,6 +14,7 @@ from typing import Any
 
 import dns.asyncresolver
 import dns.exception
+import dns.flags
 import dns.resolver
 
 from attacksurf.domain.net import DnsError, DnsLookup, DnsQuery, DnsRecordType, DnsStatus
@@ -45,6 +46,7 @@ class DnsPythonResolver:
         self._lifetime = lifetime
         self._max_concurrency = max_concurrency
         self._resolver = self._make_sync_resolver()
+        self._diagnostic_resolver = self._make_sync_resolver(checking_disabled=True)
 
     def _configure(self, resolver: Any) -> None:
         resolver.nameservers = list(self._nameservers)
@@ -53,9 +55,12 @@ class DnsPythonResolver:
         resolver.use_search_by_default = False
         resolver.retry_servfail = False
 
-    def _make_sync_resolver(self) -> Any:
+    def _make_sync_resolver(self, *, checking_disabled: bool = False) -> Any:
         resolver = dns.resolver.Resolver(configure=False)
         self._configure(resolver)
+        if checking_disabled:
+            # CD asks the recursive resolver to return data it would otherwise reject as bogus.
+            resolver.set_flags(dns.flags.RD | dns.flags.CD)
         return resolver
 
     def _make_async_resolver(self) -> Any:
@@ -70,10 +75,21 @@ class DnsPythonResolver:
         can answer with `example.net`'s servers, and ownership discovery must not mistake an
         alias's authorities for the original name's (ADR 0014).
         """
+        return self._lookup_records(self._resolver, name, rdtype)
+
+    def lookup_records_checking_disabled(
+        self, name: str, rdtype: str
+    ) -> tuple[str, tuple[str, ...]]:
+        """Owner-aware lookup with DNSSEC checking disabled, for diagnosing a bogus zone.
+
+        Same contract as `lookup_records`; only the diagnostic adapter calls it, because the
+        data a validating resolver rejects is exactly what a broken-chain check needs.
+        """
+        return self._lookup_records(self._diagnostic_resolver, name, rdtype)
+
+    def _lookup_records(self, resolver: Any, name: str, rdtype: str) -> tuple[str, tuple[str, ...]]:
         try:
-            answer: Any = self._resolver.resolve(
-                name, rdtype, search=False, raise_on_no_answer=False
-            )
+            answer: Any = resolver.resolve(name, rdtype, search=False, raise_on_no_answer=False)
         except DNS_FAILURES:
             raise DnsError() from None
         if answer.rrset is None:

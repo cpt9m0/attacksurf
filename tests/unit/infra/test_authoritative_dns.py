@@ -33,17 +33,37 @@ class StubResolver:
     """Stands in for the stub resolver: canned answers per (name, type), plus their owner.
 
     `answers` values may be a list (owner = the queried name), or `Aliased(owner, values)` to
-    imitate the stub following a CNAME to another name.
+    imitate the stub following a CNAME to another name. `unchecked` holds the answers the CD
+    (checking-disabled) resolver returns for names a validating resolver rejected.
     """
 
     def __init__(
-        self, answers: dict[tuple[str, str], list[str] | Exception | Aliased | None]
+        self,
+        answers: dict[tuple[str, str], list[str] | Exception | Aliased | None],
+        *,
+        unchecked: dict[tuple[str, str], list[str] | Exception | Aliased | None] | None = None,
     ) -> None:
         self.answers = answers
+        self.unchecked = unchecked or {}
+        self.checking_disabled_calls: list[tuple[str, str]] = []
 
     def lookup_records(self, name: str, rdtype: str) -> tuple[str, tuple[str, ...]]:
+        return self._lookup(self.answers, name, rdtype)
+
+    def lookup_records_checking_disabled(
+        self, name: str, rdtype: str
+    ) -> tuple[str, tuple[str, ...]]:
+        self.checking_disabled_calls.append((name, rdtype))
+        return self._lookup(self.unchecked, name, rdtype)
+
+    def _lookup(
+        self,
+        answers: dict[tuple[str, str], list[str] | Exception | Aliased | None],
+        name: str,
+        rdtype: str,
+    ) -> tuple[str, tuple[str, ...]]:
         # DnsPythonResolver turns every dnspython failure into DnsError; mirror that here.
-        outcome = self.answers.get((name, rdtype))
+        outcome = answers.get((name, rdtype))
         if isinstance(outcome, Exception):
             raise outcome if isinstance(outcome, DnsError) else DnsError()
         if isinstance(outcome, Aliased):
@@ -107,6 +127,7 @@ def _lookup(
     *,
     answers: dict[tuple[str, str], list[str] | Exception | Aliased | None],
     responses: dict[str, dns.message.Message | Exception],
+    unchecked: dict[tuple[str, str], list[str] | Exception | Aliased | None] | None = None,
 ) -> tuple[AuthoritativeTxtLookup, FakeWire]:
     wire = FakeWire(responses)
     monkeypatch.setattr(authoritative_dns.dns.query, "udp", wire.query_udp)
@@ -119,7 +140,8 @@ def _lookup(
             ("ns2.example.net", "A"): ["93.184.216.35"],
             ("ns2.example.net", "AAAA"): [],
         }
-        | answers
+        | answers,
+        unchecked=unchecked,
     )
     return AuthoritativeTxtLookup(resolver), wire
 
@@ -325,6 +347,7 @@ def test_zone_discovery_failure_does_not_fall_back_to_the_parent(
     lookup, wire = _lookup(
         monkeypatch,
         answers={("eng.example.com", "NS"): DnsError()},
+        unchecked={("eng.example.com", "NS"): DnsError()},  # CD cannot answer either
         responses={"93.184.216.34": _response(qname, [])},
     )
 
@@ -464,6 +487,7 @@ def _authoritative(
     monkeypatch: pytest.MonkeyPatch,
     *,
     answers: dict[tuple[str, str], list[str] | Exception | Aliased | None] | None = None,
+    unchecked: dict[tuple[str, str], list[str] | Exception | Aliased | None] | None = None,
     responses: dict[str, dns.message.Message | Exception] | None = None,
 ) -> tuple[AuthoritativeLookup, FakeWire, StubResolver]:
     wire = FakeWire(responses or {})
@@ -477,7 +501,8 @@ def _authoritative(
             ("ns2.example.net", "A"): ["93.184.216.35"],
             ("ns2.example.net", "AAAA"): [],
         }
-        | (answers or {})
+        | (answers or {}),
+        unchecked=unchecked,
     )
     return AuthoritativeLookup(resolver), wire, resolver
 
@@ -551,6 +576,30 @@ def test_a_failed_zone_lookup_falls_back_to_the_registrable_domain(
     )
 
     assert lookup.query("www.example.com", DnsRecordType.SOA).zone == "example.com"
+
+
+def test_a_bogus_zone_still_yields_its_nameservers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A validating resolver returns SERVFAIL for a broken chain; CD reveals the authorities."""
+    lookup, wire, resolver = _authoritative(
+        monkeypatch,
+        answers={("example.com", "NS"): DnsError()},
+        unchecked={("example.com", "NS"): ["ns1.example.net", "ns2.example.net"]},
+        responses={
+            "93.184.216.34": _records_response("example.com", "DNSKEY", ["257 3 13 AAAA"]),
+            "93.184.216.35": _records_response("example.com", "DNSKEY", ["257 3 13 AAAA"]),
+        },
+    )
+
+    answers = lookup.query("example.com", DnsRecordType.DNSKEY)
+
+    assert answers.zone == "example.com"
+    assert answers.servers == ("ns1.example.net", "ns2.example.net")
+    assert [answer.values for answer in answers.answers] == [
+        ("257 3 13 AAAA",),
+        ("257 3 13 AAAA",),
+    ]
+    assert resolver.checking_disabled_calls == [("example.com", "NS")]
+    assert [address for address, _ in wire.udp_calls] == ["93.184.216.34", "93.184.216.35"]
 
 
 def test_a_zone_without_nameservers_has_no_answers(monkeypatch: pytest.MonkeyPatch) -> None:
