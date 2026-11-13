@@ -17,6 +17,8 @@ from attacksurf.domain.scope import HttpPermission, ScopeError
 
 MAX_EVIDENCE_BYTES = 64 * 1024
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
+MAX_OBSERVATIONS = 1000
+MAX_ASSET_DETAILS_BYTES = 16 * 1024
 
 
 class ScannerError(JobError):
@@ -44,6 +46,29 @@ class DiscoveredRelation(OutputModel):
     from_asset: AssetRef
     to_asset: AssetRef
     kind: RelationKind
+
+
+class AssetObservation(OutputModel):
+    """Metadata and an optional lifecycle claim about an asset the scanner just observed.
+
+    `details` is merged top-level into `Asset.details` (a scanner replaces its own subtree, e.g.
+    `dns`, without clobbering another scanner's keys). `active=None` means "details only";
+    persistence applies `active` only to discovered assets, so a scanner can never deactivate a
+    root the org added itself.
+    """
+
+    asset: AssetRef
+    details: dict[str, JsonValue] = Field(default_factory=dict)
+    active: bool | None = None
+
+    @model_validator(mode="after")
+    def cap_details(self) -> Self:
+        if (
+            len(json.dumps(self.details, ensure_ascii=False, allow_nan=False).encode())
+            > MAX_ASSET_DETAILS_BYTES
+        ):
+            raise ValueError("asset details exceed the byte limit")
+        return self
 
 
 class RawEvidence(OutputModel):
@@ -81,6 +106,9 @@ class ScanOutput(OutputModel):
     assets: tuple[AssetRef, ...] = Field(default=(), max_length=1000)
     relations: tuple[DiscoveredRelation, ...] = Field(default=(), max_length=2000)
     findings: tuple[RawFinding, ...] = Field(default=(), max_length=1000)
+    # Per-asset metadata and lifecycle claims; details are capped per observation and the whole
+    # output is capped again below.
+    observations: tuple[AssetObservation, ...] = Field(default=(), max_length=MAX_OBSERVATIONS)
     # Assets that are wildcard DNS zones rather than individual hosts. Persistence stores a
     # marker in `Asset.details`, so later resolution must not treat names under them as real.
     wildcard_zones: tuple[AssetRef, ...] = Field(default=(), max_length=100)
@@ -130,6 +158,9 @@ class ScanContext:
     # The profile's per-root discovery cap, so a discovery scanner can stop before producing
     # more output than persistence would admit.
     max_discovered_assets: int | None = None
+    # ADR 0022 marks wildcard zones in Asset.details; a resolver must not deactivate a zone
+    # just because one random name under it has no records of its own.
+    target_is_wildcard: bool = False
 
 
 @dataclass(frozen=True)

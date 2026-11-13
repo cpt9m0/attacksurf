@@ -14,6 +14,11 @@ x-app: &app
     ENV: dev
     DATABASE_URL: postgresql+psycopg://attacksurf:attacksurf@postgres:5432/attacksurf
     REDIS_URL: redis://redis:6379/0
+    DNS_RESOLVERS: ${DNS_RESOLVERS:-1.1.1.1,8.8.8.8}
+    DNS_TIMEOUT_SECONDS: ${DNS_TIMEOUT_SECONDS:-3}
+    DNS_LIFETIME_SECONDS: ${DNS_LIFETIME_SECONDS:-5}
+    DNS_MAX_CONCURRENCY: ${DNS_MAX_CONCURRENCY:-20}
+    IP_ASN_DB_PATH: ${IP_ASN_DB_PATH:-}
   volumes:
     - ./src:/app/src  # hot reload
   depends_on:

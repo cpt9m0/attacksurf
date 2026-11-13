@@ -3,7 +3,7 @@
 import hashlib
 import json
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid5
 
 from sqlalchemy import case, func, tuple_
@@ -16,12 +16,14 @@ from attacksurf.domain.events import FindingCreated
 from attacksurf.domain.findings import finding_fingerprint
 from attacksurf.domain.ids import uuid7
 from attacksurf.domain.rules import RULES, Rule, get_rule
-from attacksurf.domain.scanners import AssetRef, RawFinding, ScanOutput
+from attacksurf.domain.scanners import AssetObservation, AssetRef, RawFinding, ScanOutput
 from attacksurf.domain.scans import ScanCancelled
 from attacksurf.infra.db.models import Asset, Evidence, Finding, Scan
 from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.services.assets import record_asset, record_relation
 from attacksurf.services.scans import TERMINAL
+
+OBSERVED_AT = "observed_at"
 
 
 def persist_scan_output(
@@ -48,7 +50,8 @@ def persist_scan_output(
     archived (ADR 0021). Locks are taken in the order `archive_root_domain` uses (scan rows, then
     the root): the caller already holds the scan row lock. The root is read `FOR KEY SHARE`,
     which never conflicts with the archive, or locked `FOR UPDATE` once when the cap or a root
-    wildcard marker needs it.
+    wildcard marker needs it. The input and discovered assets are then locked/upserted in a
+    stable type/value order, so overlapping roots can't deadlock on opposite answer orders.
     """
     asset = get_scoped(session, Asset, asset_id, scan.org_id)
     if asset is None:
@@ -57,36 +60,45 @@ def persist_scan_output(
         raise ScanCancelled("Scan was cancelled.")
     input_ref = (asset.type, asset.value)
     root = _lock_root(session, scan, asset, output, discovered_limit=discovered_limit)
-    refs = {input_ref: asset.id}
+    root_ref = (root.type, root.value)
     # Every name the plugin reported is a valid reference, including ones the cap will drop
-    # (a reference to a name it never reported is still a plugin bug and fails the job).
-    declared = set(refs) | {(a.type, a.value) for a in output.assets}
+    # (a reference to a name it never reported is still a plugin bug and fails the job). The
+    # scan root is always valid: a subdomain may CNAME to its apex.
+    declared = {input_ref, root_ref} | {(a.type, a.value) for a in output.assets}
     _validate_references(output, declared, catalog)
     admitted: set[tuple[AssetType, str]] | None = None
     if discovered_limit is not None:
         keep = _admit(
             session, scan.org_id, scan.root_asset_id, asset, output, limit=discovered_limit
         )
-        admitted = {(ref.type, ref.value) for ref in keep}
+        admitted = {(ref.type, ref.value) for ref in keep} | {root_ref}
         output = output.model_copy(update={"assets": keep})
     seen = scan.started_at or scan.created_at
-    rows: dict[tuple[AssetType, str], Asset] = {
-        input_ref: root if asset.id == scan.root_asset_id else asset
-    }
-    written: set[tuple[AssetType, str]] = set()
-    for discovered in output.assets:
-        row = record_asset(
-            session,
-            scan.org_id,
-            discovered.type,
-            discovered.value,
-            source=AssetSource.DISCOVERED,
-            parent_id=scan.root_asset_id,
-            seen_at=seen,
-        )
-        written.add((row.type, row.value))
-        refs[(row.type, row.value)] = row.id
-        rows[(row.type, row.value)] = row
+    rows: dict[tuple[AssetType, str], Asset] = {root_ref: root}
+    refs: dict[tuple[AssetType, str], UUID] = {root_ref: root.id}
+    # The root exists independently of this output; `_usable` may link a subdomain's CNAME to it.
+    written: set[tuple[AssetType, str]] = {root_ref}
+    for asset_type, value in _ordered_asset_refs(input_ref, root_ref, output.assets):
+        key = (asset_type, value)
+        if key == input_ref:
+            row = _lock_input(session, scan, asset_id)
+        else:
+            row = record_asset(
+                session,
+                scan.org_id,
+                asset_type,
+                value,
+                source=AssetSource.DISCOVERED,
+                parent_id=scan.root_asset_id,
+                seen_at=seen,
+            )
+        written.add(key)
+        refs[key] = row.id
+        rows[key] = row
+    asset = rows[input_ref]
+    _apply_observations(
+        output, rows=rows, written=written, input_ref=input_ref, admitted=admitted, seen=seen
+    )
     # The cap may have dropped a discovered name; links to it are skipped, never guessed.
     for relation in output.relations:
         if not _usable(relation.from_asset, written, input_ref, admitted):
@@ -185,10 +197,100 @@ def _validate_references(
         _resolve(declared, relation.to_asset)
     for zone in output.wildcard_zones:
         _resolve(declared, zone)
+    for observation in output.observations:
+        _resolve(declared, observation.asset)
     for raw in output.findings:
         get_rule(raw.rule_id, catalog)
         if raw.asset:
             _resolve(declared, raw.asset)
+
+
+_ASSET_ORDER = {asset_type: index for index, asset_type in enumerate(AssetType)}
+
+
+def _ordered_asset_refs(
+    input_ref: tuple[AssetType, str],
+    root_ref: tuple[AssetType, str],
+    assets: tuple[AssetRef, ...],
+) -> tuple[tuple[AssetType, str], ...]:
+    """Input + discovered refs in the one order every persistence transaction locks them."""
+    refs = {input_ref, root_ref}
+    refs.update((asset.type, asset.value) for asset in assets)
+    refs.discard(root_ref)
+    return tuple(sorted(refs, key=lambda ref: (_ASSET_ORDER[ref[0]], ref[1])))
+
+
+def _lock_input(session: Session, scan: Scan, asset_id: UUID) -> Asset:
+    row = session.scalars(
+        scoped(Asset, scan.org_id).where(Asset.id == asset_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).one_or_none()
+    if row is None:
+        raise AssetNotFound("Asset not found.")
+    return row
+
+
+def _apply_observations(
+    output: ScanOutput,
+    *,
+    rows: dict[tuple[AssetType, str], Asset],
+    written: set[tuple[AssetType, str]],
+    input_ref: tuple[AssetType, str],
+    admitted: set[tuple[AssetType, str]] | None,
+    seen: datetime,
+) -> None:
+    for observation in output.observations:
+        if not _usable(observation.asset, written, input_ref, admitted):
+            continue
+        row = rows.get((observation.asset.type, observation.asset.value))
+        if row is not None:
+            _observe(row, observation, seen)
+
+
+def _observe(row: Asset, observation: AssetObservation, seen: datetime) -> None:
+    """Merge details and apply a lifecycle claim without moving state backwards.
+
+    A scanner may deactivate only a discovered asset: roots are user-owned and stay active even
+    when their DNS no longer resolves. Details are only replaced by an observation at least as
+    new as the stored one, so a delayed older result cannot erase newer records; lifecycle has
+    its own monotonic checks below.
+    """
+    if observation.details:
+        observed_at = _details_time(row.details)
+        if observed_at is None or seen >= observed_at:
+            row.details = {
+                **(row.details or {}),
+                **observation.details,
+                OBSERVED_AT: seen.isoformat(),
+            }
+    if observation.active is None:
+        return
+    if observation.active:
+        row.last_seen = max(row.last_seen, seen)
+        if row.deactivated_at is None or seen > row.deactivated_at:
+            row.is_active = True
+            row.deactivated_at = None
+        return
+    if row.parent_id is not None and seen >= row.last_seen:
+        # Advance even when already inactive: a later negative observation must outrank a
+        # delayed positive one that would otherwise pass the reactivation check.
+        if row.deactivated_at is None or seen > row.deactivated_at:
+            row.deactivated_at = seen
+        row.is_active = False
+
+
+def _details_time(details: object) -> datetime | None:
+    """When the stored details were observed, or None for rows written before this marker."""
+    if not isinstance(details, dict):
+        return None
+    raw = details.get(OBSERVED_AT)
+    if not isinstance(raw, str):
+        return None
+    try:
+        value = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def _upsert_evidence(

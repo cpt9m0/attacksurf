@@ -409,3 +409,70 @@ def test_asset_pages_have_no_inline_script_or_style(
     for path in ("/assets", "/assets?status=all&type=domain", f"/assets/{root_id}"):
         html = _html(alice, path)
         assert not any(pattern.search(html) for pattern in _INLINE_CODE), path
+
+
+def test_asset_detail_shows_the_dns_chain_and_escapes_records(
+    alice: FlaskClient, db_session: Session
+) -> None:
+    _add(alice, "example.com")
+    root_id = _root_id(db_session)
+    www_id = _discover(db_session, root_id, AssetType.SUBDOMAIN, "www.example.com")
+    www = db_session.get(Asset, www_id)
+    assert www is not None
+    www.details = {
+        "dns": {
+            "a": ["203.0.113.10"],
+            "cname_chain": ["www.example.com", "cdn.example.net"],
+            "txt": ["<script>alert(1)</script>"],
+        }
+    }
+    db_session.commit()
+
+    html = _html(alice, f"/assets/{www_id}")
+
+    assert "www.example.com" in html
+    assert "cdn.example.net" in html
+    assert "203.0.113.10" in html
+    assert "→" in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "<script>alert(1)</script>" not in html
+
+
+def test_ip_asset_detail_shows_reverse_dns_and_asn(alice: FlaskClient, db_session: Session) -> None:
+    _add(alice, "example.com")
+    root_id = _root_id(db_session)
+    ip_id = _discover(db_session, root_id, AssetType.IP, "203.0.113.10")
+    ip_asset = db_session.get(Asset, ip_id)
+    assert ip_asset is not None
+    ip_asset.details = {
+        "ip": {
+            "ptr": "host.example.net",
+            "asn": 13335,
+            "org": "CLOUDFLARENET",
+            "country": "US",
+        }
+    }
+    db_session.commit()
+
+    html = _html(alice, f"/assets/{ip_id}")
+
+    assert "host.example.net" in html
+    assert "AS13335" in html
+    assert "CLOUDFLARENET" in html
+    assert "US" in html
+
+
+def test_asset_with_no_dns_records_does_not_render_an_empty_dns_card(
+    alice: FlaskClient, db_session: Session
+) -> None:
+    _add(alice, "example.com")
+    root_id = _root_id(db_session)
+    www_id = _discover(db_session, root_id, AssetType.SUBDOMAIN, "www.example.com")
+    www = db_session.get(Asset, www_id)
+    assert www is not None
+    www.details = {"dns": {}}
+    db_session.commit()
+
+    html = _html(alice, f"/assets/{www_id}")
+
+    assert 'id="dns-title"' not in html

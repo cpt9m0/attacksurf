@@ -326,3 +326,63 @@ def test_sandbox_launcher_settings_refuse_runc_in_prod() -> None:
 def test_sandbox_launcher_settings_refuse_unsafe_artifact_roots(root: str) -> None:
     with pytest.raises(ValueError, match="artifact root"):
         SandboxLauncherSettings(sandbox_artifact_root=root)
+
+
+def test_dns_settings_defaults() -> None:
+    settings = make_settings()
+
+    assert settings.dns_resolver_addresses == ("1.1.1.1", "8.8.8.8")
+    assert settings.dns_timeout_seconds == 3.0
+    assert settings.dns_lifetime_seconds == 5.0
+    assert settings.dns_max_concurrency == 20
+    assert settings.ip_asn_db_path is None
+
+
+def test_dns_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("DNS_RESOLVERS", "9.9.9.9, 1.0.0.1")
+    clean_env.setenv("DNS_TIMEOUT_SECONDS", "1.5")
+    clean_env.setenv("DNS_LIFETIME_SECONDS", "2.5")
+    clean_env.setenv("DNS_MAX_CONCURRENCY", "4")
+    clean_env.setenv("IP_ASN_DB_PATH", "/srv/ip2asn.tsv")
+
+    settings = settings_from_env()
+
+    assert settings.dns_resolver_addresses == ("9.9.9.9", "1.0.0.1")
+    assert settings.dns_timeout_seconds == 1.5
+    assert settings.dns_lifetime_seconds == 2.5
+    assert settings.dns_max_concurrency == 4
+    assert settings.ip_asn_db_path == "/srv/ip2asn.tsv"
+
+
+@pytest.mark.parametrize(
+    "resolvers",
+    ["", "127.0.0.1", "10.0.0.1,1.1.1.1", "not-an-ip"],
+)
+def test_dns_settings_require_public_resolver_addresses(resolvers: str) -> None:
+    with pytest.raises(ValidationError, match="DNS_RESOLVERS"):
+        make_settings(dns_resolvers=resolvers)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("dns_timeout_seconds", 0),
+        ("dns_timeout_seconds", 31),
+        ("dns_lifetime_seconds", 0),
+        ("dns_lifetime_seconds", 61),
+        ("dns_max_concurrency", 0),
+        ("dns_max_concurrency", 101),
+    ],
+)
+def test_dns_settings_reject_out_of_range(field: str, value: int) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(**{field: value})
+
+
+def test_dns_lifetime_must_not_be_shorter_than_timeout() -> None:
+    with pytest.raises(ValidationError, match="DNS_LIFETIME_SECONDS"):
+        make_settings(dns_timeout_seconds=3.0, dns_lifetime_seconds=2.0)
+
+
+def test_empty_ip_asn_path_is_unset() -> None:
+    assert make_settings(ip_asn_db_path="  ").ip_asn_db_path is None
