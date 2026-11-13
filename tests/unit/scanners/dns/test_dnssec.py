@@ -1,5 +1,8 @@
 """`dns.dnssec`: DS/DNSKEY linkage, not-enabled and broken-chain detection (#19)."""
 
+import dns.rdata
+import dns.rdataclass
+import dns.rdatatype
 import pytest
 
 from attacksurf.domain.findings import Confidence
@@ -20,6 +23,9 @@ from tests.unit.scanners.dns.helpers import (
 
 # Generated once with dnspython's `dns.dnssec.make_ds` over KEY at acme.example.
 KEY = "257 3 13 AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+# What the authoritative adapter actually passes to the scanner: dnspython's presentation form
+# wraps the base64 key into space-separated chunks.
+CHUNKED_KEY = str(dns.rdata.from_text("IN", "DNSKEY", KEY))
 OTHER_KEY = "257 3 13 AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
 DS = "62734 13 2 bd8e1ab59a22b80a4a3d59cb4e0af137ae21846a9d20b2dbd93bbf427d7573b2"
 DS_SHA384 = (
@@ -74,6 +80,14 @@ def test_dnssec_not_enabled_without_a_ds_record() -> None:
 
 def test_dnssec_healthy_when_a_dnskey_matches_the_ds() -> None:
     output, _, _ = probe(ds=(DS,), dnskey=(KEY,))
+
+    assert output.findings == ()
+
+
+def test_dnssec_accepts_a_space_chunked_dnskey() -> None:
+    """The adapter's presentation form splits long base64 keys over several fields."""
+    assert len(CHUNKED_KEY.split()) > 4  # the format this test exists to cover
+    output, _, _ = probe(ds=(DS,), dnskey=(CHUNKED_KEY,))
 
     assert output.findings == ()
 

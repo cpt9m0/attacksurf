@@ -34,14 +34,15 @@ from attacksurf.domain.scanners import (
 )
 from attacksurf.scanners.registry import register_scanner
 
-DNS_LOOKUPS = 12
+DNS_LOOKUPS = 18
 MAX_EVIDENCE_VALUES = 5
 MAX_VALUE_LENGTH = 256
 # DS digest types we can verify: SHA-1, SHA-256, SHA-384 (RFC 4034 section 5.1.4).
 DIGESTS = {1: "sha1", 2: "sha256", 4: "sha384"}
 # RSAMD5 is deprecated and its key tag has a special form; such a zone is left unjudged.
 _RSAMD5 = 1
-_RDATA_FIELDS = 4
+_DS_FIELDS = 4
+_DNSKEY_HEADER_FIELDS = 3
 _ZONE_KEY_FLAG = 0x0100
 _DNSKEY_PROTOCOL = 3
 
@@ -135,7 +136,7 @@ def _broken_chain(
 def _parse_ds(value: str) -> _Ds | None:
     """`<key tag> <algorithm> <digest type> <hex digest>`; None when unusable."""
     parts = value.split()
-    if len(parts) != _RDATA_FIELDS:
+    if len(parts) != _DS_FIELDS:
         return None
     try:
         key_tag, algorithm, digest_type = int(parts[0]), int(parts[1]), int(parts[2])
@@ -148,13 +149,17 @@ def _parse_ds(value: str) -> _Ds | None:
 
 
 def _parse_dnskey(value: str) -> _Key | None:
-    """`<flags> <protocol> <algorithm> <base64 key>`; None for a non-zone or malformed key."""
+    """`<flags> <protocol> <algorithm> <base64 key>`; None for a non-zone or malformed key.
+
+    dnspython's presentation format wraps the base64 key into space-separated chunks, so only
+    the three header fields are positional and every remaining chunk belongs to the key.
+    """
     parts = value.split()
-    if len(parts) != _RDATA_FIELDS:
+    if len(parts) <= _DNSKEY_HEADER_FIELDS:
         return None
     try:
         flags, protocol, algorithm = int(parts[0]), int(parts[1]), int(parts[2])
-        key = base64.b64decode("".join(parts[3].split()), validate=True)
+        key = base64.b64decode("".join(parts[_DNSKEY_HEADER_FIELDS:]), validate=True)
     except (ValueError, binascii.Error):
         return None
     if (
