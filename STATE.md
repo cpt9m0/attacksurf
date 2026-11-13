@@ -2,43 +2,43 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-13 · **Branch:** `16-dns-resolution-closeout` · **Issue:** #16 (closed)
+**Updated:** 2026-11-13 · **Branch:** `17-dns-email-security` · **Issue:** #17 (DNS check: email security (SPF, DMARC, DKIM, MTA-STS))
 
 ## Status
-#16 is **closed as completed**. `origin/main` (`33c16d3`, PR #161) already contained the full
-implementation; the issue stayed open only because the PR title never said `Closes #16`. The
-closeout branch (cut from `origin/main`, zero code changes) verified everything and closed the
-issue with an evidence comment. Checks: ruff + format + lint-imports (6 kept) + pyright clean;
-full suite 1677 passed / 19 skipped (opt-in e2e/worker only, coverage gate met); DNS integration
-83 passed. Live acceptance with real DNS through the production ScopeGuard
-(`www.apple.com` → 3-hop Akamai CNAME chain → real A/AAAA, `resolves_to` edges, external
-terminal metadata-only, full chain in the asset-detail view model) passed; the scratch script
-was deleted and the scratch org removed from the test DB.
+#17 is **implemented and verified on this branch**, not yet pushed or PR'd. Issue stays open
+until the PR merges (`Closes #17`).
 
 ## Last task
-- Cut `16-dns-resolution-closeout` from `origin/main`; confirmed no implementation gap (all six
-  #16 tasks trace to merged code + tests + ADR 0025).
-- Ticked all #16 task boxes, posted verification evidence, closed #16 (`--reason completed`).
-- No `CHANGELOG`/docs/ADR changes: behavior is unchanged since #161, which already documented it.
+- Added the `dns.email` passive scanner (root domains only): one `lookup_many` round reads TXT
+  at the apex, `_dmarc`, `_mta-sts` and six common `<selector>._domainkey` names; evaluates SPF
+  (missing / multiple / permissive incl. implicit `?all`, `redirect=` suppresses `all` /
+  >10 DNS-querying terms), DMARC (missing incl. multiple or policy-less records / `p=none` /
+  no reporting / `pct<100`, fired independently), DKIM (no usable key on any probed selector,
+  low confidence; `v=` optional, empty `p=` is revoked) and MTA-STS (missing, info). Findings
+  only, raw TXT as `dns_record` evidence. Partial DNS errors fail open per check; an all-error
+  run raises `TransientJobError`.
+- Added all ten `dns.email.*` rules to `domain/rules/dns.py` with remediation + RFC references;
+  wired `dns.email` into `dns_passive` checks and both plugin-import lists (web + worker).
+- Tests: 26 new tests in `tests/unit/scanners/dns/test_email.py` plus profile assertion.
+  Checks: ruff check + format, lint-imports (6 kept), pyright, pre-commit (all hooks, caches
+  redirected to /tmp), full pytest 1704 passed / 19 skipped, coverage 97%.
+- Docs synced: `CHANGELOG.md` [Unreleased], `docs/architecture.md` (profile + email bullet),
+  `docs/security.md`. README already listed email security; no ADR (no new architectural
+  choice: check-only plugin on existing ports), no migration, no new dependency (`checkdmarc`
+  rejected in favour of a stdlib parser).
 
 ## Next step
-1. Open a PR for this branch (diff is this file only) or delete the branch if a STATE-only PR is
-   unwanted; either way #16 needs nothing further.
-2. Suggested follow-ups (not started, no branch): `make test` fails at collection inside the web
-   image (`tests/unit/test_test_database.py` resolves `/app/.github/...`, absent from the image;
-   CI unaffected since it runs `uv run pytest`) — file an issue. Wildcard-ancestry
-   reconciliation still belongs to #20.
+1. Push `17-dns-email-security` and open the PR (`feat(scanners): add email security check
+   (#17)`, `Closes #17`), then start #18 (subdomain takeover; depends on #16, now unblocked).
 
 ## Open threads
-- Local stale branch `16-dns-resolution` (and its remote) still exist from PR #161; safe to
-  delete (fully merged).
-- `IP_ASN_DB_PATH` is still operator-supplied; live acceptance ran without ASN enrichment.
+- SPF lookup counting is per published record (top-level DNS-querying terms); recursive
+  `include:` expansion is not fetched, so a record can exceed 10 lookups via nested includes
+  without a finding. Deliberate for the DNS budget; revisit if #19/#20 want deeper evaluation.
+- DKIM probing covers six common selectors only, hence low confidence by design.
 
 ## Notes for the next agent
-- `uv run` is broken in this environment (uv cache permission denied); use `.venv/bin/<tool>`
-  directly with `PATH="$PWD/.venv/bin:$PATH"` (the alembic-offline test shells out to `alembic`).
+- `.venv/bin/<tool>` works; bare `uv run` / pre-commit need caches redirected
+  (`UV_CACHE_DIR`, `PRE_COMMIT_HOME`, `GOCACHE`, `GOPATH` under /tmp).
 - DB tests from the host: `TEST_DATABASE_URL='postgresql+psycopg://attacksurf:attacksurf@127.0.0.1:5432/attacksurf_test'`
-  (dev Compose postgres is up and reachable).
-- Live-DNS acceptance pattern (deleted after use, never committed): temp pytest file with
-  `db_session`, real `DnsPythonResolver` + `ScopeGuard`, `run_check`, then
-  `asset_views.get_asset_detail`; clean up scratch org rows in a `finally`.
+  and `PATH="$PWD/.venv/bin:$PATH"` (the alembic CLI test shells out to `alembic`).

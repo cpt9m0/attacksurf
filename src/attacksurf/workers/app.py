@@ -11,6 +11,7 @@ from attacksurf.infra.queue import celery_config
 
 # Importing the module registers its plugin; production plugins are listed here explicitly.
 from attacksurf.scanners.dns import discovery as _ct_discovery  # noqa: F401
+from attacksurf.scanners.dns import email as _dns_email  # noqa: F401
 from attacksurf.scanners.dns import resolve as _dns_resolve  # noqa: F401
 from attacksurf.workers import runtime
 

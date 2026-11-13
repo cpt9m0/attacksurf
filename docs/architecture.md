@@ -152,7 +152,7 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   import production plugin modules explicitly, so each process registers them once.
   `scanners/profiles.py`
   selects discovery/check plugins by name. `dns_passive` runs `dns.discovery.ct` for discovery
-  and `dns.resolve` for checks, with `max_discovered_assets=1000`; empty/unknown profiles are
+  and `dns.resolve` + `dns.email` for checks, with `max_discovered_assets=1000`; empty/unknown profiles are
   rejected. Profiles cannot route to
   the reserved `active`/`analysis` queues before those workers are implemented.
 - **CT discovery (#15, ADR 0022):** `dns.discovery.ct` queries crt.sh's JSON endpoint and falls
@@ -174,6 +174,16 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   subtree), so the last complete observation stays; NUL bytes in TXT values are stored as `\0`
   because PostgreSQL JSONB rejects U+0000. `Asset.details["observed_at"]` orders observations,
   so a delayed older result cannot replace newer details.
+- **Email security (#17):** `dns.email` is a check-only plugin on root domains (no assets,
+  relations or observations) that reads TXT records for the apex, `_dmarc`, `_mta-sts` and common
+  `<selector>._domainkey` names in one `lookup_many` round and evaluates SPF (missing,
+  multiple, permissive `+all`/`?all`, >10 DNS-querying terms), DMARC (missing — including
+  multiple records, monitor-only, no reporting, partial `pct`), DKIM (no common selector
+  publishes a usable key; low confidence) and MTA-STS (missing, info). Evidence is the raw
+  TXT records as `dns_record` evidence. A failed query fails open (that check is skipped);
+  only an all-error run raises `TransientJobError`. No HTTP fetch: MTA-STS is the DNS
+  signal only, and parked-domain hardening (`v=spf1 -all` + `p=reject`) is covered by the
+  missing-record remediation text.
 - `services.scans.start_scan` validates a tenant-owned, active domain root, audits and commits
   the scan/kickoff job, then enqueues `passive.discover`. Two waves use Celery chords:
   discovery on the root, then checks on the active root and its known direct children, filtered

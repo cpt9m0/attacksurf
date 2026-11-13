@@ -80,6 +80,9 @@ that a name exists. `dns.resolve` records A/AAAA/CNAME/MX/NS/TXT/CAA/SOA in capp
 `Asset.details`, creates IP assets/edges, and emits the info finding
 `dns.records.private_ip_exposed` for private or special-purpose addresses; it never contacts
 those addresses. A missing ip2asn file disables ASN/organisation enrichment only.
+`dns.email` evaluates SPF/DMARC/DKIM/MTA-STS publication from TXT answers through the
+same guarded DNS adapter and DNS budget; it performs no HTTP fetch (MTA-STS is the DNS
+signal only) and emits findings with raw-record evidence, never new assets.
 
 Repository fetches (ADR 0017, not built yet) pass the same gate through `check_fetch` and are
 not scanners: `worker-fetch` reaches only allowlisted forges, using a streaming transport
