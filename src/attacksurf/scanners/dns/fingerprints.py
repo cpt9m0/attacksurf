@@ -15,6 +15,11 @@ from dataclasses import dataclass
 from functools import cache
 from importlib.resources import files
 
+# The safe HTTP client follows these before a scanner sees a response, so a redirect status can
+# never be observed as the final answer. It is also a weak signal on its own: a claimed instance
+# redirecting http to https looks the same as an unclaimed one redirecting to the vendor.
+REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+
 
 @dataclass(frozen=True)
 class Fingerprint:
@@ -41,8 +46,16 @@ def load_fingerprints() -> tuple[Fingerprint, ...]:
     """Load and validate the pinned dataset once per process."""
     try:
         raw = (files(__package__) / "fingerprints.json").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise FingerprintError("takeover fingerprint dataset is unreadable") from exc
+    return parse_fingerprints(raw)
+
+
+def parse_fingerprints(raw: str) -> tuple[Fingerprint, ...]:
+    """Validate a dataset document; public so the shipped data can be checked in tests."""
+    try:
         entries = json.loads(raw)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except json.JSONDecodeError as exc:
         raise FingerprintError("takeover fingerprint dataset is unreadable") from exc
     if not isinstance(entries, list) or not entries:
         raise FingerprintError("takeover fingerprint dataset is empty")
@@ -79,6 +92,10 @@ def _entry(entry: object) -> Fingerprint:
         raise FingerprintError("takeover fingerprint entry has a bad nxdomain flag")
     if http_status is not None and not isinstance(http_status, int):
         raise FingerprintError("takeover fingerprint entry has a bad http status")
+    if http_status is not None and http_status in REDIRECT_STATUSES:
+        # The client follows redirects, so this entry could never match; a redirect alone is
+        # also no evidence of an unclaimed instance (see REDIRECT_STATUSES).
+        raise FingerprintError("takeover fingerprint entry uses a redirect status")
     if not nxdomain and not fingerprint and http_status is None:
         raise FingerprintError("takeover fingerprint entry has no detection signal")
     if nxdomain and fingerprint:

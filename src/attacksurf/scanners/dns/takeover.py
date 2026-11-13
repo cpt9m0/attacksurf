@@ -5,7 +5,9 @@ ScopeGuard and compares the terminal names with the pinned takeover fingerprint 
 (`fingerprints.py`). A dangling CNAME is reported only when the target is a known-claimable
 service whose deprovisioned instances stop resolving; services that keep resolving are left
 to `dns.takeover.http`, which can read the service's "not found" signature. An NS delegation
-is reported when a delegated nameserver's name itself no longer resolves. The scanner never
+is reported when a delegated nameserver's name itself no longer resolves; the check is
+withheld for aliased names, whose NS answer belongs to the alias target's zone (RFC 1034
+section 3.6.2). The scanner never
 claims, registers or contacts anything; it only reports what DNS already says.
 """
 
@@ -80,7 +82,11 @@ class DnsTakeover:
         cname_finding = _dangling_cname(runtime.dns, asset, chain, chain_error, fingerprints)
         if cname_finding is not None:
             findings.append(cname_finding)
-        findings.extend(_dangling_ns(runtime.dns, asset, by_type[DnsRecordType.NS]))
+        if len(chain) == 1:
+            # A CNAME owner cannot also hold other data (RFC 1034 section 3.6.2), so an NS
+            # answer for an aliased name belongs to the alias target's zone, not to this
+            # asset: attributing it here would invent a delegation the asset never had.
+            findings.extend(_dangling_ns(runtime.dns, asset, by_type[DnsRecordType.NS]))
         return ScanOutput(findings=tuple(findings))
 
 

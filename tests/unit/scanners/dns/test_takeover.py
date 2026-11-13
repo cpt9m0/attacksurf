@@ -111,7 +111,7 @@ def test_issue_rule_ids_exist_in_the_shipped_catalog() -> None:
 def test_dataset_is_the_pinned_vulnerable_subset() -> None:
     fingerprints = load_fingerprints()
 
-    assert len(fingerprints) == 25
+    assert len(fingerprints) == 24
     for fingerprint in fingerprints:
         assert fingerprint.cname
         assert fingerprint.nxdomain or fingerprint.fingerprint or fingerprint.http_status
@@ -121,6 +121,21 @@ def test_dataset_is_the_pinned_vulnerable_subset() -> None:
     assert match_service(fingerprints, "gone.example.net") is None
     # Not-vulnerable / edge-case services never ship: GitHub Pages must not be flagged.
     assert match_service(fingerprints, "user.github.io") is None
+
+
+def test_ns_check_is_withheld_for_an_aliased_name() -> None:
+    # RFC 1034 section 3.6.2: a CNAME owner holds no other data, so the NS answer here is the
+    # alias target's zone. Attributing it to this asset would invent a critical finding.
+    answers: dict[tuple[str, DnsRecordType], tuple[str, ...] | DnsStatus] = {
+        (ASSET, DnsRecordType.CNAME): ("target.example.net",),
+        (ASSET, DnsRecordType.NS): ("ns1.gone.example.net",),
+        ("ns1.gone.example.net", DnsRecordType.A): DnsStatus.NXDOMAIN,
+    }
+
+    output, dns = run(answers)
+
+    assert output.findings == ()
+    assert (ASSET, DnsRecordType.NS) in dns.calls
 
 
 def test_dangling_cname_on_nxdomain_service_is_a_high_finding() -> None:

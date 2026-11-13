@@ -20,11 +20,15 @@ pytest passed). Issue stays open until the PR merges (`Closes #18`).
   claimable service; body/status signature ⇒ `dns.takeover.fingerprint_match` (high) with
   CNAME chain + response snippet evidence.
 - Dataset: pinned subset of can-i-take-over-xyz @ `5bd4e12` (CC-BY-4.0) in
-  `scanners/dns/fingerprints.json` — the 25 vulnerable entries with a CNAME pattern and a
+  `scanners/dns/fingerprints.json` — the 24 vulnerable entries with a CNAME pattern and a
   usable signal; validating literal-substring loader (`fingerprints.py`, never regex) and
   `fingerprints-NOTICE.md` attribution/transform note. `uv build` verified the JSON ships.
-- Tests: 24 new tests (`test_takeover.py`, `test_takeover_http.py`, S3 `NoSuchBucket` fixture
-  proves the acceptance criterion) + profile assertion. Checks: ruff check/format,
+- Tests: 28 new tests (`test_takeover.py`, `test_takeover_http.py`, S3 `NoSuchBucket` fixture
+  proves the acceptance criterion) + profile assertion. Codex review follow-up: NS attribution
+  is withheld for aliased names (RFC 1034 §3.6.2 — a CNAME owner holds no other data, so the
+  NS answer is the target's), and redirect-status fingerprints are dropped (Helprace 301: the
+  client follows redirects, and a redirect alone does not prove an unclaimed instance) with a
+  loader invariant (`REDIRECT_STATUSES`) so they cannot return. Checks: ruff check/format,
   lint-imports (6 kept), pyright, pre-commit all hooks, full pytest 1749 passed / 19 skipped,
   coverage 95.71%.
 - Docs synced: `CHANGELOG.md` [Unreleased], `docs/architecture.md` (profile + takeover
@@ -42,6 +46,9 @@ pytest passed). Issue stays open until the PR merges (`Closes #18`).
   and is a follow-up candidate, not built.
 - A few upstream fingerprints contain regex-style artifacts (`.*`, HTML entities) and are
   inert under literal matching until upstream publishes plain text (see fingerprints-NOTICE).
+- Helprace (`HTTP_STATUS=301`) is not detected: see the notice. Revisit only with
+  Location-header-aware logic that distinguishes a same-host https redirect from a redirect
+  to the vendor's error page.
 - Fingerprint entries with no CNAME pattern are not matched by body alone (false-positive
   risk on ordinary 404 pages); deliberate.
 

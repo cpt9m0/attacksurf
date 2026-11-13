@@ -1,5 +1,6 @@
 """`dns.takeover.http`: fingerprint-match via one verified GET (#18)."""
 
+import json
 from collections.abc import Sequence
 from pathlib import Path
 from uuid import uuid4
@@ -19,6 +20,12 @@ from attacksurf.domain.net import (
 )
 from attacksurf.domain.scanners import AssetRef, ScanContext, ScanOutput
 from attacksurf.domain.scope import HttpPermission, ScopeError
+from attacksurf.scanners.dns.fingerprints import (
+    REDIRECT_STATUSES,
+    FingerprintError,
+    load_fingerprints,
+    parse_fingerprints,
+)
 from attacksurf.scanners.dns.takeover_http import MAX_BODY_BYTES, DnsTakeoverHttp
 
 ROOT = "acme.example"
@@ -155,13 +162,38 @@ def test_resolving_service_without_the_signature_has_no_finding() -> None:
 
 def test_status_code_signature_matches_without_a_body_fingerprint() -> None:
     answers: dict[tuple[str, DnsRecordType], tuple[str, ...] | DnsStatus] = {
-        (ASSET, DnsRecordType.CNAME): ("acme.helprace.com",)
+        (ASSET, DnsRecordType.CNAME): ("acme.launchrock.com",)
     }
 
-    output, _dns, _http = run(answers, FakeHttp(HttpBody(301, b"")))
+    output, _dns, _http = run(answers, FakeHttp(HttpBody(500, b"error")))
 
     assert [f.rule_id for f in output.findings] == ["dns.takeover.fingerprint_match"]
-    assert output.findings[0].evidence[1].data["status_code"] == 301
+    assert output.findings[0].evidence[1].data["status_code"] == 500
+
+
+def test_shipped_fingerprints_never_rely_on_a_redirect_status() -> None:
+    # The safe client follows redirects before a scanner sees a response, so such an entry
+    # could never match; a redirect is also not evidence of an unclaimed instance.
+    assert all(
+        fingerprint.http_status not in REDIRECT_STATUSES for fingerprint in load_fingerprints()
+    )
+
+
+def test_loader_rejects_a_redirect_status_signature() -> None:
+    raw = json.dumps(
+        [
+            {
+                "service": "Redirecting Service",
+                "cname": ["redirect.example"],
+                "fingerprint": None,
+                "nxdomain": False,
+                "http_status": 301,
+            }
+        ]
+    )
+
+    with pytest.raises(FingerprintError, match="redirect status"):
+        parse_fingerprints(raw)
 
 
 def test_http_failure_is_no_finding_not_a_failed_job() -> None:

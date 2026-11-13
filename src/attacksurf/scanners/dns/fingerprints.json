@@ -108,15 +108,6 @@
     "http_status": null
   },
   {
-    "service": "Helprace",
-    "cname": [
-      "helprace.com"
-    ],
-    "fingerprint": null,
-    "nxdomain": false,
-    "http_status": 301
-  },
-  {
     "service": "JetBrains",
     "cname": [
       "youtrack.cloud"

@@ -9,7 +9,7 @@ change notice the license requires; the dataset is used for detection only.
 
 Changes made to the upstream `fingerprints.json` (76 entries at the pinned commit):
 
-- Kept only the 25 entries marked `"vulnerable": true` that a scanner can act on mechanically:
+- Kept only the 24 entries marked `"vulnerable": true` that a scanner can act on mechanically:
   at least one CNAME pattern plus an NXDOMAIN signal or a non-empty HTTP fingerprint /
   `http_status`. Dropped as unusable: vulnerable entries with no CNAME pattern (Campaign
   Monitor, Canny, Cargo Collective, Digital Ocean, Getresponse, Pantheon, Pingdom,
@@ -18,8 +18,12 @@ Changes made to the upstream `fingerprints.json` (76 entries at the pinned commi
 - Reduced each entry to the fields the scanners use (`service`, `cname`, `fingerprint`,
   `nxdomain`, `http_status`); discussion/documentation links stay upstream.
 - IP-literal CNAME patterns were dropped (Worksites): a CNAME target is never an IP literal.
-- The synthetic upstream fingerprints `HTTP_STATUS=301` / `HTTP_STATUS=500` (Helprace,
-  LaunchRock) are represented by the `http_status` field alone.
+- The synthetic upstream fingerprint `HTTP_STATUS=500` (LaunchRock) is represented by the
+  `http_status` field alone. `HTTP_STATUS=301` (Helprace) is dropped: the safe HTTP client
+  follows redirects before a scanner sees the response, so a 301 can never be observed as the
+  final status, and a redirect alone does not distinguish an unclaimed instance from a claimed
+  one redirecting http to https. The loader rejects redirect statuses (`REDIRECT_STATUSES`),
+  so the entry cannot be reintroduced by accident.
 
 Known limitation, deliberate: fingerprints are matched as literal substrings, never as regular
 expressions. A few upstream strings contain regex-style artifacts (`.*`, HTML entities) and

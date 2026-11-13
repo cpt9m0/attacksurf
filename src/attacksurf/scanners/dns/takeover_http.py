@@ -3,7 +3,10 @@
 The verified companion to `dns.takeover`: when a name CNAMEs to a known-claimable service
 that keeps resolving, only the service's own "not found" answer proves the instance is gone.
 This plugin makes exactly one passive GET of the scanned asset through the safe client and
-matches the response against the pinned fingerprint dataset. Plain HTTP is deliberate: a
+matches the response against the pinned fingerprint dataset. Status signatures are limited
+to non-redirect codes by the dataset loader: the client follows redirects before a scanner
+sees a response, and a redirect alone does not prove an unclaimed instance. Plain HTTP is
+deliberate: a
 deprovisioned instance usually has no valid TLS certificate for the victim's name, so HTTPS
 would fail before the signature could be read. The GET is still an active (target) check —
 ScopeGuard only runs this plugin on assets whose root proved ownership — and nothing is
@@ -110,7 +113,8 @@ def _match_snippet(
     """Response excerpt proving the match, or None when the signature is absent.
 
     A truncated body can still match: the client caps what it reads, and the signature of a
-    deprovisioned instance is the start of its error page, not the tail.
+    deprovisioned instance is the start of its error page, not the tail. `http_status` is
+    never a redirect code: the loader rejects those, since the client follows them first.
     """
     if fingerprint:
         index = text.find(fingerprint)
