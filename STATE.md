@@ -2,43 +2,39 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-13 · **Branch:** `19-dns-hygiene-checks` · **Issue:** #19 (DNS hygiene: DNSSEC, NS/MX, CAA, RDAP expiry, AXFR)
+**Updated:** 2026-11-13 · **Branch:** `20-finding-deduplication-scan-diffing` · **Issue:** #20 (Finding deduplication and scan diffing)
 
 ## Status
-PR #165 (`feat(scanners): add DNS hygiene checks (#19)`, `Closes #19`) is open, mergeable and
-green: CI (lint, compose, secrets, test 3.12/3.13/3.15, web-e2e, pr-title) passes and the Codex
-review passed on `eaee255` ("Didn't find any major issues"). Local checks: ruff check/format,
-lint-imports (6 kept), pyright, pytest 1864 passed / 19 skipped, coverage above the 80% gate.
+Implementation complete; local checks green (ruff, format, lint-imports, pyright, pytest with
+coverage above the 80% gate). PR not opened yet.
 
 ## Last task
-- Implemented #19: six check-only plugins in `dns_passive` (`dns.dnssec`, `dns.ns`, `dns.mx`,
-  `dns.caa`, `dns.whois`, `dns.axfr`; 11 rules), all `DOMAIN`-only; the zone-level checks run
-  only when the asset is itself a zone apex.
-- New grant capabilities `authoritative_dns`, `rdap`, `zone_transfer` (ADR 0026), with grant-gated
-  `AuthoritativeLookup` (owner-checked zone discovery, validated nameserver addresses, read-only
-  SOA/DNSKEY probes, one AXFR per server when the name owns NS) and `RdapClient` (IANA bootstrap,
-  https-only, target/registrable domain only, 24 h cache of trimmed public data).
-- Addressed the Codex review findings on #165: chunked DNSKEY presentation (`3fa1650`), CD
-  diagnostic zone discovery so a bogus zone still reveals its authorities (`db1caba`), every CAA
-  ancestor within the lookup budget (`d8a30e9`), and fallback MX evidence attributed to the name
-  that publishes the RRset (`eaee255`).
-- Tests: 6 scanner suites + RDAP/authoritative/gate/registry tests + RDAP fixtures; no live
-  network.
-- Docs synced: ADR 0026, architecture, security, AGENTS rule 6, `add-scanner` skill, CHANGELOG.
-  No migration, setting or dependency.
+- Implemented #20: `FindingStatus.REGRESSED` (fixed findings observed again; `fixed_at`
+  cleared; counts as active in views), `Finding.scanner` provenance (migration 0008), and
+  material-change reopening of `accepted_risk`/`false_positive` findings in persistence
+  (`FindingReopened`).
+- New `services.scan_diff.diff_scan` wired into the `passive.diff` stage: fixes an active
+  finding only when its own scanner completed for its asset in this scan (per-scanner/asset
+  coverage via `Job`), marks re-observed fixed findings `regressed`, diffs discovered assets
+  (new; disappeared only with a completed discovery and an earlier completed scan), writes
+  `Scan.stats` (new/fixed/regressed/total by severity + assets) and audits `scan.diffed` in one
+  transaction, then publishes `FindingFixed`/`FindingRegressed`. Replay-safe.
+- Tests: 21 diff-service cases, 8 persistence cases, plus pipeline task, asset-view and DB
+  invariant coverage.
+- Docs: ADR 0027, architecture, CHANGELOG.
 
 ## Next step
-1. Merge PR #165 (squash; `Closes #19` closes the issue), then delete the branch.
-2. Pick the next unblocked issue in epic #31 (check #21/#22 first; #20 dedupe follows).
+1. Open the PR (`Closes #20`, title `feat(scanners): add finding deduplication and scan diffing`),
+   confirm CI green, merge (squash), delete the branch.
+2. Next unblocked issue in epic #31: #21 (scans UI, consumes `Scan.stats`) or #22.
 
 ## Open threads
-- DNSSEC validates only the DS↔DNSKEY linkage; RRSIG signature validation is a follow-up.
-- A subdomain root that is not a delegated zone gets no `dns.ns`/`dns.dnssec`/`dns.axfr` findings
-  (they belong to its registrable domain); add that domain as a root to see them.
-- RDAP failures are fail-open (no finding), so a transient outage looks like "no issue" to #20's
-  diffing until a later scan succeeds.
-- `dns.axfr` runs on the `passive` queue because the `active` queue is reserved (#70).
-- Zone-level findings on two roots in one zone are not deduplicated across assets (#20).
+- Concurrent scans of the same root can still both diff (#21 adds prevention); conditional
+  updates and `last_seen <= seen` keep an older scan from undoing a newer observation.
+- Findings on deactivated assets are never auto-fixed (no scanner runs on them): intentional.
+- A fail-open scanner (RDAP outage) can make its findings look fixed while the upstream is down.
+- `Scan.stats` asset lists are capped at 1000 entries; `total` stays exact.
+- Zone-level findings on two roots in one zone are not deduplicated across assets (from #19).
 
 ## Notes for the next agent
 - `uv run` fails on the uv cache here (`/home/ubuntu/.cache`); use `.venv/bin/<tool>` directly.

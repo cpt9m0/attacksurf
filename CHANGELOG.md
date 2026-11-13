@@ -6,6 +6,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Scan diffing and the finding lifecycle: a scan marks findings it no longer sees `fixed` only
+  when their own scanner completed for that asset, a previously fixed finding observed again
+  becomes `regressed`, suppressed (`accepted_risk`/`false_positive`) findings reopen only on
+  materially different evidence, and `Scan.stats` records new/fixed/regressed/total findings by
+  severity plus new and disappeared assets for the scan-history view (ADR 0027, #20).
 - DNS hygiene checks (`dns.dnssec`, `dns.ns`, `dns.mx`, `dns.caa`, `dns.whois`, `dns.axfr`):
   DS/DNSKEY delegation-chain checks (`dns.dnssec.not_enabled` info, `dns.dnssec.broken_chain`
   high), single-nameserver / lame-delegation / inconsistent-SOA detection (`dns.ns.*`), MX
