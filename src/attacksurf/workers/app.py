@@ -8,13 +8,19 @@ from celery.signals import setup_logging, worker_process_init
 
 from attacksurf.infra.logging import configure_logging
 from attacksurf.infra.queue import celery_config
+from attacksurf.scanners.dns import axfr as _dns_axfr  # noqa: F401
+from attacksurf.scanners.dns import caa as _dns_caa  # noqa: F401
 
 # Importing the module registers its plugin; production plugins are listed here explicitly.
 from attacksurf.scanners.dns import discovery as _ct_discovery  # noqa: F401
+from attacksurf.scanners.dns import dnssec as _dns_dnssec  # noqa: F401
 from attacksurf.scanners.dns import email as _dns_email  # noqa: F401
+from attacksurf.scanners.dns import mx as _dns_mx  # noqa: F401
+from attacksurf.scanners.dns import ns as _dns_ns  # noqa: F401
 from attacksurf.scanners.dns import resolve as _dns_resolve  # noqa: F401
 from attacksurf.scanners.dns import takeover as _dns_takeover  # noqa: F401
 from attacksurf.scanners.dns import takeover_http as _dns_takeover_http  # noqa: F401
+from attacksurf.scanners.dns import whois as _dns_whois  # noqa: F401
 from attacksurf.workers import runtime
 
 TASK_MODULES = (

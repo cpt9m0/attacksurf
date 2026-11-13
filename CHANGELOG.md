@@ -10,6 +10,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   model, purpose, whose key paid, token counts, latency and a cost estimated from list prices
   in `ai/pricing.py`. Prompts, replies, error messages and keys are never stored. The app warns
   at startup when the instance key or model is missing, so AI being off isn't silent (#23).
+- Scan diffing and the finding lifecycle: a scan marks findings it no longer sees `fixed` only
+  when their own scanner completed for that asset, a previously fixed finding observed again
+  becomes `regressed`, suppressed (`accepted_risk`/`false_positive`) findings reopen only on
+  materially different evidence, and `Scan.stats` records new/fixed/regressed/total findings by
+  severity plus new assets and disappeared subdomains for the scan-history view (ADR 0027,
+  #20).
+- DNS hygiene checks (`dns.dnssec`, `dns.ns`, `dns.mx`, `dns.caa`, `dns.whois`, `dns.axfr`):
+  DS/DNSKEY delegation-chain checks (`dns.dnssec.not_enabled` info, `dns.dnssec.broken_chain`
+  high), single-nameserver / lame-delegation / inconsistent-SOA detection (`dns.ns.*`), MX
+  targets that are aliases or do not resolve (`dns.mx.*`), missing CAA (`dns.caa.missing`),
+  registration expiry and a missing registrar transfer lock via RDAP (`dns.whois.*`, 24-hour
+  cache), and unauthenticated zone transfers on verified roots (`dns.axfr.allowed`, high). Adds
+  grant-gated authoritative DNS, RDAP and zone-transfer adapters and wires the checks into the
+  `dns_passive` profile (ADR 0026, #19).
 - Subdomain takeover checks (`dns.takeover`, `dns.takeover.http`): dangling CNAMEs to
   known-claimable services that no longer resolve and NS delegations to nameservers that no
   longer exist are flagged from DNS alone; on verified domains a single HTTP probe also

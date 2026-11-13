@@ -95,6 +95,18 @@ class AuditLog(TenantScoped, Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
+def _same_org_fk(column: str, target: str, ondelete: str = "CASCADE") -> ForeignKeyConstraint:
+    """`(column, org_id) -> target(id, org_id)`: links can only point at the same org's rows."""
+    return ForeignKeyConstraint(
+        [column, "org_id"], [f"{target}.id", f"{target}.org_id"], ondelete=ondelete
+    )
+
+
+def _same_org_fk_set_null(column: str, target: str) -> ForeignKeyConstraint:
+    # Postgres 15+ column list: plain SET NULL would also null org_id (NOT NULL) and fail.
+    return _same_org_fk(column, target, ondelete=f"SET NULL ({column})")
+
+
 class Asset(TenantScoped, Timestamps, Base):
     """Anything an org owns or we discovered for it: domain, subdomain, IP, URL (repo/binary later).
 
@@ -115,6 +127,21 @@ class Asset(TenantScoped, Timestamps, Base):
         CheckConstraint("parent_id IS NULL OR parent_id <> id", name="no_self_parent"),
         CheckConstraint("source = 'discovered' OR parent_id IS NULL", name="user_asset_is_root"),
         CheckConstraint("is_active = (deactivated_at IS NULL)", name="deactivated_at_matches"),
+        # Which scan discovered/deactivated it, so a scan's diff counts only its own changes
+        # even when scans overlap (ADR 0027). NULL for user roots and pre-#20 rows. `use_alter`
+        # because `scans` already points back at `assets`: the cycle must not block table order.
+        ForeignKeyConstraint(
+            ["first_seen_scan_id", "org_id"],
+            ["scans.id", "scans.org_id"],
+            ondelete="SET NULL (first_seen_scan_id)",
+            use_alter=True,
+        ),
+        ForeignKeyConstraint(
+            ["deactivated_by_scan_id", "org_id"],
+            ["scans.id", "scans.org_id"],
+            ondelete="SET NULL (deactivated_by_scan_id)",
+            use_alter=True,
+        ),
     )
 
     type: Mapped[AssetType] = mapped_column(_str_enum(AssetType, "asset_type"))
@@ -126,9 +153,11 @@ class Asset(TenantScoped, Timestamps, Base):
     )
     first_seen: Mapped[datetime]
     last_seen: Mapped[datetime]
+    first_seen_scan_id: Mapped[UUID | None] = mapped_column(index=True)
     is_active: Mapped[bool] = mapped_column(server_default=text("true"))
     # When a scan found it gone; only sightings after this reactivate it.
     deactivated_at: Mapped[datetime | None]
+    deactivated_by_scan_id: Mapped[UUID | None] = mapped_column(index=True)
     details: Mapped[dict[str, Any]] = mapped_column(
         JSONB, default=dict, server_default=text("'{}'::jsonb")
     )
@@ -154,18 +183,6 @@ class AssetRelation(TenantScoped, Base):
     kind: Mapped[RelationKind] = mapped_column(_str_enum(RelationKind, "relation_kind"))
     first_seen: Mapped[datetime]
     last_seen: Mapped[datetime]
-
-
-def _same_org_fk(column: str, target: str, ondelete: str = "CASCADE") -> ForeignKeyConstraint:
-    """`(column, org_id) -> target(id, org_id)`: links can only point at the same org's rows."""
-    return ForeignKeyConstraint(
-        [column, "org_id"], [f"{target}.id", f"{target}.org_id"], ondelete=ondelete
-    )
-
-
-def _same_org_fk_set_null(column: str, target: str) -> ForeignKeyConstraint:
-    # Postgres 15+ column list: plain SET NULL would also null org_id (NOT NULL) and fail.
-    return _same_org_fk(column, target, ondelete=f"SET NULL ({column})")
 
 
 class Verification(TenantScoped, Timestamps, Base):
@@ -279,6 +296,13 @@ class Finding(TenantScoped, Timestamps, Base):
     rule_id: Mapped[str] = mapped_column(String(MAX_RULE_ID_LENGTH))
     fingerprint: Mapped[str] = mapped_column(String(FINGERPRINT_LENGTH))
     location: Mapped[str] = mapped_column(String(MAX_LOCATION_LENGTH), server_default="")
+    # The scanner that last observed it (a `Job.scanner` name). NULL for rows written before
+    # #20 or by a caller that didn't name one: those are never auto-fixed (ADR 0027).
+    scanner: Mapped[str | None] = mapped_column(String(100))
+    # SHA-256 of the last observed evidence set, empty set included, so a material change is an
+    # O(1) comparison instead of loading the finding's evidence history (ADR 0027). NULL means
+    # the baseline predates this column: the next observation records it without reopening.
+    evidence_digest: Mapped[str | None] = mapped_column(String(FINGERPRINT_LENGTH))
     title: Mapped[str] = mapped_column(String(300))
     description: Mapped[str] = mapped_column(Text)
     severity: Mapped[Severity] = mapped_column(_str_enum(Severity, "severity"))
@@ -288,12 +312,33 @@ class Finding(TenantScoped, Timestamps, Base):
     )
     first_seen: Mapped[datetime]
     last_seen: Mapped[datetime]
+    # The fixing scan's start (ADR 0027), not wall-clock time: it orders fixes against scans.
     fixed_at: Mapped[datetime | None]
     remediation: Mapped[str] = mapped_column(Text, server_default="")
     references: Mapped[list[str]] = mapped_column(
         ARRAY(String(MAX_URL_LENGTH)), default=list, server_default=text("'{}'")
     )
     ai_triage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class FindingObservation(TenantScoped, Base):
+    """One finding seen by one scan: the per-scan set `Scan.stats` and the diff work from.
+
+    `Finding.last_seen_scan_id` follows the latest observation, which overlapping scans can
+    move; this row belongs to the scan that observed the finding, so a scan's own totals and
+    fix/regress decisions never depend on that mutable pointer (ADR 0027).
+    """
+
+    __tablename__ = "finding_observations"
+    __table_args__ = (
+        UniqueConstraint("org_id", "scan_id", "finding_id"),
+        _same_org_fk("scan_id", "scans"),
+        _same_org_fk("finding_id", "findings"),
+    )
+
+    scan_id: Mapped[UUID] = mapped_column(index=True)
+    finding_id: Mapped[UUID] = mapped_column(index=True)
+    severity: Mapped[Severity] = mapped_column(_str_enum(Severity, "severity"))
 
 
 class Evidence(TenantScoped, Base):

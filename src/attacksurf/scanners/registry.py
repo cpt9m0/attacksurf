@@ -31,6 +31,9 @@ class ScannerRegistry:
         # inconsistent metadata at registration: the gate would refuse every run anyway.
         if scanner.grant.http is HttpPermission.TARGET and not scanner.requires_verification:
             raise ValueError("a target HTTP grant requires requires_verification")
+        # A zone transfer is an active check too: it asks a live nameserver to hand over a zone.
+        if scanner.grant.zone_transfer and not scanner.requires_verification:
+            raise ValueError("a zone-transfer grant requires requires_verification")
         self._scanners[scanner.name] = scanner
         return scanner
 

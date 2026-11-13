@@ -18,7 +18,8 @@ Read `docs/architecture.md` (scan pipeline section) first.
   need `ScannerGrant(sandbox_analyzers=...)` (ADR 0016).
 - Passive vs active: if the check sends anything to the target beyond normal public lookups
   (zone transfer, port scan, probing payloads), it is **active** and must declare
-  `requires_verification = True` and `ScannerGrant(http=HttpPermission.TARGET)`.
+  `requires_verification = True` plus the matching grant (`ScannerGrant(http=HttpPermission.TARGET)`
+  for HTTP, `ScannerGrant(zone_transfer=True)` for an AXFR).
 - Never exploit, brute force, or claim resources (e.g. takeover checks only *detect*).
 
 ## Steps

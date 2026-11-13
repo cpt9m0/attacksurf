@@ -101,13 +101,15 @@ sync" rule below is satisfied**. Do not claim done without running them.
    `observed_at` marker so stale observations cannot replace newer ones, and only discovered
    assets can be deactivated (ADR 0025).
 6. **All outbound network traffic from scanners goes through ScopeGuard and its adapters**
-   (`infra/scope_guard.py`; ADR 0013). Scanners use `ctx.runtime.dns` / `ctx.runtime.http` only,
-   never raw `requests`/`httpx`/sockets/dnspython (a test enforces it), and declare a
-   `ScannerGrant` (public data services, or the target for verified active checks). Active
-   checks require verified ownership. Flaky public sources may use `ctx.runtime.cache` (namespaced,
-   bounded, fail-open; public source data only, never findings/evidence/tenant data) and raise
-   `TransientJobError` for Celery's retry/backoff; wildcard zones are returned in
-   `ScanOutput.wildcard_zones` and persisted as `Asset.details["wildcard"] = true`.
+   (`infra/scope_guard.py`; ADRs 0013/0026). Scanners use `ctx.runtime.dns` / `ctx.runtime.http`
+   and the grant-gated `authoritative`, `zone_transfer` and `rdap` adapters only, never raw
+   `requests`/`httpx`/sockets/dnspython (a test enforces it), and declare a `ScannerGrant`
+   (public data services, the target for verified active checks, or the capability flags).
+   Active checks (target HTTP, zone transfer) require verified ownership. Flaky public sources
+   may use `ctx.runtime.cache` (namespaced, bounded, fail-open; public source data only, never
+   findings/evidence/tenant data) and raise `TransientJobError` for Celery's retry/backoff;
+   wildcard zones are returned in `ScanOutput.wildcard_zones` and persisted as
+   `Asset.details["wildcard"] = true`.
 7. **LLMs judge, scanners detect.** AI never invents findings, never auto-closes them, and only
    sees normalized findings. All LLM output is schema-validated (pydantic).
 8. **Scan-derived content is untrusted:** escape in templates (never `|safe` on it), and wrap it as

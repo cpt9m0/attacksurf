@@ -48,6 +48,15 @@ class StubDns:
         self.calls.extend((query.record_type.value, query.name) for query in queries)
         return tuple(DnsLookup(query, self.answers.get(query.name, ())) for query in queries)
 
+    def lookup_records(self, name: str, rdtype: str) -> tuple[str, tuple[str, ...]]:
+        self.calls.append((rdtype, name))
+        return name, self.answers.get(name, ())
+
+    def lookup_records_checking_disabled(
+        self, name: str, rdtype: str
+    ) -> tuple[str, tuple[str, ...]]:
+        return self.lookup_records(name, rdtype)
+
 
 class StubHttp:
     def __init__(self) -> None:
@@ -296,6 +305,14 @@ class StaticAnswers:
     def lookup_many(self, queries: Sequence[DnsQuery]) -> tuple[DnsLookup, ...]:
         return tuple(DnsLookup(query, self.answers.get(query.name, ())) for query in queries)
 
+    def lookup_records(self, name: str, rdtype: str) -> tuple[str, tuple[str, ...]]:
+        return name, self.answers.get(name, ())
+
+    def lookup_records_checking_disabled(
+        self, name: str, rdtype: str
+    ) -> tuple[str, tuple[str, ...]]:
+        return self.lookup_records(name, rdtype)
+
 
 def test_dns_only_grant_denies_http_entirely() -> None:
     scope, _ = make_guard()
@@ -539,3 +556,81 @@ def test_granted_scanner_still_fails_closed_when_no_runner_is_wired() -> None:
 
     with pytest.raises(SandboxError, match="not configured"):
         runtime.sandbox.run("fixture.echo", uuid4())
+
+
+# --- Authoritative DNS, RDAP and zone-transfer capabilities (#19) ---------------------------
+
+
+def test_authoritative_capability_is_only_wired_when_granted() -> None:
+    scope, _ = make_guard()
+    runtime = scope.check(context(), target(), scanner())
+
+    with pytest.raises(ScopePolicyError, match="authoritative"):
+        runtime.authoritative.query("acme.com", DnsRecordType.SOA)
+
+
+def test_authoritative_queries_are_restricted_to_the_target() -> None:
+    scope, _ = make_guard()
+    granted = scanner(grant=ScannerGrant(authoritative_dns=True, dns_lookups=3))
+    runtime = scope.check(context(), target(), granted)
+
+    with pytest.raises(ScopePolicyError, match="target's zone"):
+        runtime.authoritative.query("other.com", DnsRecordType.SOA)
+    answers = runtime.authoritative.query("acme.com", DnsRecordType.SOA)
+    assert answers.zone == "acme.com"
+
+
+def test_authoritative_grant_needs_a_dns_budget() -> None:
+    busy = scanner(grant=ScannerGrant(authoritative_dns=True, dns_lookups=2))
+    with pytest.raises(ScopePolicyError, match="DNS lookup"):
+        make_guard()[0].check(context(), target(), busy)
+
+
+def test_zone_transfer_requires_ownership_even_without_the_plugin_flag() -> None:
+    active = scanner(
+        requires_verification=False,
+        grant=ScannerGrant(zone_transfer=True, dns_lookups=3),
+    )
+    with pytest.raises(ScopeError, match="verified"):
+        make_guard()[0].check(context(), target(), active)
+
+
+def test_zone_transfer_capability_is_wired_and_restricted() -> None:
+    scope = verify_all(make_guard()[0])
+    granted = scanner(grant=ScannerGrant(zone_transfer=True, dns_lookups=3))
+    runtime = scope.check(context(), target(), granted)
+
+    with pytest.raises(ScopePolicyError, match="target's zone"):
+        runtime.zone_transfer.attempt("other.com")
+    assert runtime.zone_transfer.attempt("acme.com") == ()
+
+
+def test_zone_transfer_grant_needs_a_dns_budget() -> None:
+    busy = scanner(grant=ScannerGrant(zone_transfer=True, dns_lookups=2))
+    with pytest.raises(ScopePolicyError, match="DNS lookup"):
+        verify_all(make_guard()[0]).check(context(), target(), busy)
+
+
+def test_rdap_capability_is_only_wired_when_granted() -> None:
+    scope, _ = make_guard()
+    runtime = scope.check(context(), target(), scanner())
+
+    with pytest.raises(ScopePolicyError, match="RDAP"):
+        runtime.rdap.lookup("acme.com")
+
+
+def test_rdap_lookups_are_restricted_to_the_target_or_its_registrable_domain() -> None:
+    scope, _ = make_guard()
+    granted = scanner(grant=ScannerGrant(rdap=True, dns_lookups=2))
+    runtime = scope.check(context(), target(), granted)
+
+    with pytest.raises(ScopePolicyError, match="registration"):
+        runtime.rdap.lookup("other.com")
+    # The stub client answers with an empty JSON array, which is not a bootstrap registry.
+    assert runtime.rdap.lookup("acme.com") is None
+
+
+def test_rdap_grant_needs_a_dns_budget() -> None:
+    busy = scanner(grant=ScannerGrant(rdap=True, dns_lookups=1))
+    with pytest.raises(ScopePolicyError, match="DNS lookup"):
+        make_guard()[0].check(context(), target(), busy)
