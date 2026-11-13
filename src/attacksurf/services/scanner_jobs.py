@@ -94,13 +94,14 @@ def run_check(
         jobs.mark_job_skipped(session, org_id, job_id, "Scan is no longer running.")
         return
     try:
-        created = persist_scan_output(
+        produced = persist_scan_output(
             session,
             scan,
             asset_id=asset_id,
             output=output,
             catalog=catalog,
             discovered_limit=profile.max_discovered_assets if profile else None,
+            scanner=job.scanner,
         )
     except (AssetError, ValueError, LookupError) as exc:
         session.rollback()
@@ -110,7 +111,7 @@ def run_check(
         job.error = None
         job.finished_at = func.now()
         session.commit()  # data + terminal job state are atomic on redelivery
-        for event in created:
+        for event in produced:
             events.publish(event)
 
 

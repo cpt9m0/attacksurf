@@ -10,7 +10,8 @@ from sqlalchemy import Engine, delete, select
 from sqlalchemy.orm import Session
 
 from attacksurf.domain.assets import AssetNotFound, AssetSource, AssetType, RelationKind
-from attacksurf.domain.findings import FindingStatus, Severity
+from attacksurf.domain.events import FindingReopened
+from attacksurf.domain.findings import Confidence, FindingStatus, Severity
 from attacksurf.domain.rules import Rule
 from attacksurf.domain.scanners import (
     AssetObservation,
@@ -71,9 +72,172 @@ def test_persist_preserves_user_states(db_session: Session, catalog: dict[str, R
     finding.status = FindingStatus.ACCEPTED_RISK
     db_session.flush()
 
-    persist_scan_output(db_session, scan, scan.root_asset_id, output, catalog=catalog)
+    events = persist_scan_output(db_session, scan, scan.root_asset_id, output, catalog=catalog)
 
     assert finding.status == FindingStatus.ACCEPTED_RISK
+    assert events == []
+
+
+def _later_scan(session: Session, first: Scan, *, hours: int = 1) -> Scan:
+    later = Scan(
+        org_id=first.org_id,
+        root_asset_id=first.root_asset_id,
+        profile="fixture",
+        status=ScanStatus.RUNNING,
+        triggered_by=ScanTrigger.USER,
+        started_at=(first.started_at or first.created_at) + timedelta(hours=hours),
+    )
+    session.add(later)
+    session.flush()
+    return later
+
+
+def test_persist_stamps_and_updates_the_observing_scanner(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    output = ScanOutput(findings=(RawFinding(rule_id=RULE.id),))
+
+    persist_scan_output(
+        db_session, scan, scan.root_asset_id, output, catalog=catalog, scanner="dns.email"
+    )
+    finding = db_session.scalars(scoped(Finding, scan.org_id)).one()
+    assert finding.scanner == "dns.email"
+
+    later = _later_scan(db_session, scan)
+    persist_scan_output(
+        db_session, later, scan.root_asset_id, output, catalog=catalog, scanner="dns.other"
+    )
+
+    assert finding.scanner == "dns.other"
+
+
+def test_persist_does_not_erase_known_scanner_provenance(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    output = ScanOutput(findings=(RawFinding(rule_id=RULE.id),))
+    persist_scan_output(
+        db_session, scan, scan.root_asset_id, output, catalog=catalog, scanner="dns.email"
+    )
+
+    persist_scan_output(db_session, scan, scan.root_asset_id, output, catalog=catalog)
+
+    assert db_session.scalars(scoped(Finding, scan.org_id)).one().scanner == "dns.email"
+
+
+def test_persist_reopens_a_suppressed_finding_when_evidence_changes(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    first = ScanOutput(
+        findings=(RawFinding(rule_id=RULE.id, evidence=(RawEvidence(data={"record": "v1"}),)),)
+    )
+    persist_scan_output(db_session, scan, scan.root_asset_id, first, catalog=catalog)
+    finding = db_session.scalars(scoped(Finding, scan.org_id)).one()
+    finding.status = FindingStatus.ACCEPTED_RISK
+    db_session.flush()
+    changed = ScanOutput(
+        findings=(RawFinding(rule_id=RULE.id, evidence=(RawEvidence(data={"record": "v2"}),)),)
+    )
+
+    events = persist_scan_output(
+        db_session, _later_scan(db_session, scan), scan.root_asset_id, changed, catalog=catalog
+    )
+
+    assert finding.status is FindingStatus.OPEN
+    assert [type(event) for event in events] == [FindingReopened]
+
+
+@pytest.mark.parametrize("change", ["severity", "confidence"])
+def test_persist_reopens_a_suppressed_finding_when_its_assessment_changes(
+    db_session: Session, catalog: dict[str, Rule], change: str
+) -> None:
+    scan = make_scan(db_session)
+    first = ScanOutput(
+        findings=(
+            RawFinding(rule_id=RULE.id, severity=Severity.MEDIUM, confidence=Confidence.HIGH),
+        )
+    )
+    persist_scan_output(db_session, scan, scan.root_asset_id, first, catalog=catalog)
+    finding = db_session.scalars(scoped(Finding, scan.org_id)).one()
+    finding.status = FindingStatus.FALSE_POSITIVE
+    db_session.flush()
+    changed = ScanOutput(
+        findings=(
+            RawFinding(
+                rule_id=RULE.id,
+                severity=Severity.HIGH if change == "severity" else Severity.MEDIUM,
+                confidence=Confidence.LOW if change == "confidence" else Confidence.HIGH,
+            ),
+        )
+    )
+
+    events = persist_scan_output(
+        db_session, _later_scan(db_session, scan), scan.root_asset_id, changed, catalog=catalog
+    )
+
+    assert finding.status is FindingStatus.OPEN
+    assert [type(event) for event in events] == [FindingReopened]
+
+
+def test_persist_ignores_evidence_order_for_material_change(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    one = RawEvidence(data={"record": "a"})
+    two = RawEvidence(data={"record": "b"})
+    first = ScanOutput(findings=(RawFinding(rule_id=RULE.id, evidence=(one, two)),))
+    persist_scan_output(db_session, scan, scan.root_asset_id, first, catalog=catalog)
+    finding = db_session.scalars(scoped(Finding, scan.org_id)).one()
+    finding.status = FindingStatus.ACCEPTED_RISK
+    db_session.flush()
+    reordered = ScanOutput(findings=(RawFinding(rule_id=RULE.id, evidence=(two, one)),))
+
+    events = persist_scan_output(
+        db_session, _later_scan(db_session, scan), scan.root_asset_id, reordered, catalog=catalog
+    )
+
+    assert finding.status is FindingStatus.ACCEPTED_RISK
+    assert events == []
+
+
+def test_persist_replay_does_not_reopen_twice(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    first = ScanOutput(findings=(RawFinding(rule_id=RULE.id),))
+    persist_scan_output(db_session, scan, scan.root_asset_id, first, catalog=catalog)
+    finding = db_session.scalars(scoped(Finding, scan.org_id)).one()
+    finding.status = FindingStatus.ACCEPTED_RISK
+    db_session.flush()
+    changed = ScanOutput(
+        findings=(RawFinding(rule_id=RULE.id, evidence=(RawEvidence(data={"x": 1}),)),)
+    )
+    later = _later_scan(db_session, scan)
+    persist_scan_output(db_session, later, scan.root_asset_id, changed, catalog=catalog)
+
+    events = persist_scan_output(db_session, later, scan.root_asset_id, changed, catalog=catalog)
+
+    assert finding.status is FindingStatus.OPEN
+    assert events == []
+
+
+def test_persist_does_not_reopen_an_open_finding(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    output = ScanOutput(findings=(RawFinding(rule_id=RULE.id),))
+    persist_scan_output(db_session, scan, scan.root_asset_id, output, catalog=catalog)
+    changed = ScanOutput(
+        findings=(RawFinding(rule_id=RULE.id, evidence=(RawEvidence(data={"x": 1}),)),)
+    )
+
+    events = persist_scan_output(
+        db_session, _later_scan(db_session, scan), scan.root_asset_id, changed, catalog=catalog
+    )
+
+    assert events == []
 
 
 def test_persist_rejects_references_not_in_the_output_or_input(
