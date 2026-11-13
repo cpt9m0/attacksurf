@@ -5,31 +5,31 @@
 **Updated:** 2026-11-13 · **Branch:** `19-dns-hygiene-checks` · **Issue:** #19 (DNS hygiene: DNSSEC, NS/MX, CAA, RDAP expiry, AXFR)
 
 ## Status
-#19 is implemented and verified on the branch; the commits are ready to push as a draft PR with
-`Closes #19`. Local checks: ruff check/format, lint-imports (6 kept), pyright, pytest 1858 passed /
-19 skipped, coverage 95.14%.
+PR #165 (`feat(scanners): add DNS hygiene checks (#19)`, `Closes #19`) is open, mergeable and
+green: CI (lint, compose, secrets, test 3.12/3.13/3.15, web-e2e, pr-title) passes and the Codex
+review passed on `eaee255` ("Didn't find any major issues"). Local checks: ruff check/format,
+lint-imports (6 kept), pyright, pytest 1864 passed / 19 skipped, coverage above the 80% gate.
 
 ## Last task
-- Six new check-only plugins in the `dns_passive` profile: `dns.dnssec`, `dns.ns`, `dns.mx`,
-  `dns.caa`, `dns.whois`, `dns.axfr` (11 new rules), all `DOMAIN`-only; the zone-level checks run
+- Implemented #19: six check-only plugins in `dns_passive` (`dns.dnssec`, `dns.ns`, `dns.mx`,
+  `dns.caa`, `dns.whois`, `dns.axfr`; 11 rules), all `DOMAIN`-only; the zone-level checks run
   only when the asset is itself a zone apex.
-- New grant capabilities `authoritative_dns`, `rdap`, `zone_transfer` (ADR 0026). ScopeGuard
-  builds grant-gated adapters: `AuthoritativeLookup` (owner-checked zone discovery, validated
-  nameserver addresses, ≤3 read-only SOA/DNSKEY probes, one AXFR per server when the name owns
-  NS), and `RdapClient` (IANA bootstrap, https-only, target/registrable domain only, 24 h cache
-  of trimmed public data).
-- DNSSEC verifies the DS↔DNSKEY linkage (key tag/algorithm/digest, SHA-1/256/384), not RRSIG
-  signatures. AXFR is active: the registry and the gate require verification for
-  `zone_transfer`, and only the first message's record count is kept.
+- New grant capabilities `authoritative_dns`, `rdap`, `zone_transfer` (ADR 0026), with grant-gated
+  `AuthoritativeLookup` (owner-checked zone discovery, validated nameserver addresses, read-only
+  SOA/DNSKEY probes, one AXFR per server when the name owns NS) and `RdapClient` (IANA bootstrap,
+  https-only, target/registrable domain only, 24 h cache of trimmed public data).
+- Addressed the Codex review findings on #165: chunked DNSKEY presentation (`3fa1650`), CD
+  diagnostic zone discovery so a bogus zone still reveals its authorities (`db1caba`), every CAA
+  ancestor within the lookup budget (`d8a30e9`), and fallback MX evidence attributed to the name
+  that publishes the RRset (`eaee255`).
 - Tests: 6 scanner suites + RDAP/authoritative/gate/registry tests + RDAP fixtures; no live
   network.
 - Docs synced: ADR 0026, architecture, security, AGENTS rule 6, `add-scanner` skill, CHANGELOG.
   No migration, setting or dependency.
 
 ## Next step
-1. Commit (split: infra+grants, DNSSEC/NS, MX/CAA, RDAP, AXFR, profile wiring, docs), push, open
-   the draft PR titled `feat(scanners): add DNS hygiene checks (#19)`, confirm CI, merge.
-2. Then pick the next unblocked issue in epic #31 (check #21/#22 first; #20 dedupe follows).
+1. Merge PR #165 (squash; `Closes #19` closes the issue), then delete the branch.
+2. Pick the next unblocked issue in epic #31 (check #21/#22 first; #20 dedupe follows).
 
 ## Open threads
 - DNSSEC validates only the DS↔DNSKEY linkage; RRSIG signature validation is a follow-up.
