@@ -3,6 +3,7 @@
 import structlog
 from flask import Flask
 
+from attacksurf.ai.config import resolve_llm_config
 from attacksurf.config import Settings, get_settings
 from attacksurf.infra.logging import configure_logging, init_request_logging
 from attacksurf.scanners.dns import axfr as _dns_axfr  # noqa: F401
@@ -49,9 +50,15 @@ def create_app(settings: Settings | None = None) -> Flask:
     app.register_blueprint(health_bp)
     app.register_blueprint(api_v1_bp)
 
+    log = structlog.get_logger(__name__)
     if settings.secret_key_generated:
-        structlog.get_logger(__name__).warning(
+        log.warning(
             "no SECRET_KEY set; using an ephemeral key (sessions reset on restart)",
             env=settings.env,
+        )
+    if resolve_llm_config(None, settings) is None:
+        # Not an error: AI is optional. Said once at startup so a missing setting isn't silent.
+        log.warning(
+            "AI is off for orgs without their own key: set LLM_API_KEY and LLM_MODEL to enable it"
         )
     return app

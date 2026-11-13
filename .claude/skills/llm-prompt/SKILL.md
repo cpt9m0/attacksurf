@@ -23,7 +23,10 @@ description: Add or change an LLM-powered feature or prompt (triage, summaries, 
   retries the task.
 - `LLMUnavailable` makes Celery retry the whole task: one `complete()` call per task, or cache
   results per finding, so a retry never pays again for calls that already succeeded.
-- Every call records usage (`LLMUsage`) and respects the org's token budget.
+- Every call records usage with `services.llm_usage.record_llm_usage` (pass the `LLMResult`, or
+  the `LLMError` on failure: its `usage` holds what earlier attempts spent). On failure, commit
+  the usage row before re-raising, or it rolls back with the task. Respect the org's budget (#24).
+  A new model needs its list price in `ai/pricing.py`, or its cost stays unknown.
 
 ## Steps
 1. **Schema:** define the pydantic output model in `ai/schemas.py` with field descriptions

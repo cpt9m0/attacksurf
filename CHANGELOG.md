@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- LLM usage tracking: an `llm_usage` row per finished LLM call, failed ones included, with the
+  model, purpose, whose key paid, token counts, latency and a cost estimated from list prices
+  in `ai/pricing.py`. Prompts, replies, error messages and keys are never stored. The app warns
+  at startup when the instance key or model is missing, so AI being off isn't silent (#23).
 - Scan diffing and the finding lifecycle: a scan marks findings it no longer sees `fixed` only
   when their own scanner completed for that asset, a previously fixed finding observed again
   becomes `regressed`, suppressed (`accepted_risk`/`false_positive`) findings reopen only on

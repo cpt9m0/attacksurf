@@ -2,44 +2,56 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-13 · **Branch:** `20-finding-deduplication-scan-diffing` · **Issue:** #20 (Finding deduplication and scan diffing)
+**Updated:** 2026-11-13 · **Branch:** `23-llm-usage` · **Issue:** #23 (LLM providers)
 
 ## Status
-PR #167 (`feat(scanners): add finding deduplication and scan diffing`, `Closes #20`) is open,
-mergeable and green. Codex review passed on `29eb790` ("Didn't find any major issues") after
-three rounds; every review thread is resolved. Local checks: ruff check/format, lint-imports
-(6 kept), pyright, pytest 1911 passed / 19 skipped, coverage 95%.
+PR 4a (LLM usage tracking) is done on this branch and ready for a PR (`feat(ai): record llm
+usage (#23)`, `Refs #23`). `origin/main` (#19 DNS hygiene, #20 scan diffing) is merged in; #20
+took migration 0008, so this branch's migration is now `0009_add_llm_usage`. PR 4b (provider
+factory, closes #23) is the partner's, after PR 3 (OpenAI-compatible adapter).
 
 ## Last task
-- Implemented #20: `FindingStatus.REGRESSED`, `Finding.scanner` provenance, and material-change
-  reopening of suppressed findings (`FindingReopened`), all in migration 0008.
-- `finding_observations` (one row per scan+finding) makes `Scan.stats` and the fix/regress
-  decisions scan-scoped instead of depending on `last_seen_scan_id`;
-  `assets.first_seen_scan_id` / `deactivated_by_scan_id` do the same for the asset diff.
-- `services.scan_diff.diff_scan` (wired into `passive.diff`) fixes only findings whose scanner
-  completed for the asset, marks re-observations of fixed findings `regressed`, records
-  new/disappeared subdomains (a resolution verdict), writes `Scan.stats` and audits
-  `scan.diffed` in one replay-safe transaction.
-- `Finding.evidence_digest` (unordered DNS/RDAP collections normalized) drives material-change
-  detection; a NULL baseline is initialized without reopening.
-- Tests: 24 diff-service cases, 15 persistence cases, plus pipeline task, asset-view, DB
-  invariant and tenant-isolation coverage. Docs: ADR 0027, architecture, CHANGELOG.
+- `ai/pricing.py`: list prices in code (Muse Spark 1.3 and its contributor tier) and
+  `estimate_cost()`; unknown model or unreported usage gives None, never 0.
+- `LLMUsage` model + migration `0009_add_llm_usage` (rules as CHECKs, `(org_id, created_at)` index).
+- `services.llm_usage.record_llm_usage`: one row per finished call, failed ones included; it
+  doesn't commit.
+- `create_app` warns once when the instance key or model is missing (AI off).
+- Docs: architecture (data model, AI layer), security (what's stored per call), development,
+  the `llm-prompt` skill, CHANGELOG.
 
 ## Next step
-1. Merge PR #167 (squash; `Closes #20` closes the issue), then delete the branch.
-2. Pick the next unblocked issue in epic #31: #21 (scans UI, consumes `Scan.stats`) or #22.
+Open the PR for this branch. Right before pushing, check that `0009` is still the next free
+migration on `origin/main` (`git ls-tree --name-only origin/main
+src/attacksurf/infra/db/migrations/versions/`); if it's taken, renumber the file and its
+`revision`/`down_revision`. After #23: #21 (scans UI, consumes `Scan.stats`) or #22 in epic #31.
 
 ## Open threads
-- Concurrent scans of the same root can still both diff (#21 adds prevention); scan-scoped
-  observation rows and the chronology guards keep them from corrupting each other's stats.
-- Findings on deactivated assets are never auto-fixed (no scanner runs on them): intentional.
-- A fail-open scanner (RDAP outage) can make its findings look fixed while the upstream is down.
-- `Scan.stats` asset lists are capped at 1000 entries; `total` stays exact.
-- Zone-level findings on two roots in one zone are not deduplicated across assets (from #19).
+- Meta's list prices in `ai/pricing.py` came from third-party trackers; re-check them on
+  developer.meta.com before merging.
+- PR 4b must agree with PR 3 that `OpenAICompatProvider(config)` takes the config as its only
+  required argument.
+- #24 builds on this: the monthly instance-key cap sums `llm_usage` per org, and the usage page.
+- #84 PR 3c (`runner.py`, `server.py`, `__main__.py`) per issue #84's checklist.
+- From #20: concurrent scans of the same root can still both diff (#21 adds prevention);
+  findings on deactivated assets are never auto-fixed (intentional); a fail-open scanner (RDAP
+  outage) can make its findings look fixed while the upstream is down; `Scan.stats` asset lists
+  cap at 1000 entries (`total` stays exact); zone-level findings on two roots in one zone are
+  not deduplicated across assets (from #19).
 
 ## Notes for the next agent
-- `uv run` fails on the uv cache here (`/home/ubuntu/.cache`); use `.venv/bin/<tool>` directly.
-- Git hooks need caches redirected (`UV_CACHE_DIR`, `PRE_COMMIT_HOME`, `GOCACHE`, `GOPATH` under
-  /tmp) and the pre-push hook needs `TEST_DATABASE_URL` in the same command.
-- DB tests: `TEST_DATABASE_URL='postgresql+psycopg://attacksurf:attacksurf@127.0.0.1:5432/attacksurf_test'`
-  and `PATH="$PWD/.venv/bin:$PATH"` (the alembic CLI test shells out to `alembic`).
+- #25 callers: on a failed `complete()`, call `record_llm_usage(..., outcome=error)`, commit,
+  then re-raise, or the row rolls back with the task and the cap never counts it.
+- `tests/unit/sandbox_launcher/test_container.py` fails on Windows (53 tests): it treats
+  `/srv/...` as absolute, which `pathlib` on Windows doesn't. CI (Linux) passes; run the suite
+  with `--ignore=tests/unit/sandbox_launcher` locally.
+- `.github/scripts/pytest-hook.sh` ignores CLI args: pass paths through `PYTEST_ADDOPTS`.
+- Windows dev machine: Postgres on host port 5433 (git-excluded `compose.override.yaml`); if
+  Docker Desktop is down, start it, then `docker compose up -d --wait postgres`.
+- Sandboxed Linux runner (from #20): `uv run` fails on the uv cache (`/home/ubuntu/.cache`), so
+  use `.venv/bin/<tool>`; git hooks need `UV_CACHE_DIR`, `PRE_COMMIT_HOME`, `GOCACHE`, `GOPATH`
+  under /tmp, and DB tests need `TEST_DATABASE_URL` plus `PATH="$PWD/.venv/bin:$PATH"` (the
+  alembic CLI test shells out to `alembic`).
+- ADR and migration numbers move fast: check `origin/main` and open branches right before
+  pushing. ADR 0027 (finding lifecycle, #20) is the latest; migrations stop at 0008 on `main`.
+- The ruff format hook strips imports that aren't used yet: add imports with their first use.
