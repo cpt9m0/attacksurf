@@ -5,8 +5,10 @@
 **Updated:** 2026-11-13 · **Branch:** `20-finding-deduplication-scan-diffing` · **Issue:** #20 (Finding deduplication and scan diffing)
 
 ## Status
-Implementation complete; local checks green (ruff, format, lint-imports, pyright, pytest with
-coverage above the 80% gate). PR not opened yet.
+PR #167 (`feat(scanners): add finding deduplication and scan diffing`, `Closes #20`) is open,
+ready for review and mergeable: CI (lint, compose, secrets, test 3.12/3.13/3.15, web-e2e,
+pr-title) passes. Local checks: ruff check/format, lint-imports (6 kept), pyright, pytest 1898
+passed / 19 skipped, coverage 95.23%.
 
 ## Last task
 - Implemented #20: `FindingStatus.REGRESSED` (fixed findings observed again; `fixed_at`
@@ -24,9 +26,8 @@ coverage above the 80% gate). PR not opened yet.
 - Docs: ADR 0027, architecture, CHANGELOG.
 
 ## Next step
-1. Open the PR (`Closes #20`, title `feat(scanners): add finding deduplication and scan diffing`),
-   confirm CI green, merge (squash), delete the branch.
-2. Next unblocked issue in epic #31: #21 (scans UI, consumes `Scan.stats`) or #22.
+1. Merge PR #167 (squash; `Closes #20` closes the issue), then delete the branch.
+2. Pick the next unblocked issue in epic #31: #21 (scans UI, consumes `Scan.stats`) or #22.
 
 ## Open threads
 - Concurrent scans of the same root can still both diff (#21 adds prevention); conditional
