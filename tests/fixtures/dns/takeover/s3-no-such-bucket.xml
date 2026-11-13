@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message><BucketName>acme-assets</BucketName><RequestId>9EXAMPLE123</RequestId><HostId>examplehostid=</HostId></Error>

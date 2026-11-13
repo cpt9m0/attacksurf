@@ -10,6 +10,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   model, purpose, whose key paid, token counts, latency and a cost estimated from list prices
   in `ai/pricing.py`. Prompts, replies, error messages and keys are never stored. The app warns
   at startup when the instance key or model is missing, so AI being off isn't silent (#23).
+- Subdomain takeover checks (`dns.takeover`, `dns.takeover.http`): dangling CNAMEs to
+  known-claimable services that no longer resolve and NS delegations to nameservers that no
+  longer exist are flagged from DNS alone; on verified domains a single HTTP probe also
+  flags resolving services answering with their "unclaimed instance" signature. Reports
+  `dns.takeover.dangling_cname` / `dns.takeover.fingerprint_match` (high) and
+  `dns.takeover.dangling_ns` (critical) against a pinned subset of the can-i-take-over-xyz
+  fingerprint dataset (CC-BY-4.0); wired into the `dns_passive` profile checks (#18).
+- Email security check (`dns.email`): passive evaluation of SPF, DMARC, DKIM and MTA-STS
+  publication from TXT DNS records, reporting `dns.email.*` findings (missing/multiple/
+  permissive SPF, >10 SPF DNS lookups, missing/monitor-only/unreported/partial DMARC,
+  undiscovered DKIM selectors at low confidence, missing MTA-STS as info) with raw TXT
+  records as evidence; wired into the `dns_passive` profile checks (#17).
 - DNS resolution (`dns.resolve`): configurable public resolvers with async, bounded queries;
   A/AAAA/CNAME/MX/NS/TXT/CAA/SOA records stored in `Asset.details["dns"]`; IP assets with
   `resolves_to` edges and in-root `cname_to` chains; reverse DNS and optional offline ip2asn

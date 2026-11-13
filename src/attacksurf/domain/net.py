@@ -5,7 +5,7 @@ plugin can only reach what its declared permissions allow. The cache is process-
 target) and uses its own namespace and bounds.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
@@ -148,7 +148,7 @@ class SafeHttpClient(Protocol):
 class ScannerRuntime:
     """Run-scoped adapters handed to a plugin after the gate approved it."""
 
-    __slots__ = ("cache", "dns", "http", "ip_intel", "sandbox")
+    __slots__ = ("cache", "dns", "http", "ip_intel", "org_domain", "sandbox")
 
     def __init__(
         self,
@@ -157,12 +157,18 @@ class ScannerRuntime:
         sandbox: SandboxRunner | None = None,
         cache: ScanCache | None = None,
         ip_intel: IpIntel | None = None,
+        *,
+        org_domain: Callable[[str], str | None] | None = None,
     ) -> None:
         self.dns = dns
         self.http = http
         self.sandbox = sandbox or UnconfiguredSandboxRunner()
         self.cache = cache if cache is not None else NullCache()
         self.ip_intel = ip_intel or UnconfiguredIpIntel()
+        # Registrable (organizational) domain for a hostname, from the public suffix list;
+        # None when unconfigured or the name is off the list. Lets checks apply DMARC's
+        # organizational-domain fallback without importing the PSL themselves.
+        self.org_domain = org_domain
 
     def close(self) -> None:
         self.http.close()

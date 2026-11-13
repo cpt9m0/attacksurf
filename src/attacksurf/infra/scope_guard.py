@@ -105,6 +105,7 @@ class ScopeGuard(ScannerGate):
             sandbox,
             cache=self._cache,
             ip_intel=self._ip_intel,
+            org_domain=public_suffix.registrable,
         )
 
     def _check_target(self, asset: AssetRef, scanner: Scanner) -> None:

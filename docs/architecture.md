@@ -153,7 +153,7 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   import production plugin modules explicitly, so each process registers them once.
   `scanners/profiles.py`
   selects discovery/check plugins by name. `dns_passive` runs `dns.discovery.ct` for discovery
-  and `dns.resolve` for checks, with `max_discovered_assets=1000`; empty/unknown profiles are
+  and `dns.resolve`, `dns.email`, `dns.takeover` and `dns.takeover.http` for checks, with `max_discovered_assets=1000`; empty/unknown profiles are
   rejected. Profiles cannot route to
   the reserved `active`/`analysis` queues before those workers are implemented.
 - **CT discovery (#15, ADR 0022):** `dns.discovery.ct` queries crt.sh's JSON endpoint and falls
@@ -175,6 +175,36 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   subtree), so the last complete observation stays; NUL bytes in TXT values are stored as `\0`
   because PostgreSQL JSONB rejects U+0000. `Asset.details["observed_at"]` orders observations,
   so a delayed older result cannot replace newer details.
+- **Email security (#17):** `dns.email` is a check-only plugin on root domains (no assets,
+  relations or observations) that reads TXT records for the apex, `_dmarc`, `_mta-sts` and common
+  `<selector>._domainkey` names in one `lookup_many` round and evaluates SPF (missing,
+  multiple, permissive `+all`/`?all`, >10 reachable DNS-querying terms), DMARC (missing —
+  including multiple records, monitor-only, no reporting, partial `pct`), DKIM (no common
+  selector publishes a usable key; low confidence) and MTA-STS (missing, info). A scanned
+  name without a usable DMARC record falls back to its organizational domain's record
+  (`ScannerRuntime.org_domain`, fed by the ScopeGuard's public-suffix classifier), whose
+  `sp` policy then applies; an invalid `p`/`sp` is read as `p=none` when a valid reporting
+  URI exists, per RFC 7489. Evidence is the raw
+  TXT records as `dns_record` evidence. A failed query fails open (that check is skipped);
+  only an all-error run raises `TransientJobError`. No HTTP fetch: MTA-STS is the DNS
+  signal only, and parked-domain hardening (`v=spf1 -all` + `p=reject`) is covered by the
+  missing-record remediation text.
+- **Subdomain takeover (#18):** two check-only plugins split by the ScopeGuard gate, because a
+  `TARGET` HTTP grant makes the gate skip unverified assets before the plugin runs. `dns.takeover`
+  is passive and DNS-only on domains and subdomains: it follows the CNAME chain (≤5 hops) and
+  reports `dns.takeover.dangling_cname` (high) when the terminal name suffix-matches a
+  known-claimable service whose deprovisioned instances return NXDOMAIN, and
+  `dns.takeover.dangling_ns` (critical, medium confidence) per NS host whose own name is
+  NXDOMAIN. `dns.takeover.http` declares `requires_verification` with a `TARGET` grant on the
+  passive queue, so it runs only while the root's ownership proof is valid; when the terminal
+  CNAME matches a resolving service it makes one plain-HTTP GET of the asset (a deprovisioned
+  instance rarely has a valid cert for the victim name) and reports
+  `dns.takeover.fingerprint_match` (high) when the body or status carries the service's
+  signature, with the CNAME chain and a response snippet as evidence. Services are matched
+  against a pinned subset of the can-i-take-over-xyz dataset (CC-BY-4.0, vulnerable entries
+  with a CNAME pattern and a usable signal; `scanners/dns/fingerprints-NOTICE.md`), matched as
+  literal substrings, never regex. Neither plugin claims or registers anything; HTTP errors
+  are no-finding, and only an all-error DNS round raises `TransientJobError`.
 - `services.scans.start_scan` validates a tenant-owned, active domain root, audits and commits
   the scan/kickoff job, then enqueues `passive.discover`. Two waves use Celery chords:
   discovery on the root, then checks on the active root and its known direct children, filtered

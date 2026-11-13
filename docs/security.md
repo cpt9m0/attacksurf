@@ -12,6 +12,11 @@ their security data. Both make it a target. These rules apply to all code.
   it is due for re-check after 20 hours, revoked if the record is absent after its expiry, and
   expires for the gate after a day without a successful check (ADR 0015). Zone-discovery
   failures trigger retries rather than falling back to an unconfirmed parent zone.
+- **Takeover detection (#18)** only *observes*: dangling CNAME/NS candidates come from public
+  DNS answers, and the one confirmation probe is a single passive GET of the scanned asset
+  itself, classified as an active (`TARGET`) check so it too runs only on verified assets.
+  The response is matched against known "unclaimed instance" signatures; nothing is ever
+  registered, claimed or written to a third-party service.
 - **Out of scope, always:** exploitation, brute forcing, credential attacks, DoS, actually
   claiming takeover-able resources, and scanning of third-party targets.
 
@@ -80,6 +85,9 @@ that a name exists. `dns.resolve` records A/AAAA/CNAME/MX/NS/TXT/CAA/SOA in capp
 `Asset.details`, creates IP assets/edges, and emits the info finding
 `dns.records.private_ip_exposed` for private or special-purpose addresses; it never contacts
 those addresses. A missing ip2asn file disables ASN/organisation enrichment only.
+`dns.email` evaluates SPF/DMARC/DKIM/MTA-STS publication from TXT answers through the
+same guarded DNS adapter and DNS budget; it performs no HTTP fetch (MTA-STS is the DNS
+signal only) and emits findings with raw-record evidence, never new assets.
 
 Repository fetches (ADR 0017, not built yet) pass the same gate through `check_fetch` and are
 not scanners: `worker-fetch` reaches only allowlisted forges, using a streaming transport
