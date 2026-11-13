@@ -27,7 +27,11 @@ MTA_STS_NAME = f"_mta-sts.{ASSET}"
 
 STRICT_SPF = "v=spf1 include:_spf.example.net -all"
 STRICT_DMARC = "v=DMARC1; p=reject; rua=mailto:dmarc@acme.example"
-DKIM_KEY = "v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCiL7"
+DKIM_KEY = (
+    "v=DKIM1; k=rsa; "
+    "p=MEgCQQDBAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8"
+    "wMTIzNDU2Nzg5Ojs8PT4/AgMBAAE="
+)
 MTA_STS = "v=STSv1; id=20261113"
 
 
@@ -352,6 +356,34 @@ def test_dmarc_still_missing_when_organizational_domain_has_no_record() -> None:
     assert "dns.email.dmarc_missing" in found
 
 
+def test_dmarc_empty_reporting_uri_counts_as_no_reporting() -> None:
+    answers = healthy_answers()
+    answers[(DMARC_NAME, DnsRecordType.TXT)] = ("v=DMARC1; p=reject; rua=",)
+
+    assert set(by_rule(run(answers)[0])) == {"dns.email.dmarc_no_reporting"}
+
+
+def test_dmarc_multiple_records_do_not_inherit_the_org_policy() -> None:
+    # Several records at the name terminate discovery; the org fallback needs an empty set.
+    domain = "eng.acme.example"
+    answers: dict[tuple[str, DnsRecordType], tuple[str, ...] | DnsStatus] = {
+        (domain, DnsRecordType.TXT): (STRICT_SPF,),
+        (f"_dmarc.{domain}", DnsRecordType.TXT): (
+            "v=DMARC1; p=reject; rua=mailto:dmarc@acme.example",
+            "v=DMARC1; p=none",
+        ),
+        (f"_mta-sts.{domain}", DnsRecordType.TXT): (MTA_STS,),
+        (f"default._domainkey.{domain}", DnsRecordType.TXT): (DKIM_KEY,),
+        ("_dmarc.acme.example", DnsRecordType.TXT): (
+            "v=DMARC1; p=reject; rua=mailto:dmarc@acme.example",
+        ),
+    }
+
+    found = by_rule(run(answers, domain=domain, org_domain="acme.example")[0])
+
+    assert "dns.email.dmarc_missing" in found
+
+
 def test_dkim_any_selector_hit_clears_the_finding() -> None:
     answers = healthy_answers()
     del answers[(f"default._domainkey.{ASSET}", DnsRecordType.TXT)]
@@ -362,7 +394,27 @@ def test_dkim_any_selector_hit_clears_the_finding() -> None:
 
 def test_dkim_key_without_a_version_tag_still_counts() -> None:
     answers = healthy_answers()
-    answers[(f"default._domainkey.{ASSET}", DnsRecordType.TXT)] = ("k=rsa; p=MIGfMA0GCSqGSIb3",)
+    answers[(f"default._domainkey.{ASSET}", DnsRecordType.TXT)] = (
+        "k=rsa; p=MEgCQQDBAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkq"
+        "KywtLi8wMTIzNDU2Nzg5Ojs8PT4/AgMBAAE=",
+    )
+
+    assert "dns.email.dkim_not_found" not in by_rule(run(answers)[0])
+
+
+@pytest.mark.parametrize("key", ["not-a-key", "...", "aGVsbG8gd29ybGQ="])
+def test_dkim_malformed_public_key_counts_as_missing(key: str) -> None:
+    answers = healthy_answers()
+    answers[(f"default._domainkey.{ASSET}", DnsRecordType.TXT)] = (f"v=DKIM1; k=rsa; p={key}",)
+
+    assert "dns.email.dkim_not_found" in by_rule(run(answers)[0])
+
+
+def test_dkim_ed25519_key_counts_as_found() -> None:
+    answers = healthy_answers()
+    answers[(f"default._domainkey.{ASSET}", DnsRecordType.TXT)] = (
+        "v=DKIM1; k=ed25519; p=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    )
 
     assert "dns.email.dkim_not_found" not in by_rule(run(answers)[0])
 
@@ -386,6 +438,13 @@ def test_dkim_all_selector_errors_fail_open() -> None:
 
 def test_mta_sts_present_clears_the_info_finding() -> None:
     assert "dns.email.mta_sts_missing" not in by_rule(run(healthy_answers())[0])
+
+
+def test_mta_sts_two_distinct_records_count_as_missing() -> None:
+    answers = healthy_answers()
+    answers[(MTA_STS_NAME, DnsRecordType.TXT)] = ("v=STSv1; id=1", "v=STSv1; id=2")
+
+    assert "dns.email.mta_sts_missing" in by_rule(run(answers)[0])
 
 
 @pytest.mark.parametrize(

@@ -8,7 +8,10 @@
 #17 is **implemented, verified, and open as PR #163** (branch pushed; pre-push pyright + pytest
 passed). Codex review comments (5× P2: SPF `all`/`redirect` precedence and unreachable-term
 counting, MTA-STS `id` validation, DMARC invalid-`sp` fallback, DMARC organizational-domain
-inheritance) are addressed and pushed. Issue stays open until the PR merges (`Closes #17`).
+inheritance) are addressed and pushed. A second Codex round (4× P2: DMARC fallback only for
+an empty record set, valid reporting URI required, exactly one MTA-STS record, DKIM key
+encoding/type validation) is likewise addressed and pushed. Issue stays open until the PR
+merges (`Closes #17`).
 
 ## Last task
 - Added the `dns.email` passive scanner (root domains only): one `lookup_many` round reads TXT

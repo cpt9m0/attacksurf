@@ -19,6 +19,8 @@ retryable (`TransientJobError`). DKIM probing covers common selectors only, so i
 is low confidence.
 """
 
+import base64
+import binascii
 import re
 from collections.abc import Sequence
 
@@ -49,6 +51,12 @@ _SPF_PREFIX = "v=spf1"
 _DMARC_PREFIX = "v=dmarc1"
 _MTA_STS_PREFIX = "v=stsv1"
 _MTA_STS_ID = re.compile(r"[a-z0-9]{1,32}")
+_ED25519_KEY_BYTES = 32
+_DER_SEQUENCE_TAG = 0x30
+_DER_LONG_LENGTH = 0x80  # length byte at/above this encodes the byte count of the length
+_DER_LENGTH_MASK = 0x7F
+_DER_MAX_LENGTH_BYTES = 2
+_DER_MIN_BYTES = 2  # tag byte + at least one length byte
 _DMARC_FULL_PCT = 100
 
 
@@ -171,10 +179,20 @@ def _dmarc_findings(
     if dmarc_txt is None or dmarc_txt.status is DnsStatus.ERROR:
         return []
     records = _dmarc_records(_values(dmarc_txt))
+    if len(records) > 1:
+        # Several records at one name terminate discovery (RFC 7489 section 6.6.3): no
+        # policy applies, and the organizational fallback is only for an empty set.
+        return [
+            RawFinding(
+                rule_id="dns.email.dmarc_missing",
+                evidence=(_evidence("TXT", f"_dmarc.{domain}", _values(dmarc_txt)),),
+                remediation_context={"domain": domain},
+            )
+        ]
     if len(records) == 1:
         return _dmarc_record_findings(domain, f"_dmarc.{domain}", records[0], inherited=False)
-    # No usable record at the name itself (none, or several receivers must ignore): DMARC
-    # falls back to the organizational domain's record (RFC 7489 section 6.6.3).
+    # An empty record set falls back to the organizational domain's record (RFC 7489
+    # section 6.6.3).
     if org_domain is not None and org_dmarc_txt is not None:
         if org_dmarc_txt.status is DnsStatus.ERROR:
             return []  # the fallback could not be read; absence is not proven
@@ -229,7 +247,7 @@ def _dmarc_record_findings(
                 remediation_context={"domain": domain},
             )
         )
-    if "rua" not in tags and "ruf" not in tags:
+    if not _has_valid_reporting_uri(tags):
         findings.append(
             RawFinding(
                 rule_id="dns.email.dmarc_no_reporting",
@@ -290,7 +308,10 @@ def _mta_sts_finding(domain: str, lookup: DnsLookup | None) -> RawFinding | None
     if lookup is None or lookup.status is DnsStatus.ERROR:
         return None
     name = f"_mta-sts.{domain}"
-    if any(_mta_sts_valid(value) for value in _values(lookup)):
+    candidates = [value for value in _values(lookup) if _is_mta_sts_record(value)]
+    # Senders use the record only when exactly one carries the version prefix
+    # (RFC 8461 section 3.1); zero or several mean no discoverable policy.
+    if len(candidates) == 1 and _mta_sts_valid(candidates[0]):
         return None
     return RawFinding(
         rule_id="dns.email.mta_sts_missing",
@@ -379,25 +400,64 @@ def _tags(record: str) -> dict[str, str]:
 
 
 def _dkim_key_valid(value: str) -> bool:
-    """A selector TXT holding a usable public key (`v=DKIM1` with a non-empty `p=`)."""
+    """A selector TXT holding a usable public key (RFC 6376 sections 3.6.1, 6.1.2).
+
+    The `v=` tag is optional in key records, but when present it must name DKIM1. An
+    empty `p=` is a revoked key; otherwise `p=` must be well-formed base64 of key data
+    suitable for the declared key type (a DER RSAPublicKey for `rsa`, 32 raw bytes for
+    `ed25519`). Placeholder text is not a key.
+    """
     tags: dict[str, str] = {}
     for part in value.split(";"):
         name, separator, tag_value = part.partition("=")
         if separator:
             tags[name.strip().lower()] = tag_value.strip()
-    # An empty `p=` is a revoked key, not a usable one. The `v=` tag is optional in key
-    # records, but when present it must name DKIM1.
     version = tags.get("v")
-    return (version is None or version.lower() == "dkim1") and bool(tags.get("p", ""))
+    if version is not None and version.lower() != "dkim1":
+        return False
+    try:
+        decoded = base64.b64decode("".join(tags.get("p", "").split()), validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    if not decoded:
+        return False
+    key_type = tags.get("k", "rsa").lower()
+    if key_type == "ed25519":
+        return len(decoded) == _ED25519_KEY_BYTES
+    if key_type != "rsa":
+        return False
+    return _is_der_sequence(decoded)
+
+
+def _is_der_sequence(data: bytes) -> bool:
+    """True when `data` is exactly one DER SEQUENCE (tag + declared length + content)."""
+    if len(data) < _DER_MIN_BYTES or data[0] != _DER_SEQUENCE_TAG:
+        return False
+    if data[1] < _DER_LONG_LENGTH:
+        header, declared = 2, data[1]
+    else:
+        length_bytes = data[1] & _DER_LENGTH_MASK
+        if length_bytes == 0 or length_bytes > _DER_MAX_LENGTH_BYTES:
+            return False
+        header = 2 + length_bytes
+        if len(data) < header:
+            return False
+        declared = int.from_bytes(data[2:header], "big")
+    return header + declared == len(data)
+
+
+def _is_mta_sts_record(value: str) -> bool:
+    text = value.strip()
+    return text[: len(_MTA_STS_PREFIX)].lower() == _MTA_STS_PREFIX and (
+        len(text) == len(_MTA_STS_PREFIX) or text[len(_MTA_STS_PREFIX)] in " \t;"
+    )
 
 
 def _mta_sts_valid(value: str) -> bool:
     """A usable MTA-STS discovery record: `v=STSv1` plus a 1-32 char alphanumeric `id`
     (RFC 8461 section 3.1). The HTTPS policy itself is deliberately not fetched."""
     text = value.strip()
-    if text[: len(_MTA_STS_PREFIX)].lower() != _MTA_STS_PREFIX or (
-        len(text) != len(_MTA_STS_PREFIX) and text[len(_MTA_STS_PREFIX)] not in " \t;"
-    ):
+    if not _is_mta_sts_record(text):
         return False
     return _MTA_STS_ID.fullmatch(_tags(text).get("id", "")) is not None
 
