@@ -599,10 +599,16 @@ def _materially_changed(
     new_confidence: Confidence,
     new_digest: str,
 ) -> bool:
-    """Whether this observation differs from what the user suppressed (ADR 0027)."""
+    """Whether this observation differs from what the user suppressed (ADR 0027).
+
+    `digest=None` is a row migrated from before evidence digests existed: its baseline is
+    unknown, so the first observation only records the baseline and never reopens on its own.
+    """
     if severity != new_severity or confidence != new_confidence:
         return True
-    return new_digest != (digest or _EMPTY_EVIDENCE_DIGEST)
+    if digest is None:
+        return False
+    return new_digest != digest
 
 
 def _evidence_digest(evidence: tuple[RawEvidence, ...]) -> str:

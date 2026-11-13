@@ -168,6 +168,42 @@ def test_persist_treats_an_empty_evidence_batch_as_a_batch(
     assert [type(event) for event in events] == [FindingReopened]
 
 
+def test_persist_initializes_a_missing_evidence_baseline_without_reopening(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    """A row migrated without a digest must not lose a suppression on its first observation."""
+    scan = make_scan(db_session)
+    unchanged = ScanOutput(
+        findings=(RawFinding(rule_id=RULE.id, evidence=(RawEvidence(data={"v": 1}),)),)
+    )
+    persist_scan_output(db_session, scan, scan.root_asset_id, unchanged, catalog=catalog)
+    finding = db_session.scalars(scoped(Finding, scan.org_id)).one()
+    finding.evidence_digest = None  # as migration 0008 leaves a pre-#20 row
+    finding.status = FindingStatus.ACCEPTED_RISK
+    db_session.flush()
+    later = _later_scan(db_session, scan)
+
+    events = persist_scan_output(db_session, later, scan.root_asset_id, unchanged, catalog=catalog)
+
+    assert finding.status is FindingStatus.ACCEPTED_RISK
+    assert events == []
+    assert finding.evidence_digest is not None  # the baseline is recorded now
+
+    changed = ScanOutput(
+        findings=(RawFinding(rule_id=RULE.id, evidence=(RawEvidence(data={"v": 2}),)),)
+    )
+    events = persist_scan_output(
+        db_session,
+        _later_scan(db_session, later),
+        scan.root_asset_id,
+        changed,
+        catalog=catalog,
+    )
+
+    assert finding.status is FindingStatus.OPEN
+    assert [type(event) for event in events] == [FindingReopened]
+
+
 def test_persist_compares_only_the_latest_evidence_batch(
     db_session: Session, catalog: dict[str, Rule]
 ) -> None:

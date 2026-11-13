@@ -42,7 +42,9 @@ The pieces it left open:
   changed, or when the incoming evidence set (kind + canonical JSON, order-insensitive) differs
   from the last observed set. `Finding.evidence_digest` stores the SHA-256 of that set, with an
   empty batch as a batch of its own, so the comparison is O(1) and never loads evidence history;
-  `NULL` (a row from before this feature) is compared as the empty batch. The comparison happens
+  `NULL` (a row migrated from before this feature) has an unknown baseline: its first
+  observation records the baseline and never reopens on its own, so a migration cannot discard
+  a suppression. The comparison happens
   in persistence, before the upsert, and is applied as a conditional `CASE` that re-checks the
   current status and the observation order, so neither a concurrent user decision nor a delayed
   older scan can override the decision blindly. A reopen emits `FindingReopened`.

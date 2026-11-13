@@ -280,7 +280,8 @@ class Finding(TenantScoped, Timestamps, Base):
     # #20 or by a caller that didn't name one: those are never auto-fixed (ADR 0027).
     scanner: Mapped[str | None] = mapped_column(String(100))
     # SHA-256 of the last observed evidence set, empty set included, so a material change is an
-    # O(1) comparison instead of loading the finding's evidence history (ADR 0027).
+    # O(1) comparison instead of loading the finding's evidence history (ADR 0027). NULL means
+    # the baseline predates this column: the next observation records it without reopening.
     evidence_digest: Mapped[str | None] = mapped_column(String(FINGERPRINT_LENGTH))
     title: Mapped[str] = mapped_column(String(300))
     description: Mapped[str] = mapped_column(Text)
