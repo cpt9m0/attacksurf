@@ -92,6 +92,18 @@ class AuditLog(TenantScoped, Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
+def _same_org_fk(column: str, target: str, ondelete: str = "CASCADE") -> ForeignKeyConstraint:
+    """`(column, org_id) -> target(id, org_id)`: links can only point at the same org's rows."""
+    return ForeignKeyConstraint(
+        [column, "org_id"], [f"{target}.id", f"{target}.org_id"], ondelete=ondelete
+    )
+
+
+def _same_org_fk_set_null(column: str, target: str) -> ForeignKeyConstraint:
+    # Postgres 15+ column list: plain SET NULL would also null org_id (NOT NULL) and fail.
+    return _same_org_fk(column, target, ondelete=f"SET NULL ({column})")
+
+
 class Asset(TenantScoped, Timestamps, Base):
     """Anything an org owns or we discovered for it: domain, subdomain, IP, URL (repo/binary later).
 
@@ -112,6 +124,21 @@ class Asset(TenantScoped, Timestamps, Base):
         CheckConstraint("parent_id IS NULL OR parent_id <> id", name="no_self_parent"),
         CheckConstraint("source = 'discovered' OR parent_id IS NULL", name="user_asset_is_root"),
         CheckConstraint("is_active = (deactivated_at IS NULL)", name="deactivated_at_matches"),
+        # Which scan discovered/deactivated it, so a scan's diff counts only its own changes
+        # even when scans overlap (ADR 0027). NULL for user roots and pre-#20 rows. `use_alter`
+        # because `scans` already points back at `assets`: the cycle must not block table order.
+        ForeignKeyConstraint(
+            ["first_seen_scan_id", "org_id"],
+            ["scans.id", "scans.org_id"],
+            ondelete="SET NULL (first_seen_scan_id)",
+            use_alter=True,
+        ),
+        ForeignKeyConstraint(
+            ["deactivated_by_scan_id", "org_id"],
+            ["scans.id", "scans.org_id"],
+            ondelete="SET NULL (deactivated_by_scan_id)",
+            use_alter=True,
+        ),
     )
 
     type: Mapped[AssetType] = mapped_column(_str_enum(AssetType, "asset_type"))
@@ -123,9 +150,11 @@ class Asset(TenantScoped, Timestamps, Base):
     )
     first_seen: Mapped[datetime]
     last_seen: Mapped[datetime]
+    first_seen_scan_id: Mapped[UUID | None] = mapped_column(index=True)
     is_active: Mapped[bool] = mapped_column(server_default=text("true"))
     # When a scan found it gone; only sightings after this reactivate it.
     deactivated_at: Mapped[datetime | None]
+    deactivated_by_scan_id: Mapped[UUID | None] = mapped_column(index=True)
     details: Mapped[dict[str, Any]] = mapped_column(
         JSONB, default=dict, server_default=text("'{}'::jsonb")
     )
@@ -151,18 +180,6 @@ class AssetRelation(TenantScoped, Base):
     kind: Mapped[RelationKind] = mapped_column(_str_enum(RelationKind, "relation_kind"))
     first_seen: Mapped[datetime]
     last_seen: Mapped[datetime]
-
-
-def _same_org_fk(column: str, target: str, ondelete: str = "CASCADE") -> ForeignKeyConstraint:
-    """`(column, org_id) -> target(id, org_id)`: links can only point at the same org's rows."""
-    return ForeignKeyConstraint(
-        [column, "org_id"], [f"{target}.id", f"{target}.org_id"], ondelete=ondelete
-    )
-
-
-def _same_org_fk_set_null(column: str, target: str) -> ForeignKeyConstraint:
-    # Postgres 15+ column list: plain SET NULL would also null org_id (NOT NULL) and fail.
-    return _same_org_fk(column, target, ondelete=f"SET NULL ({column})")
 
 
 class Verification(TenantScoped, Timestamps, Base):

@@ -341,14 +341,15 @@ def test_diff_does_not_report_disappeared_ips(db_session: Session) -> None:
     tenant = make_scan(db_session)
     first = _scan(db_session, tenant, 0)
     _job(db_session, first, scanner=DISCOVERY, stage="discovery")
-    address = _child(db_session, tenant, "203.0.113.10", BASE, AssetType.IP)
-    gone = _child(db_session, tenant, "a.acme.example", BASE)
+    address = _child(db_session, tenant, first, "203.0.113.10", AssetType.IP)
+    gone = _child(db_session, tenant, first, "a.acme.example")
     _complete(db_session, first)
     second = _scan(db_session, tenant, 1)
     _job(db_session, second, scanner=DISCOVERY, stage="discovery")
     for asset in (address, gone):
         asset.is_active = False
-        asset.deactivated_at = BASE + timedelta(hours=1)
+        asset.deactivated_at = second.started_at
+        asset.deactivated_by_scan_id = second.id
     db_session.flush()
 
     _diff(db_session, second)
@@ -361,8 +362,8 @@ def test_diff_does_not_report_disappeared_ips(db_session: Session) -> None:
 def _child(
     session: Session,
     tenant: Scan,
+    scan: Scan,
     value: str,
-    seen: datetime,
     asset_type: AssetType = AssetType.SUBDOMAIN,
 ) -> Asset:
     return assets_service.record_asset(
@@ -372,26 +373,50 @@ def _child(
         value,
         source=AssetSource.DISCOVERED,
         parent_id=tenant.root_asset_id,
-        seen_at=seen,
+        seen_at=scan.started_at,
+        scan_id=scan.id,
     )
+
+
+def test_diff_ignores_asset_changes_another_overlapping_scan_made(
+    db_session: Session,
+) -> None:
+    """Asset changes are attributed by scan, not by timestamps an overlapping scan can cross."""
+    tenant = make_scan(db_session)
+    earlier = _scan(db_session, tenant, 1)
+    later = _scan(db_session, tenant, 2)
+    _child(db_session, tenant, later, "b.acme.example")  # discovered by `later`
+    gone = _child(db_session, tenant, earlier, "a.acme.example")
+    gone.is_active = False
+    gone.deactivated_at = later.started_at
+    gone.deactivated_by_scan_id = later.id  # deactivated by `later`
+    db_session.flush()
+
+    _diff(db_session, earlier)
+
+    # `a` is earlier's own discovery; `b` belongs to `later` and `a` was deactivated by `later`.
+    new = earlier.stats["assets"]["new"]
+    assert [item["value"] for item in new["assets"]] == ["a.acme.example"]
+    assert earlier.stats["assets"]["disappeared"] == {"total": 0, "assets": []}
 
 
 def test_diff_reports_new_and_disappeared_assets(db_session: Session) -> None:
     tenant = make_scan(db_session)
     first = _scan(db_session, tenant, 0)
     _job(db_session, first, scanner=DISCOVERY, stage="discovery")
-    gone = _child(db_session, tenant, "a.acme.example", BASE)
-    _child(db_session, tenant, "b.acme.example", BASE)
+    gone = _child(db_session, tenant, first, "a.acme.example")
+    _child(db_session, tenant, first, "b.acme.example")
     _complete(db_session, first)
 
     second = _scan(db_session, tenant, 1)
     _job(db_session, second, scanner=DISCOVERY, stage="discovery")
-    _child(db_session, tenant, "c.acme.example", BASE + timedelta(hours=1))
-    _child(db_session, tenant, "b.acme.example", BASE + timedelta(hours=1))
-    _child(db_session, tenant, "203.0.113.10", BASE + timedelta(hours=1), AssetType.IP)
+    _child(db_session, tenant, second, "c.acme.example")
+    _child(db_session, tenant, second, "b.acme.example")
+    _child(db_session, tenant, second, "203.0.113.10", AssetType.IP)
     # This scan's resolver found `a` no longer resolves; that is the disappearance verdict.
     gone.is_active = False
-    gone.deactivated_at = BASE + timedelta(hours=1)
+    gone.deactivated_at = second.started_at
+    gone.deactivated_by_scan_id = second.id
     db_session.flush()
     _diff(db_session, second)
 
@@ -410,7 +435,7 @@ def test_first_scan_reports_no_disappeared_assets(db_session: Session) -> None:
     tenant = make_scan(db_session)
     first = _scan(db_session, tenant, 0)
     _job(db_session, first, scanner=DISCOVERY, stage="discovery")
-    _child(db_session, tenant, "a.acme.example", BASE)
+    _child(db_session, tenant, first, "a.acme.example")
 
     _diff(db_session, first)
 
@@ -423,7 +448,7 @@ def test_diff_does_not_report_assets_that_still_resolve(db_session: Session) -> 
     tenant = make_scan(db_session)
     first = _scan(db_session, tenant, 0)
     _job(db_session, first, scanner=DISCOVERY, stage="discovery")
-    _child(db_session, tenant, "a.acme.example", BASE)
+    _child(db_session, tenant, first, "a.acme.example")
     _complete(db_session, first)
     second = _scan(db_session, tenant, 1)
     _job(db_session, second, scanner=DISCOVERY, stage="discovery")

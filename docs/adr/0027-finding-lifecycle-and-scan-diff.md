@@ -56,13 +56,14 @@ The pieces it left open:
   the fixing scan's start, not wall-clock time, and a finding only regresses when that fix
   predates the scanning scan: a delayed observation from an older scan can be persisted after a
   newer scan already fixed the finding, and must not undo it.
-- **Asset diff.** `new` = discovered assets (subdomains and IPs under the scan root) with
-  `first_seen` at or after this scan's start. `disappeared` = subdomains this scan deactivated
-  (`is_active = false`, `deactivated_at >= scan start`, first seen earlier): that is a
-  resolution verdict from ADR 0025, not an inference from absence, so it does not depend on how
-  complete CT discovery was. IP assets are excluded: a failed `dns.resolve` leaves their
-  `last_seen` stale without deactivating them, so they would look gone when nothing was
-  resolved (per-hostname resolution coverage is a follow-up).
+- **Asset diff.** `new` = discovered assets (subdomains and IPs under the scan root) whose
+  `first_seen_scan_id` is this scan. `disappeared` = subdomains whose `deactivated_by_scan_id`
+  is this scan and that an earlier scan first saw: that is a resolution verdict from ADR 0025,
+  not an inference from absence, so it does not depend on how complete CT discovery was. Both
+  are scan-scoped columns (set by persistence), so an overlapping scan's discoveries or
+  deactivations never enter this scan's diff. IP assets are excluded: a failed `dns.resolve`
+  leaves their `last_seen` stale without deactivating them, so they would look gone when
+  nothing was resolved (per-hostname resolution coverage is a follow-up).
 - **`Scan.stats` shape.** `findings.{new,fixed,regressed,total}` are `{total, by_severity}` with
   every severity zero-filled; `total` counts this scan's observation rows in any post-diff
   status (suppressed included), and `new` counts the ones whose finding this scan first saw.

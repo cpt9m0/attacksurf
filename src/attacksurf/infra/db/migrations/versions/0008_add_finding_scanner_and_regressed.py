@@ -25,6 +25,32 @@ def upgrade() -> None:
     op.add_column("findings", sa.Column("scanner", sa.String(length=100), nullable=True))
     # Nullable: NULL means "no evidence recorded yet", compared as the empty batch.
     op.add_column("findings", sa.Column("evidence_digest", sa.String(length=64), nullable=True))
+    # Which scan discovered/deactivated an asset, so overlapping scans cannot claim each
+    # other's asset changes (ADR 0027). NULL for user roots and pre-#20 rows.
+    op.add_column("assets", sa.Column("first_seen_scan_id", sa.Uuid(), nullable=True))
+    op.add_column("assets", sa.Column("deactivated_by_scan_id", sa.Uuid(), nullable=True))
+    op.create_foreign_key(
+        op.f("fk_assets_first_seen_scan_id_scans"),
+        "assets",
+        "scans",
+        ["first_seen_scan_id", "org_id"],
+        ["id", "org_id"],
+        ondelete="SET NULL (first_seen_scan_id)",
+    )
+    op.create_foreign_key(
+        op.f("fk_assets_deactivated_by_scan_id_scans"),
+        "assets",
+        "scans",
+        ["deactivated_by_scan_id", "org_id"],
+        ["id", "org_id"],
+        ondelete="SET NULL (deactivated_by_scan_id)",
+    )
+    op.create_index(
+        op.f("ix_assets_first_seen_scan_id"), "assets", ["first_seen_scan_id"], unique=False
+    )
+    op.create_index(
+        op.f("ix_assets_deactivated_by_scan_id"), "assets", ["deactivated_by_scan_id"], unique=False
+    )
     op.drop_constraint(op.f("ck_findings_finding_status"), "findings", type_="check")
     op.create_check_constraint(op.f("ck_findings_finding_status"), "findings", _STATUSES)
     op.create_table(
@@ -90,6 +116,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index(op.f("ix_assets_deactivated_by_scan_id"), table_name="assets")
+    op.drop_index(op.f("ix_assets_first_seen_scan_id"), table_name="assets")
+    op.drop_constraint(op.f("fk_assets_deactivated_by_scan_id_scans"), "assets", type_="foreignkey")
+    op.drop_constraint(op.f("fk_assets_first_seen_scan_id_scans"), "assets", type_="foreignkey")
+    op.drop_column("assets", "deactivated_by_scan_id")
+    op.drop_column("assets", "first_seen_scan_id")
     op.drop_table("finding_observations")
     # The old CHECK rejects `regressed`; a regressed finding is still an observed issue, so it
     # becomes `open`. Only the "came back" distinction is lost.

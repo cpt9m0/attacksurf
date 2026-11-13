@@ -882,6 +882,43 @@ def test_persist_deactivates_a_non_resolving_discovered_subdomain(
     assert (subdomain.is_active, subdomain.deactivated_at) == (False, seen)
 
 
+def test_persist_records_which_scan_discovered_and_deactivated_an_asset(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    ref = AssetRef(type=AssetType.SUBDOMAIN, value="a.acme.example")
+    persist_scan_output(
+        db_session,
+        scan,
+        scan.root_asset_id,
+        ScanOutput(assets=(ref,)),
+        catalog=catalog,
+        discovered_limit=10,
+    )
+    asset = db_session.scalars(scoped(Asset, scan.org_id).where(Asset.value == ref.value)).one()
+    assert asset.first_seen_scan_id == scan.id
+
+    later = _later_scan(db_session, scan)
+    persist_scan_output(
+        db_session,
+        later,
+        asset.id,
+        ScanOutput(observations=(AssetObservation(asset=ref, active=False),)),
+        catalog=catalog,
+    )
+    assert (asset.is_active, asset.deactivated_by_scan_id) == (False, later.id)
+
+    reactivated = _later_scan(db_session, later)
+    persist_scan_output(
+        db_session,
+        reactivated,
+        asset.id,
+        ScanOutput(observations=(AssetObservation(asset=ref, active=True),)),
+        catalog=catalog,
+    )
+    assert (asset.is_active, asset.deactivated_by_scan_id) == (True, None)
+
+
 def test_persist_never_deactivates_a_root_domain(
     db_session: Session, catalog: dict[str, Rule]
 ) -> None:

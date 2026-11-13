@@ -109,13 +109,20 @@ def persist_scan_output(
                 source=AssetSource.DISCOVERED,
                 parent_id=scan.root_asset_id,
                 seen_at=seen,
+                scan_id=scan.id,
             )
         written.add(key)
         refs[key] = row.id
         rows[key] = row
     asset = rows[input_ref]
     _apply_observations(
-        output, rows=rows, written=written, input_ref=input_ref, admitted=admitted, seen=seen
+        output,
+        rows=rows,
+        written=written,
+        input_ref=input_ref,
+        admitted=admitted,
+        seen=seen,
+        scan_id=scan.id,
     )
     # The cap may have dropped a discovered name; links to it are skipped, never guessed.
     for relation in output.relations:
@@ -265,22 +272,24 @@ def _apply_observations(
     input_ref: tuple[AssetType, str],
     admitted: set[tuple[AssetType, str]] | None,
     seen: datetime,
+    scan_id: UUID,
 ) -> None:
     for observation in output.observations:
         if not _usable(observation.asset, written, input_ref, admitted):
             continue
         row = rows.get((observation.asset.type, observation.asset.value))
         if row is not None:
-            _observe(row, observation, seen)
+            _observe(row, observation, seen, scan_id)
 
 
-def _observe(row: Asset, observation: AssetObservation, seen: datetime) -> None:
+def _observe(row: Asset, observation: AssetObservation, seen: datetime, scan_id: UUID) -> None:
     """Merge details and apply a lifecycle claim without moving state backwards.
 
     A scanner may deactivate only a discovered asset: roots are user-owned and stay active even
     when their DNS no longer resolves. Details are only replaced by an observation at least as
     new as the stored one, so a delayed older result cannot erase newer records; lifecycle has
-    its own monotonic checks below.
+    its own monotonic checks below. The scan that deactivated the asset is recorded, so an
+    overlapping scan's diff never claims it (ADR 0027).
     """
     if observation.details:
         observed_at = _details_time(row.details)
@@ -297,12 +306,14 @@ def _observe(row: Asset, observation: AssetObservation, seen: datetime) -> None:
         if row.deactivated_at is None or seen > row.deactivated_at:
             row.is_active = True
             row.deactivated_at = None
+            row.deactivated_by_scan_id = None
         return
     if row.parent_id is not None and seen >= row.last_seen:
         # Advance even when already inactive: a later negative observation must outrank a
         # delayed positive one that would otherwise pass the reactivation check.
         if row.deactivated_at is None or seen > row.deactivated_at:
             row.deactivated_at = seen
+            row.deactivated_by_scan_id = scan_id
         row.is_active = False
 
 

@@ -47,7 +47,7 @@ def diff_scan(session: Session, org_id: UUID, job_id: UUID, events: EventDispatc
     seen = scan.started_at or scan.created_at
     fixed = _fix(session, org_id, scan, seen)
     regressed = _regress(session, org_id, scan, seen)
-    assets = _asset_changes(session, org_id, scan, seen)
+    assets = _asset_changes(session, org_id, scan)
     findings = {
         "new": _severity_bucket(_new_severities(session, org_id, scan.id)),
         "fixed": _severity_bucket(severity for _, severity in fixed),
@@ -202,29 +202,28 @@ def _severity_bucket(severities: Iterable[Severity]) -> dict[str, object]:
     }
 
 
-def _asset_changes(
-    session: Session, org_id: UUID, scan: Scan, seen: datetime
-) -> dict[str, dict[str, object]]:
-    """Discovered assets new since this scan started, and subdomains it found gone.
+def _asset_changes(session: Session, org_id: UUID, scan: Scan) -> dict[str, dict[str, object]]:
+    """Discovered assets this scan discovered, and subdomains it found gone.
 
-    "Disappeared" is a resolution verdict, not an absence: the asset was deactivated during this
-    scan because a scanner resolved it to nothing (ADR 0025), so it never depends on how
-    complete the discovery sources were. IPs are excluded until per-hostname resolution coverage
-    exists; a failed resolve leaves their `last_seen` stale without deactivating them.
+    Both come from scan-scoped columns (`first_seen_scan_id`, `deactivated_by_scan_id`), so an
+    overlapping scan's discoveries or deactivations never enter this scan's diff. "Disappeared"
+    is a resolution verdict, not an absence: the asset was deactivated because a scanner
+    resolved it to nothing (ADR 0025), so it never depends on how complete discovery was. IPs
+    are excluded until per-hostname resolution coverage exists; a failed resolve leaves their
+    `last_seen` stale without deactivating them.
     """
     children = scoped(Asset, org_id).where(Asset.parent_id == scan.root_asset_id)
     columns = (Asset.id, Asset.type, Asset.value)
     new = session.execute(
-        children.where(Asset.first_seen >= seen)
+        children.where(Asset.first_seen_scan_id == scan.id)
         .with_only_columns(*columns)
         .order_by(Asset.type, Asset.value)
     ).all()
     disappeared = session.execute(
         children.where(
             Asset.type != AssetType.IP,
-            Asset.is_active.is_(False),
-            Asset.deactivated_at >= seen,
-            Asset.first_seen < seen,
+            Asset.deactivated_by_scan_id == scan.id,
+            Asset.first_seen_scan_id.is_distinct_from(scan.id),
         )
         .with_only_columns(*columns)
         .order_by(Asset.type, Asset.value)
