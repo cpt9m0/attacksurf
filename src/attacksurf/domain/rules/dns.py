@@ -1,4 +1,5 @@
-"""DNS rules: record exposure (#16), email authentication (#17), takeover candidates (#18)."""
+"""DNS rules: record exposure (#16), email authentication (#17), takeover candidates (#18),
+DNSSEC/NS/MX/CAA hygiene, registration expiry and zone transfers (#19)."""
 
 from attacksurf.domain.findings import Severity
 from attacksurf.domain.rules.catalog import Rule
@@ -244,6 +245,207 @@ TAKEOVER_DANGLING_NS = Rule(
     ),
 )
 
+DNSKEY_NOT_ENABLED = Rule(
+    id="dns.dnssec.not_enabled",
+    title="DNSSEC is not enabled for the zone",
+    description=(
+        "The zone publishes no DS record at its parent, so resolvers cannot validate its "
+        "answers and a network attacker can forge them. Some registries do not offer DS "
+        "records, so this is informational on its own."
+    ),
+    default_severity=Severity.INFO,
+    remediation=(
+        "Sign the $zone zone and publish its DS record at the registrar (or with the parent "
+        "zone). Keep the DS record in step with the zone's DNSKEY records when keys roll."
+    ),
+    references=(
+        "https://www.rfc-editor.org/rfc/rfc4033",
+        "https://www.rfc-editor.org/rfc/rfc4035",
+    ),
+)
+
+DNSKEY_BROKEN_CHAIN = Rule(
+    id="dns.dnssec.broken_chain",
+    title="DNSSEC delegation chain is broken",
+    description=(
+        "The parent zone publishes a DS record for $zone, but none of the zone's published "
+        "DNSKEY records matches it. Validating resolvers treat the zone as bogus and return "
+        "SERVFAIL, so the domain becomes unreachable for DNSSEC-validating clients."
+    ),
+    default_severity=Severity.HIGH,
+    remediation=(
+        "Publish the DS record that matches the zone's current DNSKEY (or remove the stale DS "
+        "record) at the registrar, then confirm a validating resolver can resolve $zone."
+    ),
+    references=(
+        "https://www.rfc-editor.org/rfc/rfc4034#section-5.1.4",
+        "https://www.rfc-editor.org/rfc/rfc4035#section-5.2",
+    ),
+)
+
+SINGLE_NAMESERVER = Rule(
+    id="dns.ns.single_nameserver",
+    title="Zone is served by a single nameserver",
+    description=(
+        "The zone has only one nameserver. If it becomes unreachable, the whole zone stops "
+        "resolving; RFC 1034 expects at least two servers, ideally on different networks."
+    ),
+    default_severity=Severity.LOW,
+    remediation=(
+        "Add a second nameserver for $zone at a different provider or network, and list both "
+        "in the zone's NS records."
+    ),
+    references=(
+        "https://www.rfc-editor.org/rfc/rfc1034#section-4.1",
+        "https://www.rfc-editor.org/rfc/rfc1912#section-2.8",
+    ),
+)
+
+LAME_DELEGATION = Rule(
+    id="dns.ns.lame_delegation",
+    title="Nameserver does not answer authoritatively for the zone",
+    description=(
+        "The nameserver $server is listed in the NS records for $zone but does not answer "
+        "authoritatively for the zone's SOA record. Resolvers that pick that server get no "
+        "usable answer, so resolution is unreliable."
+    ),
+    default_severity=Severity.MEDIUM,
+    remediation=(
+        "Remove $server from the NS records for $zone, or fix its zone data so it serves the "
+        "zone authoritatively. Confirm every listed nameserver answers an SOA query with the "
+        "authoritative-answer flag set."
+    ),
+    references=(
+        "https://www.rfc-editor.org/rfc/rfc1912#section-2.8",
+        "https://www.rfc-editor.org/rfc/rfc1034",
+    ),
+)
+
+INCONSISTENT_SOA = Rule(
+    id="dns.ns.inconsistent_soa",
+    title="Nameservers disagree on the zone's SOA record",
+    description=(
+        "The authoritative nameservers for $zone returned $count different SOA serials, so "
+        "they serve different versions of the zone (a split-brain setup). Records can appear "
+        "or disappear depending on which server a resolver asks."
+    ),
+    default_severity=Severity.MEDIUM,
+    remediation=(
+        "Make every nameserver for $zone serve the same zone data and the same SOA serial, "
+        "for example by fixing the zone transfer between the primary and its secondaries."
+    ),
+    references=(
+        "https://www.rfc-editor.org/rfc/rfc1034",
+        "https://www.rfc-editor.org/rfc/rfc1912#section-2.8",
+    ),
+)
+
+MX_POINTS_TO_CNAME = Rule(
+    id="dns.mx.points_to_cname",
+    title="MX record points at a CNAME",
+    description=(
+        "The MX record for $domain points at $target, which is a CNAME. Mail servers expect "
+        "MX targets to be hostnames with address records; following the alias is not required "
+        "and some mail servers will fail to deliver."
+    ),
+    default_severity=Severity.LOW,
+    remediation=(
+        "Point the MX record for $domain at $target's canonical name (or remove the CNAME and "
+        "give $target its own A/AAAA records)."
+    ),
+    references=(
+        "https://www.rfc-editor.org/rfc/rfc5321#section-5.1",
+        "https://www.rfc-editor.org/rfc/rfc2181#section-10.3",
+    ),
+)
+
+MX_UNRESOLVABLE = Rule(
+    id="dns.mx.unresolvable",
+    title="MX target does not resolve",
+    description=(
+        "The MX record for $domain points at $target, which has no A or AAAA records. Mail "
+        "sent to the domain cannot be delivered to that server."
+    ),
+    default_severity=Severity.MEDIUM,
+    remediation=(
+        "Update the MX record for $domain to a host that resolves, or restore the address "
+        "records for $target."
+    ),
+    references=("https://www.rfc-editor.org/rfc/rfc5321#section-5.1",),
+)
+
+CAA_MISSING = Rule(
+    id="dns.caa.missing",
+    title="No CAA record published",
+    description=(
+        "Neither the domain nor its registrable parent publishes a CAA record, so any "
+        "certificate authority may issue a certificate for it. CAA lets the owner restrict "
+        "issuance to the CAs they use."
+    ),
+    default_severity=Severity.INFO,
+    remediation=(
+        "Publish a CAA record at $zone listing the certificate authorities you use, for "
+        'example: $zone CAA 0 issue "letsencrypt.org".'
+    ),
+    references=("https://www.rfc-editor.org/rfc/rfc8659",),
+)
+
+EXPIRING_SOON = Rule(
+    id="dns.whois.expiring_soon",
+    title="Domain registration expires soon",
+    description=(
+        "The registration for $domain expires on $expires_at ($days days). If it lapses, "
+        "anyone can register the domain and take over every record and service under it."
+    ),
+    default_severity=Severity.MEDIUM,
+    remediation=(
+        "Renew $domain with $registrar before $expires_at, and enable auto-renew so a missed "
+        "notice cannot let the registration lapse."
+    ),
+    references=(
+        "https://www.rfc-editor.org/rfc/rfc9083",
+        "https://www.icann.org/resources/pages/expired-registration-2013-05-03-en",
+    ),
+)
+
+REGISTRAR_LOCK_MISSING = Rule(
+    id="dns.whois.registrar_lock_missing",
+    title="Domain has no registrar transfer lock",
+    description=(
+        "RDAP reports no client or server transfer prohibition for $domain. Without that "
+        "lock, a stolen registrar credential is enough to move the domain to another "
+        "registrar, taking its DNS with it."
+    ),
+    default_severity=Severity.MEDIUM,
+    remediation=(
+        "Enable the registrar lock for $domain (the clientTransferProhibited status) with "
+        "$registrar, and keep the registrar account protected with strong authentication."
+    ),
+    references=(
+        "https://www.rfc-editor.org/rfc/rfc5731",
+        "https://www.rfc-editor.org/rfc/rfc9083",
+    ),
+)
+
+AXFR_ALLOWED = Rule(
+    id="dns.axfr.allowed",
+    title="Nameserver allows unauthenticated zone transfers",
+    description=(
+        "The nameserver $server transferred the $zone zone to an unauthenticated client "
+        "($records records in the first response), exposing every hostname and record in it. "
+        "Zone transfers should be limited to the zone's authorized secondaries."
+    ),
+    default_severity=Severity.HIGH,
+    remediation=(
+        "Restrict AXFR on $server to the zone's secondary nameservers (for example with "
+        "allow-transfer/ACL configuration), and confirm an unauthenticated transfer is refused."
+    ),
+    references=(
+        "https://www.rfc-editor.org/rfc/rfc5936",
+        "https://www.rfc-editor.org/rfc/rfc1035",
+    ),
+)
+
 DNS_RULES: tuple[Rule, ...] = (
     PRIVATE_IP_EXPOSED,
     SPF_MISSING,
@@ -259,4 +461,15 @@ DNS_RULES: tuple[Rule, ...] = (
     TAKEOVER_DANGLING_CNAME,
     TAKEOVER_FINGERPRINT_MATCH,
     TAKEOVER_DANGLING_NS,
+    DNSKEY_NOT_ENABLED,
+    DNSKEY_BROKEN_CHAIN,
+    SINGLE_NAMESERVER,
+    LAME_DELEGATION,
+    INCONSISTENT_SOA,
+    MX_POINTS_TO_CNAME,
+    MX_UNRESOLVABLE,
+    CAA_MISSING,
+    EXPIRING_SOON,
+    REGISTRAR_LOCK_MISSING,
+    AXFR_ALLOWED,
 )
