@@ -17,6 +17,7 @@ from attacksurf.domain.scanners import (
     UnconfiguredGate,
 )
 from attacksurf.domain.scope import HttpPermission, PublicSuffix, ScopeError, ScopePolicyError
+from attacksurf.infra import public_suffix
 from attacksurf.infra.http import MAX_BODY_BYTES, SafeHttpClient
 from attacksurf.infra.scope_guard import (
     MAX_DNS_LOOKUPS,
@@ -156,6 +157,16 @@ def test_gate_defaults_to_a_null_cache() -> None:
     runtime = scope.check(context(), target(), scanner())
 
     assert isinstance(runtime.cache, NullCache)
+
+
+def test_gate_passes_the_registrable_domain_classifier_to_the_run() -> None:
+    scope, _ = make_guard()
+
+    runtime = scope.check(context(), target(), scanner())
+
+    assert runtime.org_domain is public_suffix.registrable
+    assert runtime.org_domain is not None
+    assert runtime.org_domain("eng.example.com") == "example.com"
 
 
 def test_passive_scanner_gets_run_scoped_adapters_and_no_lookups_at_planning() -> None:

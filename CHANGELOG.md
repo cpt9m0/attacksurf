@@ -6,6 +6,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Email security check (`dns.email`): passive evaluation of SPF, DMARC, DKIM and MTA-STS
+  publication from TXT DNS records, reporting `dns.email.*` findings (missing/multiple/
+  permissive SPF, >10 SPF DNS lookups, missing/monitor-only/unreported/partial DMARC,
+  undiscovered DKIM selectors at low confidence, missing MTA-STS as info) with raw TXT
+  records as evidence; wired into the `dns_passive` profile checks (#17).
 - DNS resolution (`dns.resolve`): configurable public resolvers with async, bounded queries;
   A/AAAA/CNAME/MX/NS/TXT/CAA/SOA records stored in `Asset.details["dns"]`; IP assets with
   `resolves_to` edges and in-root `cname_to` chains; reverse DNS and optional offline ip2asn
