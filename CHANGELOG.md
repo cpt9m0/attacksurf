@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- LLM usage tracking: an `llm_usage` row per finished LLM call, failed ones included, with the
+  model, purpose, whose key paid, token counts, latency and a cost estimated from list prices
+  in `ai/pricing.py`. Prompts, replies, error messages and keys are never stored. The app warns
+  at startup when the instance key or model is missing, so AI being off isn't silent (#23).
 - DNS resolution (`dns.resolve`): configurable public resolvers with async, bounded queries;
   A/AAAA/CNAME/MX/NS/TXT/CAA/SOA records stored in `Asset.details["dns"]`; IP assets with
   `resolves_to` edges and in-root `cname_to` chains; reverse DNS and optional offline ip2asn

@@ -2,60 +2,46 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-12 · **Branch:** `16-dns-resolution` · **Issue:** #16 (DNS resolution)
+**Updated:** 2026-11-12 · **Branch:** `23-llm-usage` · **Issue:** #23 (LLM providers)
 
 ## Status
-Implementation is complete in the worktree `.worktrees/16-dns-resolution` (branch
-`16-dns-resolution`, from `origin/main` `917e2b4`). The branch adds `dns.resolve` to the
-`dns_passive` profile, configurable public resolvers with async bounded lookups, per-asset DNS/IP
-details, IP/CNAME graph edges, inactive non-resolving subdomains, offline ip2asn enrichment, the
-`dns.records.private_ip_exposed` info finding, and the asset-detail DNS/IP cards. ADR 0025 records
-the decisions. No migration and no new dependency. Local checks (ruff, format, pyright,
-pytest/coverage, import-linter) pass. The work is committed and pushed on PR #161
-(https://github.com/cpt9m0/attacksurf/pull/161), which is ready (not draft), mergeable, and has
-green CI (lint, tests 3.12/3.13/3.15, web-e2e, secrets, compose, pr-title). Codex completed its
-review at `f1eff1c` with no findings and reacted 👍.
+PR 4a (LLM usage tracking) is done on this branch and ready for a PR (`feat(ai): record llm
+usage`, `Refs #23`). PR 4b (provider factory, closes #23) is the partner's, after PR 3
+(OpenAI-compatible adapter).
 
 ## Last task
-- Added `DnsResolver.lookup_many`/`DnsQuery`/`DnsLookup`/`IpIntel` ports and the async
-  `DnsPythonResolver` (public resolvers, timeouts, concurrency).
-- Added `AssetObservation` to `ScanOutput`; persistence merges capped details, records
-  `observed_at`, refreshes the input under the root lock, and locks input/discovered assets in a
-  stable type/value order.
-- Added `scanners/dns/resolve.py`, registered it in both entry points and the profile.
-- Added `infra/ip_intel.py` (offline ip2asn TSV), the DNS rule module, asset-detail view models,
-  template/CSS cards, config/env/compose entries, tests, ADR 0025 and docs updates.
-- Addressed five rounds of Codex findings: partial-record errors, partial details, stale
-  observations, failed PTRs, NUL TXT bytes, repeated negative ordering, shared-IP lock order and
-  stale input rows.
+- `ai/pricing.py`: list prices in code (Muse Spark 1.3 and its contributor tier) and
+  `estimate_cost()`; unknown model or unreported usage gives None, never 0.
+- `LLMUsage` model + migration `0008_add_llm_usage` (rules as CHECKs, `(org_id, created_at)` index).
+- `services.llm_usage.record_llm_usage`: one row per finished call, failed ones included; it
+  doesn't commit.
+- `create_app` warns once when the instance key or model is missing (AI off).
+- Docs: architecture (data model, AI layer), security (what's stored per call), development,
+  the `llm-prompt` skill, CHANGELOG.
 
 ## Next step
-1. Human review/merge of PR #161. Codex is clean; no further automated review round is needed.
-2. Optional acceptance polish: light/dark screenshots and a manual real-scan check. Start a scan
-   through `scans.start_scan` (scan trigger UI is still #21), then open `/assets/<id>` and verify
-   the CNAME → IP chain and records.
-3. Before any future ADR, re-check the next free number; 0025 is used here.
+Open the PR for this branch. Right before pushing, check that `0008` is still the next free
+migration on `origin/main` (`git ls-tree --name-only origin/main
+src/attacksurf/infra/db/migrations/versions/`); if it's taken, renumber the file and its
+`revision`/`down_revision`.
 
 ## Open threads
-- #16's PR is above the ~400-line guideline because it bundles resolver, scanner, graph,
-  enrichment and UI. If review size is a problem, split from commit 3 into a stacked
-  `16-ip-intel-ui` PR; the commit boundaries support that.
-- Wildcard ancestry: `dns.resolve` avoids deactivating a directly marked zone, but a subdomain
-  under a marked wildcard zone is not tracked yet. A full reconciliation policy belongs to #20.
-- `IP_ASN_DB_PATH` is operator-supplied; no ip2asn data ships in the repo. Without it, ASN/org
-  enrichment is empty but scans succeed.
-- External CNAME targets stay in `details["dns"]["cname_chain"]`; they are not tenant assets or
-  scanned. #18 can consume the chain.
+- Meta's list prices in `ai/pricing.py` came from third-party trackers; re-check them on
+  developer.meta.com before merging.
+- PR 4b must agree with PR 3 that `OpenAICompatProvider(config)` takes the config as its only
+  required argument.
+- #24 builds on this: the monthly instance-key cap sums `llm_usage` per org, and the usage page.
+- #84 PR 3c (`runner.py`, `server.py`, `__main__.py`) per issue #84's checklist.
 
 ## Notes for the next agent
-- Worktree `.venv` is a symlink to the main checkout's venv; run tools as
-  `PATH=<repo>/.venv/bin:$PATH PYTHONPATH=<worktree>/src .venv/bin/python -m pytest`.
-- DB tests need `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@localhost:5432/attacksurf_test`.
-- The scanner persists `Asset.details["dns"]` and `["ip"]`; `Asset.details["observed_at"]` orders
-  replacements and `_observe` never deactivates a root/user asset.
-- `persist_scan_output` locks the scan root, then the input and discovered assets in stable
-  type/value order; keep that order when adding persistence paths.
-- `dns.resolve` uses 40 DNS lookups per run; `MAX_DNS_LOOKUPS` is now 40 (CT still declares 20).
-- Raw `lookup_many` records are deliberately not address-validated; connection paths still are.
-- Production plugins need imports in both `app.py` and `workers/app.py`.
-- The ruff format hook strips unused imports; add imports with their first use.
+- #25 callers: on a failed `complete()`, call `record_llm_usage(..., outcome=error)`, commit,
+  then re-raise, or the row rolls back with the task and the cap never counts it.
+- `tests/unit/sandbox_launcher/test_container.py` fails on Windows (53 tests): it treats
+  `/srv/...` as absolute, which `pathlib` on Windows doesn't. CI (Linux) passes; run the suite
+  with `--ignore=tests/unit/sandbox_launcher` locally.
+- `.github/scripts/pytest-hook.sh` ignores CLI args: pass paths through `PYTEST_ADDOPTS`.
+- Windows dev machine: Postgres on host port 5433 (git-excluded `compose.override.yaml`); if
+  Docker Desktop is down, start it, then `docker compose up -d --wait postgres`.
+- ADR and migration numbers move fast: check `origin/main` and open branches right before
+  pushing. ADR 0025 (DNS resolution, #16) is the latest; migrations stop at 0007 on `main`.
+- The ruff format hook strips imports that aren't used yet: add imports with their first use.
