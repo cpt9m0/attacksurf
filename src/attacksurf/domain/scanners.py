@@ -132,6 +132,12 @@ class ScannerGrant:
     http_hosts: frozenset[str] = frozenset()  # public data services the scanner may query
     dns_lookups: int = 0  # cap on resolver calls per run
     sandbox_analyzers: frozenset[str] = frozenset()  # analyzers the plugin may run (ADR 0016)
+    # Read-only SOA/DNSKEY queries to the target zone's own nameservers (ADR 0026).
+    authoritative_dns: bool = False
+    # One AXFR attempt per nameserver of the target's own zone; active, needs ownership.
+    zone_transfer: bool = False
+    # Registration data for the target's registrable domain via the IANA RDAP bootstrap.
+    rdap: bool = False
 
     def __post_init__(self) -> None:
         if self.http is HttpPermission.SERVICES and not self.http_hosts:

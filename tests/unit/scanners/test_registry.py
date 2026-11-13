@@ -123,3 +123,24 @@ def test_grants_are_validated_at_registration(
     # The dataclass is frozen, so a plugin can't patch a bad grant in after construction either.
     with pytest.raises(ValueError, match=error):
         BadGrant.grant = ScannerGrant(http=http, http_hosts=hosts, dns_lookups=lookups)
+
+
+def test_registration_rejects_zone_transfer_without_verification() -> None:
+    """A zone transfer asks a live nameserver for its zone: it is an active check."""
+
+    class UnverifiedTransfer(EmptyScanner):
+        name = "test.unverified_transfer"
+        requires_verification = False
+        grant = ScannerGrant(zone_transfer=True, dns_lookups=3)
+
+    with pytest.raises(ValueError, match="requires_verification"):
+        ScannerRegistry().register(UnverifiedTransfer)
+
+
+def test_registration_accepts_zone_transfer_when_verification_is_declared() -> None:
+    class VerifiedTransfer(EmptyScanner):
+        name = "test.verified_transfer"
+        requires_verification = True
+        grant = ScannerGrant(zone_transfer=True, dns_lookups=3)
+
+    assert ScannerRegistry().register(VerifiedTransfer) is VerifiedTransfer

@@ -7,11 +7,13 @@ target) and uses its own namespace and bounds.
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
 from attacksurf.domain.cache import NullCache, ScanCache
 from attacksurf.domain.sandbox import SandboxRunner, UnconfiguredSandboxRunner
+from attacksurf.domain.scope import ScopePolicyError
 
 
 class DnsError(Exception):
@@ -29,6 +31,8 @@ class DnsRecordType(StrEnum):
     TXT = "TXT"
     CAA = "CAA"
     SOA = "SOA"
+    DS = "DS"
+    DNSKEY = "DNSKEY"
     PTR = "PTR"
 
 
@@ -78,6 +82,18 @@ class DnsResolver(Protocol):
         ...
 
 
+class StubRecords(Protocol):
+    """Owner-aware raw records: the owner exposes a CNAME the stub followed (ADR 0014)."""
+
+    def lookup_records(self, name: str, rdtype: str) -> tuple[str, tuple[str, ...]]:
+        """(owner name the stub answered for, values); raises `DnsError` on failure."""
+        ...
+
+
+class RecordResolver(DnsResolver, StubRecords, Protocol):
+    """A resolver that can also report who owns a raw answer (zone discovery needs it)."""
+
+
 @dataclass(frozen=True)
 class IpInfo:
     """Offline ASN/organisation data for an address; every field is optional."""
@@ -114,6 +130,82 @@ class TxtLookup(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class AuthoritativeAnswer:
+    """One authoritative server's reply; `rcode` is empty when the server was unreachable."""
+
+    server: str
+    address: str
+    status: DnsStatus
+    authoritative: bool = False
+    rcode: str = ""
+    values: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ZoneAnswers:
+    """A zone's nameserver set plus at most one answer per probed server."""
+
+    zone: str
+    servers: tuple[str, ...] = ()
+    answers: tuple[AuthoritativeAnswer, ...] = ()
+
+
+class AuthoritativeDns(Protocol):
+    def query(self, name: str, record_type: DnsRecordType) -> ZoneAnswers:
+        """Ask each authoritative server of `name`'s zone for one record type (read-only)."""
+        ...
+
+
+@dataclass(frozen=True)
+class ZoneTransferAttempt:
+    """One AXFR attempt; `records` is the first message's count, never its content."""
+
+    server: str
+    address: str
+    allowed: bool
+    records: int = 0
+
+
+class ZoneTransfer(Protocol):
+    def attempt(self, zone: str) -> tuple[ZoneTransferAttempt, ...]:
+        """One AXFR per authoritative server of `zone`; empty when it is not a zone apex."""
+        ...
+
+
+@dataclass(frozen=True)
+class DomainRegistration:
+    """Trimmed RDAP registration data (public); every field is optional."""
+
+    domain: str
+    registrar: str | None = None
+    expires_at: datetime | None = None
+    statuses: tuple[str, ...] = ()
+
+
+class RdapLookup(Protocol):
+    def lookup(self, domain: str) -> DomainRegistration | None:
+        """Registration data for `domain`, or None when RDAP has no usable answer."""
+        ...
+
+
+class UnconfiguredAuthoritative:
+    """No authoritative grant: a plugin that tries anyway is a policy bug, not a skip."""
+
+    def query(self, name: str, record_type: DnsRecordType) -> ZoneAnswers:
+        raise ScopePolicyError("This scanner may not query authoritative nameservers.")
+
+
+class UnconfiguredZoneTransfer:
+    def attempt(self, zone: str) -> tuple[ZoneTransferAttempt, ...]:
+        raise ScopePolicyError("This scanner may not attempt a zone transfer.")
+
+
+class UnconfiguredRdap:
+    def lookup(self, domain: str) -> DomainRegistration | None:
+        raise ScopePolicyError("This scanner may not query RDAP.")
+
+
 class HttpBody:
     """A response as a scanner sees it: the body was capped by the client while reading."""
 
@@ -145,10 +237,28 @@ class SafeHttpClient(Protocol):
         ...
 
 
+class ScopeHttp(SafeHttpClient, Protocol):
+    """A safe client that can hand out a run-scoped copy with this run's redirect policy."""
+
+    def with_redirect_policy(
+        self, resolver: DnsResolver, *, redirect_allowed: Callable[[str], bool], max_redirects: int
+    ) -> SafeHttpClient: ...
+
+
 class ScannerRuntime:
     """Run-scoped adapters handed to a plugin after the gate approved it."""
 
-    __slots__ = ("cache", "dns", "http", "ip_intel", "org_domain", "sandbox")
+    __slots__ = (
+        "authoritative",
+        "cache",
+        "dns",
+        "http",
+        "ip_intel",
+        "org_domain",
+        "rdap",
+        "sandbox",
+        "zone_transfer",
+    )
 
     def __init__(
         self,
@@ -159,12 +269,20 @@ class ScannerRuntime:
         ip_intel: IpIntel | None = None,
         *,
         org_domain: Callable[[str], str | None] | None = None,
+        authoritative: AuthoritativeDns | None = None,
+        zone_transfer: ZoneTransfer | None = None,
+        rdap: RdapLookup | None = None,
     ) -> None:
         self.dns = dns
         self.http = http
         self.sandbox = sandbox or UnconfiguredSandboxRunner()
         self.cache = cache if cache is not None else NullCache()
         self.ip_intel = ip_intel or UnconfiguredIpIntel()
+        # Capability adapters are only wired when the plugin's grant declared them; the null
+        # versions fail the job as a policy bug rather than silently skipping the check.
+        self.authoritative = authoritative or UnconfiguredAuthoritative()
+        self.zone_transfer = zone_transfer or UnconfiguredZoneTransfer()
+        self.rdap = rdap or UnconfiguredRdap()
         # Registrable (organizational) domain for a hostname, from the public suffix list;
         # None when unconfigured or the name is off the list. Lets checks apply DMARC's
         # organizational-domain fallback without importing the PSL themselves.

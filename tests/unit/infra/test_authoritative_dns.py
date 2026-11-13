@@ -1,8 +1,10 @@
-"""Authoritative TXT lookups: validated nameservers, no referral following, bounded answers.
+"""Authoritative lookups: validated nameservers, no referral following, bounded answers.
 
-No test opens a socket: `dns.query.udp`/`tcp` and the stub resolver's `resolve` are replaced,
-and the tests assert which addresses *would* have been contacted.
+No test opens a socket: `dns.query.udp`/`tcp`/`xfr` and the stub resolver's `resolve` are
+replaced, and the tests assert which addresses *would* have been contacted.
 """
+
+from collections.abc import Sequence
 
 import dns.exception
 import dns.flags
@@ -14,9 +16,9 @@ import dns.rdataclass
 import dns.rdatatype
 import pytest
 
-from attacksurf.domain.net import DnsError, TxtError
+from attacksurf.domain.net import DnsError, DnsLookup, DnsQuery, DnsRecordType, DnsStatus, TxtError
 from attacksurf.infra import authoritative_dns
-from attacksurf.infra.authoritative_dns import AuthoritativeTxtLookup
+from attacksurf.infra.authoritative_dns import AuthoritativeLookup, AuthoritativeTxtLookup
 
 
 class Aliased:
@@ -47,6 +49,15 @@ class StubResolver:
         if isinstance(outcome, Aliased):
             return outcome.owner, tuple(outcome.values)
         return name, tuple(outcome or ())
+
+    def resolve_ipv4(self, host: str) -> tuple[str, ...]:
+        raise AssertionError("authoritative probes only use lookup_records")
+
+    def resolve_name(self, host: str) -> tuple[str, ...]:
+        raise AssertionError("authoritative probes only use lookup_records")
+
+    def lookup_many(self, queries: Sequence[DnsQuery]) -> tuple[DnsLookup, ...]:
+        raise AssertionError("authoritative probes only use lookup_records")
 
 
 class FakeWire:
@@ -416,3 +427,312 @@ def test_a_real_delegation_still_uses_its_own_nameservers(
 
     assert lookup.lookup_txt("example.com", qname) == ("attacksurf-verification=abc",)
     assert [address for address, _ in wire.udp_calls] == ["93.184.216.34"]
+
+
+# --- Read-only SOA/DNSKEY probes and zone transfers (#19) ------------------------------------
+
+SOA = "ns1.example.net. hostmaster.example.net. 2024010101 3600 600 604800 300"
+
+
+def _records_response(
+    qname: str,
+    rdtype: str,
+    values: list[str],
+    *,
+    authoritative: bool = True,
+    rcode: dns.rcode.Rcode = dns.rcode.NOERROR,
+) -> dns.message.Message:
+    response = dns.message.make_response(dns.message.make_query(qname, rdtype))
+    if authoritative:
+        response.flags |= dns.flags.AA
+    if rcode != dns.rcode.NOERROR:
+        response.set_rcode(rcode)
+    if values:
+        rrset = response.find_rrset(
+            response.answer,
+            dns.name.from_text(qname),
+            dns.rdataclass.IN,
+            dns.rdatatype.from_text(rdtype),
+            create=True,
+        )
+        for value in values:
+            rrset.add(dns.rdata.from_text("IN", rdtype, value), 300)
+    return response
+
+
+def _authoritative(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    answers: dict[tuple[str, str], list[str] | Exception | Aliased | None] | None = None,
+    responses: dict[str, dns.message.Message | Exception] | None = None,
+) -> tuple[AuthoritativeLookup, FakeWire, StubResolver]:
+    wire = FakeWire(responses or {})
+    monkeypatch.setattr(authoritative_dns.dns.query, "udp", wire.query_udp)
+    monkeypatch.setattr(authoritative_dns.dns.query, "tcp", wire.query_tcp)
+    resolver = StubResolver(
+        {
+            ("example.com", "NS"): ["ns1.example.net", "ns2.example.net"],
+            ("ns1.example.net", "A"): ["93.184.216.34"],
+            ("ns1.example.net", "AAAA"): [],
+            ("ns2.example.net", "A"): ["93.184.216.35"],
+            ("ns2.example.net", "AAAA"): [],
+        }
+        | (answers or {})
+    )
+    return AuthoritativeLookup(resolver), wire, resolver
+
+
+def test_query_returns_one_answer_per_nameserver(monkeypatch: pytest.MonkeyPatch) -> None:
+    lookup, wire, _ = _authoritative(
+        monkeypatch,
+        responses={
+            "93.184.216.34": _records_response("example.com", "SOA", [SOA]),
+            "93.184.216.35": _records_response("example.com", "SOA", [SOA]),
+        },
+    )
+
+    answers = lookup.query("example.com", DnsRecordType.SOA)
+
+    assert answers.zone == "example.com"
+    assert answers.servers == ("ns1.example.net", "ns2.example.net")
+    assert [answer.server for answer in answers.answers] == [
+        "ns1.example.net",
+        "ns2.example.net",
+    ]
+    assert all(answer.status is DnsStatus.OK for answer in answers.answers)
+    assert all(answer.authoritative for answer in answers.answers)
+    assert all(answer.values == (SOA,) for answer in answers.answers)
+    assert [address for address, _ in wire.udp_calls] == ["93.184.216.34", "93.184.216.35"]
+
+
+def test_query_uses_the_registrable_domain_when_the_name_has_no_ns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lookup, _, _ = _authoritative(
+        monkeypatch,
+        answers={("www.example.com", "NS"): []},
+        responses={
+            "93.184.216.34": _records_response("www.example.com", "SOA", [SOA]),
+            "93.184.216.35": _records_response("www.example.com", "SOA", [SOA]),
+        },
+    )
+
+    answers = lookup.query("www.example.com", DnsRecordType.SOA)
+
+    assert answers.zone == "example.com"
+    assert answers.servers == ("ns1.example.net", "ns2.example.net")
+
+
+def test_an_aliased_name_is_not_treated_as_a_zone(monkeypatch: pytest.MonkeyPatch) -> None:
+    lookup, _, _ = _authoritative(
+        monkeypatch,
+        answers={("www.example.com", "NS"): Aliased("other.example.net", ["ns9.example.net"])},
+        responses={
+            "93.184.216.34": _records_response("www.example.com", "SOA", [SOA]),
+            "93.184.216.35": _records_response("www.example.com", "SOA", [SOA]),
+        },
+    )
+
+    answers = lookup.query("www.example.com", DnsRecordType.SOA)
+
+    assert answers.zone == "example.com"
+
+
+def test_a_failed_zone_lookup_falls_back_to_the_registrable_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lookup, _, _ = _authoritative(
+        monkeypatch,
+        answers={("www.example.com", "NS"): DnsError()},
+        responses={
+            "93.184.216.34": _records_response("www.example.com", "SOA", [SOA]),
+            "93.184.216.35": _records_response("www.example.com", "SOA", [SOA]),
+        },
+    )
+
+    assert lookup.query("www.example.com", DnsRecordType.SOA).zone == "example.com"
+
+
+def test_a_zone_without_nameservers_has_no_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    lookup, wire, _ = _authoritative(monkeypatch, answers={("example.com", "NS"): []})
+
+    answers = lookup.query("example.com", DnsRecordType.SOA)
+
+    assert answers.servers == ()
+    assert answers.answers == ()
+    assert wire.udp_calls == []
+
+
+def test_private_nameserver_addresses_are_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    lookup, wire, _ = _authoritative(
+        monkeypatch,
+        answers={("ns1.example.net", "A"): ["10.0.0.5"]},
+        responses={"93.184.216.35": _records_response("example.com", "SOA", [SOA])},
+    )
+
+    answers = lookup.query("example.com", DnsRecordType.SOA)
+
+    assert [answer.server for answer in answers.answers] == ["ns2.example.net"]
+    assert [address for address, _ in wire.udp_calls] == ["93.184.216.35"]
+
+
+def test_an_unreachable_server_has_no_rcode(monkeypatch: pytest.MonkeyPatch) -> None:
+    lookup, _, _ = _authoritative(
+        monkeypatch,
+        responses={
+            "93.184.216.34": dns.exception.Timeout(),
+            "93.184.216.35": _records_response("example.com", "SOA", [SOA]),
+        },
+    )
+
+    first = lookup.query("example.com", DnsRecordType.SOA).answers[0]
+
+    assert first.status is DnsStatus.ERROR
+    assert first.rcode == ""
+    assert first.authoritative is False
+
+
+def test_a_refused_answer_keeps_its_rcode(monkeypatch: pytest.MonkeyPatch) -> None:
+    lookup, _, _ = _authoritative(
+        monkeypatch,
+        responses={
+            "93.184.216.34": _records_response(
+                "example.com", "SOA", [], authoritative=False, rcode=dns.rcode.REFUSED
+            ),
+            "93.184.216.35": _records_response("example.com", "SOA", [SOA]),
+        },
+    )
+
+    first = lookup.query("example.com", DnsRecordType.SOA).answers[0]
+
+    assert first.rcode == "refused"
+    assert first.authoritative is False
+
+
+def test_transfer_returns_nothing_when_the_name_has_no_ns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lookup, _, _ = _authoritative(monkeypatch, answers={("www.example.com", "NS"): []})
+
+    assert lookup.attempt("www.example.com") == ()
+
+
+class FakeTransfer:
+    """Records AXFR calls and hands out one iterator per attempt."""
+
+    def __init__(self, messages: list[dns.message.Message], error: Exception | None = None):
+        self.messages = messages
+        self.error = error
+        self.calls: list[tuple[str, str, int]] = []
+        self.closed = 0
+
+    def __call__(
+        self,
+        address: str,
+        zone: object,
+        *,
+        port: int,
+        timeout: float,
+        lifetime: float,
+        relativize: bool,
+    ) -> object:
+        self.calls.append((address, str(zone), port))
+        if self.error is not None:
+            raise self.error
+        return self._generator()
+
+    def _generator(self) -> object:
+        try:
+            yield from self.messages
+        finally:
+            self.closed += 1
+
+
+def _transfer_message(qname: str = "example.com") -> dns.message.Message:
+    message = dns.message.make_response(dns.message.make_query(qname, "AXFR"))
+    message.find_rrset(
+        message.answer,
+        dns.name.from_text(qname),
+        dns.rdataclass.IN,
+        dns.rdatatype.SOA,
+        create=True,
+    ).add(dns.rdata.from_text("IN", "SOA", SOA), 300)
+    txt = message.find_rrset(
+        message.answer,
+        dns.name.from_text(qname),
+        dns.rdataclass.IN,
+        dns.rdatatype.TXT,
+        create=True,
+    )
+    txt.add(dns.rdata.from_text("IN", "TXT", '"one"'), 300)
+    txt.add(dns.rdata.from_text("IN", "TXT", '"two"'), 300)
+    return message
+
+
+def test_transfer_reports_an_allowed_transfer(monkeypatch: pytest.MonkeyPatch) -> None:
+    lookup, _, _ = _authoritative(monkeypatch)
+    transfer = FakeTransfer([_transfer_message()])
+    monkeypatch.setattr(authoritative_dns.dns.query, "xfr", transfer)
+
+    attempts = lookup.attempt("example.com")
+
+    assert [attempt.allowed for attempt in attempts] == [True, True]
+    assert [attempt.records for attempt in attempts] == [3, 3]
+    assert [attempt.server for attempt in attempts] == ["ns1.example.net", "ns2.example.net"]
+    assert transfer.closed == 2
+
+
+def test_a_refused_transfer_is_not_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    lookup, _, _ = _authoritative(monkeypatch)
+    transfer = FakeTransfer([], error=dns.exception.FormError("refused"))
+    monkeypatch.setattr(authoritative_dns.dns.query, "xfr", transfer)
+
+    attempts = lookup.attempt("example.com")
+
+    assert [attempt.allowed for attempt in attempts] == [False, False]
+    assert [attempt.records for attempt in attempts] == [0, 0]
+
+
+def test_transfer_never_reads_past_the_first_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    lookup, _, _ = _authoritative(monkeypatch)
+
+    class OneShot:
+        def __init__(self, message: dns.message.Message) -> None:
+            self.message = message
+            self.read = 0
+            self.closed = False
+
+        def __iter__(self) -> "OneShot":
+            return self
+
+        def __next__(self) -> dns.message.Message:
+            self.read += 1
+            if self.read > 1:
+                raise AssertionError("the adapter read a second message")
+            return self.message
+
+        def close(self) -> None:
+            self.closed = True
+
+    iterators: list[OneShot] = []
+
+    def xfr(*_args: object, **_kwargs: object) -> OneShot:
+        iterator = OneShot(_transfer_message())
+        iterators.append(iterator)
+        return iterator
+
+    monkeypatch.setattr(authoritative_dns.dns.query, "xfr", xfr)
+
+    attempts = lookup.attempt("example.com")
+
+    assert [attempt.allowed for attempt in attempts] == [True, True]
+    assert all(iterator.read == 1 and iterator.closed for iterator in iterators)
+
+
+def test_transfer_never_touches_a_parent_zone(monkeypatch: pytest.MonkeyPatch) -> None:
+    lookup, _, _ = _authoritative(monkeypatch, answers={("www.example.com", "NS"): []})
+    transfer = FakeTransfer([_transfer_message()])
+    monkeypatch.setattr(authoritative_dns.dns.query, "xfr", transfer)
+
+    assert lookup.attempt("www.example.com") == ()
+    assert transfer.calls == []
