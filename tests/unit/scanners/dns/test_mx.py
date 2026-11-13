@@ -98,6 +98,27 @@ def test_mx_falls_back_to_the_registrable_domain() -> None:
     assert ("acme.example", DnsRecordType.MX) in dns.calls
 
 
+def test_fallback_mx_evidence_names_the_registrable_domain() -> None:
+    """The parent publishes the MX RRset; the finding must not claim the subdomain does."""
+    asset = "eng.acme.example"
+    dns = FakeDns(
+        {
+            (asset, DnsRecordType.MX): (),
+            ("acme.example", DnsRecordType.MX): (f"10 {MAIL}.",),
+            (MAIL, DnsRecordType.A): DnsStatus.NO_ANSWER,
+            (MAIL, DnsRecordType.AAAA): DnsStatus.NO_ANSWER,
+        }
+    )
+
+    finding = by_rule(run(DnsMailExchangers(), asset, dns=dns, org_domain="acme.example"))[
+        "dns.mx.unresolvable"
+    ]
+
+    assert finding.location == MAIL
+    assert finding.evidence[0].data["name"] == "acme.example"
+    assert finding.remediation_context["domain"] == "acme.example"
+
+
 def test_a_failed_target_lookup_is_skipped() -> None:
     values = answers()
     values[(MAIL, DnsRecordType.A)] = DnsStatus.ERROR

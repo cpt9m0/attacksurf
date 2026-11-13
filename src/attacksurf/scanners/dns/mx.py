@@ -68,12 +68,19 @@ class DnsMailExchangers:
             raise TransientJobError("MX check failed.") from None
         if all(lookup.status is DnsStatus.ERROR for lookup in lookups):
             raise TransientJobError("MX check failed.")
-        records = next((lookup.values for lookup in lookups if lookup.values), ())
-        targets = _targets(records)
+        source = next((lookup for lookup in lookups if lookup.values), None)
+        if source is None:
+            return ScanOutput()
+        targets = _targets(source.values)
         if not targets:
             return ScanOutput()
         results = _target_lookups(runtime.dns, targets)
-        return ScanOutput(findings=tuple(_findings(names[0], records, targets, results)))
+        # Evidence names the name the MX RRset was actually read from: with the registrable
+        # fallback that is the parent, and claiming the subdomain publishes those records
+        # would send remediation to the wrong domain.
+        return ScanOutput(
+            findings=tuple(_findings(source.query.name, source.values, targets, results))
+        )
 
 
 def _target_lookups(
