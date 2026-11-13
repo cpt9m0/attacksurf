@@ -6,7 +6,9 @@
 
 ## Status
 #17 is **implemented, verified, and open as PR #163** (branch pushed; pre-push pyright + pytest
-passed). Issue stays open until the PR merges (`Closes #17` in the PR body).
+passed). Codex review comments (5× P2: SPF `all`/`redirect` precedence and unreachable-term
+counting, MTA-STS `id` validation, DMARC invalid-`sp` fallback, DMARC organizational-domain
+inheritance) are addressed and pushed. Issue stays open until the PR merges (`Closes #17`).
 
 ## Last task
 - Added the `dns.email` passive scanner (root domains only): one `lookup_many` round reads TXT
@@ -26,6 +28,9 @@ passed). Issue stays open until the PR merges (`Closes #17` in the PR body).
   `docs/security.md`. README already listed email security; no ADR (no new architectural
   choice: check-only plugin on existing ports), no migration, no new dependency (`checkdmarc`
   rejected in favour of a stdlib parser).
+- Review follow-up: `ScannerRuntime` gained an `org_domain` port (ScopeGuard passes
+  `public_suffix.registrable`) so `dns.email` can apply DMARC's organizational fallback
+  without importing the PSL.
 
 ## Next step
 1. Watch PR #163 CI (`lint`, `test (3.12/3.13/3.15)`, `secrets`, `compose`, `pr-title`) and

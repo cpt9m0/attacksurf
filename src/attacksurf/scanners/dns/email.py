@@ -3,7 +3,9 @@
 A passive check on root domains: one `lookup_many` round reads TXT records
 (apex, `_dmarc`, `_mta-sts`, and common `<selector>._domainkey` names) and evaluates SPF,
 DMARC, DKIM and MTA-STS publication. The scanner reports findings only; it emits no assets,
-relations or observations (`dns.resolve` owns `details["dns"]`).
+relations or observations (`dns.resolve` owns `details["dns"]`). When the scanned name has
+no usable DMARC record, the organizational domain's record (via `runtime.org_domain`) is
+evaluated instead, with its `sp` policy applying to the subdomain.
 
 MX presence is deliberately not consulted: a parked domain (no MX) hardens with
 `v=spf1 -all` plus a `p=reject` DMARC record, which is exactly what the missing-record
@@ -36,7 +38,8 @@ from attacksurf.domain.scanners import (
 from attacksurf.scanners.registry import register_scanner
 
 DKIM_SELECTORS = ("default", "google", "selector1", "selector2", "k1", "mail")
-DNS_LOOKUPS = 3 + len(DKIM_SELECTORS)  # apex + _dmarc + _mta-sts + one TXT per selector
+# apex + own _dmarc + organizational _dmarc fallback + _mta-sts + one TXT per selector
+DNS_LOOKUPS = 4 + len(DKIM_SELECTORS)
 MAX_EVIDENCE_VALUES = 5
 MAX_VALUE_LENGTH = 256
 SPF_LOOKUP_LIMIT = 10
@@ -45,6 +48,7 @@ SPF_DNS_TERMS = frozenset({"include", "a", "mx", "ptr", "exists", "redirect"})
 _SPF_PREFIX = "v=spf1"
 _DMARC_PREFIX = "v=dmarc1"
 _MTA_STS_PREFIX = "v=stsv1"
+_MTA_STS_ID = re.compile(r"[a-z0-9]{1,32}")
 _DMARC_FULL_PCT = 100
 
 
@@ -64,7 +68,10 @@ class DnsEmail:
         runtime = ctx.runtime
         if runtime is None:
             raise ScannerError("Scanner runtime is not configured.")
-        queries = _queries(asset.value)
+        org_domain = runtime.org_domain(asset.value) if runtime.org_domain else None
+        if org_domain == asset.value:
+            org_domain = None  # already the organizational domain: no fallback to resolve
+        queries = _queries(asset.value, org_domain)
         try:
             results = runtime.dns.lookup_many(queries)
         except DnsError:
@@ -72,24 +79,29 @@ class DnsEmail:
         if all(result.status is DnsStatus.ERROR for result in results):
             raise TransientJobError("Email security check failed.")
         by_name = {result.query.name: result for result in results}
-        return ScanOutput(findings=tuple(_evaluate(asset.value, by_name)))
+        return ScanOutput(findings=tuple(_evaluate(asset.value, by_name, org_domain)))
 
 
-def _queries(domain: str) -> tuple[DnsQuery, ...]:
-    names = (
+def _queries(domain: str, org_domain: str | None) -> tuple[DnsQuery, ...]:
+    names = [
         (domain, DnsRecordType.TXT),
         (f"_dmarc.{domain}", DnsRecordType.TXT),
         (f"_mta-sts.{domain}", DnsRecordType.TXT),
         *((f"{selector}._domainkey.{domain}", DnsRecordType.TXT) for selector in DKIM_SELECTORS),
-    )
+    ]
+    if org_domain is not None:
+        names.append((f"_dmarc.{org_domain}", DnsRecordType.TXT))
     return tuple(DnsQuery(name, record_type) for name, record_type in names)
 
 
-def _evaluate(domain: str, by_name: dict[str, DnsLookup]) -> list[RawFinding]:
+def _evaluate(
+    domain: str, by_name: dict[str, DnsLookup], org_domain: str | None
+) -> list[RawFinding]:
     findings: list[RawFinding] = []
     findings.extend(_spf_findings(domain, by_name.get(domain.lower())))
     dmarc = by_name.get(f"_dmarc.{domain.lower()}")
-    findings.extend(_dmarc_findings(domain, dmarc))
+    org_dmarc = by_name.get(f"_dmarc.{org_domain.lower()}") if org_domain else None
+    findings.extend(_dmarc_findings(domain, dmarc, org_dmarc, org_domain))
     dkim_lookups = [by_name.get(f"{s}._domainkey.{domain.lower()}") for s in DKIM_SELECTORS]
     dkim_finding = _dkim_finding(domain, dkim_lookups)
     if dkim_finding is not None:
@@ -147,37 +159,73 @@ def _spf_findings(domain: str, apex_txt: DnsLookup | None) -> list[RawFinding]:
     return findings
 
 
-def _dmarc_findings(domain: str, dmarc_txt: DnsLookup | None) -> list[RawFinding]:
+_DMARC_POLICIES = frozenset({"none", "quarantine", "reject"})
+
+
+def _dmarc_findings(
+    domain: str,
+    dmarc_txt: DnsLookup | None,
+    org_dmarc_txt: DnsLookup | None,
+    org_domain: str | None,
+) -> list[RawFinding]:
     if dmarc_txt is None or dmarc_txt.status is DnsStatus.ERROR:
         return []
     records = _dmarc_records(_values(dmarc_txt))
-    name = f"_dmarc.{domain}"
-    if len(records) != 1:
-        # Zero records, or several (receivers then apply no policy at all): the domain has
-        # no usable DMARC policy either way, and #17 defines no dedicated multiple-record rule.
+    if len(records) == 1:
+        return _dmarc_record_findings(domain, f"_dmarc.{domain}", records[0], inherited=False)
+    # No usable record at the name itself (none, or several receivers must ignore): DMARC
+    # falls back to the organizational domain's record (RFC 7489 section 6.6.3).
+    if org_domain is not None and org_dmarc_txt is not None:
+        if org_dmarc_txt.status is DnsStatus.ERROR:
+            return []  # the fallback could not be read; absence is not proven
+        org_records = _dmarc_records(_values(org_dmarc_txt))
+        if len(org_records) == 1:
+            return _dmarc_record_findings(
+                domain, f"_dmarc.{org_domain}", org_records[0], inherited=True
+            )
+    return [
+        RawFinding(
+            rule_id="dns.email.dmarc_missing",
+            evidence=(_evidence("TXT", f"_dmarc.{domain}", _values(dmarc_txt)),),
+            remediation_context={"domain": domain},
+        )
+    ]
+
+
+def _dmarc_record_findings(
+    domain: str, name: str, record: str, *, inherited: bool
+) -> list[RawFinding]:
+    """Findings for one DMARC record; `inherited` records apply their `sp` policy here."""
+    tags = _tags(record)
+    policy = tags.get("p", "")
+    subdomain_policy = tags.get("sp")
+    if policy not in _DMARC_POLICIES or (
+        subdomain_policy is not None and subdomain_policy not in _DMARC_POLICIES
+    ):
+        # An unusable policy tag ends DMARC processing, unless a valid reporting URI
+        # makes receivers act as if `p=none` had been published (RFC 7489 section 6.6.3).
+        if _has_valid_reporting_uri(tags):
+            return [
+                RawFinding(
+                    rule_id="dns.email.dmarc_policy_none",
+                    evidence=(_evidence("TXT", name, (record,)),),
+                    remediation_context={"domain": domain},
+                )
+            ]
         return [
             RawFinding(
                 rule_id="dns.email.dmarc_missing",
-                evidence=(_evidence("TXT", name, _values(dmarc_txt)),),
+                evidence=(_evidence("TXT", name, (record,)),),
                 remediation_context={"domain": domain},
             )
         ]
-    tags = _tags(records[0])
-    if tags.get("p", "") not in {"none", "quarantine", "reject"}:
-        # A record without a usable policy tag is ignored by receivers: no policy at all.
-        return [
-            RawFinding(
-                rule_id="dns.email.dmarc_missing",
-                evidence=(_evidence("TXT", name, records),),
-                remediation_context={"domain": domain},
-            )
-        ]
+    effective = subdomain_policy if (inherited and subdomain_policy is not None) else policy
     findings: list[RawFinding] = []
-    if tags["p"] == "none":
+    if effective == "none":
         findings.append(
             RawFinding(
                 rule_id="dns.email.dmarc_policy_none",
-                evidence=(_evidence("TXT", name, records),),
+                evidence=(_evidence("TXT", name, (record,)),),
                 remediation_context={"domain": domain},
             )
         )
@@ -185,7 +233,7 @@ def _dmarc_findings(domain: str, dmarc_txt: DnsLookup | None) -> list[RawFinding
         findings.append(
             RawFinding(
                 rule_id="dns.email.dmarc_no_reporting",
-                evidence=(_evidence("TXT", name, records),),
+                evidence=(_evidence("TXT", name, (record,)),),
                 remediation_context={"domain": domain},
             )
         )
@@ -197,11 +245,24 @@ def _dmarc_findings(domain: str, dmarc_txt: DnsLookup | None) -> list[RawFinding
         findings.append(
             RawFinding(
                 rule_id="dns.email.dmarc_pct_partial",
-                evidence=(_evidence("TXT", name, records),),
+                evidence=(_evidence("TXT", name, (record,)),),
                 remediation_context={"domain": domain, "pct": str(pct)},
             )
         )
     return findings
+
+
+def _has_valid_reporting_uri(tags: dict[str, str]) -> bool:
+    """At least one `mailto:` reporting URI with an address (RFC 7489 section 6.2)."""
+    for key in ("rua", "ruf"):
+        for raw_uri in tags.get(key, "").split(","):
+            uri = raw_uri.strip()
+            if not uri.startswith("mailto:"):
+                continue
+            local, at, host = uri.removeprefix("mailto:").split("!", maxsplit=1)[0].partition("@")
+            if at and local and host:
+                return True
+    return False
 
 
 def _dkim_finding(domain: str, lookups: Sequence[DnsLookup | None]) -> RawFinding | None:
@@ -250,31 +311,49 @@ def _spf_records(values: Sequence[str]) -> tuple[str, ...]:
 
 
 def _spf_all_ending(record: str) -> str | None:
-    """Effective `all` qualifier, or None when a `redirect=` modifier makes `all` moot.
+    """Effective `all` qualifier, or None when a lone `redirect=` decides the outcome.
 
-    With neither an `all` mechanism nor a redirect, SPF evaluation falls through to a
-    neutral result, which is an implicit `?all` (RFC 7208 section 4.7).
+    An explicit `all` mechanism takes precedence over `redirect` regardless of position
+    (RFC 7208 section 5.1). With neither, evaluation falls through to a neutral result,
+    which is an implicit `?all` (RFC 7208 section 4.7).
     """
     terms = record.split()[1:]
-    if any(term.lower().startswith("redirect=") for term in terms):
-        return None
     for raw_term in terms:
-        term = raw_term.lower()
-        qualifier = term[0] if term[:1] in "+-~?" else "+"
-        mechanism = term[1:] if term[:1] in "+-~?" else term
-        if mechanism == "all" or mechanism.startswith("all/"):
+        if _term_name(raw_term) == "all":
+            qualifier = raw_term[0] if raw_term[:1] in "+-~?" else "+"
             return f"{qualifier}all"
+    if any(_term_name(term) == "redirect" for term in terms):
+        return None
     return "?all"
 
 
+def _term_name(term: str) -> str:
+    """SPF term name without qualifier or argument (`-mx/24` -> `mx`)."""
+    text = term.lower()
+    if text[:1] in "+-~?":
+        text = text[1:]
+    return re.split(r"[:/=]", text, maxsplit=1)[0]
+
+
 def _spf_lookup_count(record: str) -> int:
-    """Count SPF terms that trigger DNS queries (RFC 7208 section 10.1)."""
+    """Count SPF terms a receiver would actually query DNS for (RFC 7208 section 4.6.4).
+
+    Terms after the `all` mechanism are never evaluated, and `redirect` is ignored when
+    an `all` mechanism exists (section 5.1), so neither counts in those positions.
+    """
+    terms = record.split()[1:]
+    has_all = any(_term_name(term) == "all" for term in terms)
     count = 0
-    for raw_term in record.split()[1:]:
-        term = raw_term.lstrip("+-~?")
-        name = re.split(r"[:/=]", term, maxsplit=1)[0].lower()
+    for raw_term in terms:
+        name = _term_name(raw_term)
+        if name == "all":
+            break
+        if name == "redirect":
+            continue  # counted below, and only when no `all` makes it ineffective
         if name in SPF_DNS_TERMS:
             count += 1
+    if not has_all and any(_term_name(term) == "redirect" for term in terms):
+        count += 1
     return count
 
 
@@ -313,10 +392,14 @@ def _dkim_key_valid(value: str) -> bool:
 
 
 def _mta_sts_valid(value: str) -> bool:
+    """A usable MTA-STS discovery record: `v=STSv1` plus a 1-32 char alphanumeric `id`
+    (RFC 8461 section 3.1). The HTTPS policy itself is deliberately not fetched."""
     text = value.strip()
-    return text[: len(_MTA_STS_PREFIX)].lower() == _MTA_STS_PREFIX and (
-        len(text) == len(_MTA_STS_PREFIX) or text[len(_MTA_STS_PREFIX)] in " \t;"
-    )
+    if text[: len(_MTA_STS_PREFIX)].lower() != _MTA_STS_PREFIX or (
+        len(text) != len(_MTA_STS_PREFIX) and text[len(_MTA_STS_PREFIX)] not in " \t;"
+    ):
+        return False
+    return _MTA_STS_ID.fullmatch(_tags(text).get("id", "")) is not None
 
 
 def _values(lookup: DnsLookup) -> tuple[str, ...]:

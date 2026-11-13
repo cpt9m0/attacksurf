@@ -82,16 +82,22 @@ def run(
     errors: set[tuple[str, DnsRecordType]] | None = None,
     all_errors: bool = False,
     default_status: DnsStatus = DnsStatus.NO_ANSWER,
+    domain: str = ASSET,
+    org_domain: str | None = None,
 ) -> tuple[ScanOutput, FakeDns]:
     dns = FakeDns(answers, errors=errors, all_errors=all_errors, default_status=default_status)
     ctx = ScanContext(
         uuid4(),
         uuid4(),
-        AssetRef(type=AssetType.DOMAIN, value=ROOT),
+        AssetRef(type=AssetType.DOMAIN, value=domain),
         "dns_passive",
-        runtime=ScannerRuntime(dns, FakeHttp()),
+        runtime=ScannerRuntime(
+            dns,
+            FakeHttp(),
+            org_domain=(lambda _name, _org=org_domain: _org) if org_domain else None,
+        ),
     )
-    return DnsEmail().run(ctx, AssetRef(type=AssetType.DOMAIN, value=ASSET)), dns
+    return DnsEmail().run(ctx, AssetRef(type=AssetType.DOMAIN, value=domain)), dns
 
 
 def healthy_answers() -> dict[tuple[str, DnsRecordType], tuple[str, ...] | DnsStatus]:
@@ -194,14 +200,23 @@ def test_spf_more_than_ten_dns_terms_is_a_finding() -> None:
     assert finding.remediation_context["count"] == "11"
 
 
-def test_spf_ten_dns_terms_is_allowed_and_redirect_counts() -> None:
-    includes = " ".join(f"include:{n}.example.net" for n in range(9))
+def test_spf_lookup_count_ignores_terms_after_all_and_redirect_with_all() -> None:
+    # Ten query terms, then `-all`: the trailing redirect is never evaluated (RFC 7208 5.1).
+    mechanisms = " ".join(f"a:{n}.example.net" for n in range(10))
     answers = healthy_answers()
-    answers[(ASSET, DnsRecordType.TXT)] = (f"v=spf1 {includes} redirect=_spf.example.net -all",)
+    answers[(ASSET, DnsRecordType.TXT)] = (f"v=spf1 {mechanisms} -all redirect=_spf.example.net",)
 
     assert "dns.email.spf_too_many_lookups" not in by_rule(run(answers)[0])
 
-    answers[(ASSET, DnsRecordType.TXT)] = (f"v=spf1 {includes} mx redirect=_spf.example.net -all",)
+
+def test_spf_lookup_count_counts_redirect_only_without_all() -> None:
+    includes = " ".join(f"include:{n}.example.net" for n in range(9))
+    answers = healthy_answers()
+    answers[(ASSET, DnsRecordType.TXT)] = (f"v=spf1 {includes} redirect=_spf.example.net",)
+
+    assert "dns.email.spf_too_many_lookups" not in by_rule(run(answers)[0])
+
+    answers[(ASSET, DnsRecordType.TXT)] = (f"v=spf1 {includes} mx redirect=_spf.example.net",)
 
     assert "dns.email.spf_too_many_lookups" in by_rule(run(answers)[0])
 
@@ -216,11 +231,12 @@ def test_spf_without_all_or_redirect_is_implicitly_neutral() -> None:
     assert finding.remediation_context["ending"] == "?all"
 
 
-def test_spf_redirect_makes_the_all_mechanism_moot() -> None:
+def test_spf_all_takes_precedence_over_redirect() -> None:
+    # RFC 7208 section 5.1: an `all` mechanism makes `redirect` ineffective, in any order.
     answers = healthy_answers()
     answers[(ASSET, DnsRecordType.TXT)] = ("v=spf1 redirect=_spf.example.net +all",)
 
-    assert "dns.email.spf_permissive" not in by_rule(run(answers)[0])
+    assert "dns.email.spf_permissive" in by_rule(run(answers)[0])
 
 
 def test_spf_record_matching_is_case_insensitive() -> None:
@@ -273,6 +289,69 @@ def test_dmarc_multiple_records_count_as_missing() -> None:
     assert set(by_rule(run(answers)[0])) == {"dns.email.dmarc_missing"}
 
 
+def test_dmarc_invalid_sp_falls_back_to_none_with_reporting() -> None:
+    # RFC 7489 section 6.6.3: an invalid `sp` with a valid reporting URI is read as p=none.
+    answers = healthy_answers()
+    answers[(DMARC_NAME, DnsRecordType.TXT)] = (
+        "v=DMARC1; p=reject; sp=invalid; rua=mailto:dmarc@acme.example",
+    )
+
+    assert set(by_rule(run(answers)[0])) == {"dns.email.dmarc_policy_none"}
+
+
+def test_dmarc_invalid_sp_without_reporting_counts_as_missing() -> None:
+    answers = healthy_answers()
+    answers[(DMARC_NAME, DnsRecordType.TXT)] = ("v=DMARC1; p=reject; sp=invalid",)
+
+    assert set(by_rule(run(answers)[0])) == {"dns.email.dmarc_missing"}
+
+
+def test_dmarc_falls_back_to_organizational_domain_sp_policy() -> None:
+    domain = "eng.acme.example"
+    answers: dict[tuple[str, DnsRecordType], tuple[str, ...] | DnsStatus] = {
+        (domain, DnsRecordType.TXT): (STRICT_SPF,),
+        (f"_mta-sts.{domain}", DnsRecordType.TXT): (MTA_STS,),
+        (f"default._domainkey.{domain}", DnsRecordType.TXT): (DKIM_KEY,),
+        ("_dmarc.acme.example", DnsRecordType.TXT): (
+            "v=DMARC1; p=none; sp=reject; rua=mailto:dmarc@acme.example",
+        ),
+    }
+
+    found = by_rule(run(answers, domain=domain, org_domain="acme.example")[0])
+
+    # `sp=reject` governs the subdomain even though the org record's own policy is none.
+    assert not {rule for rule in found if ".dmarc_" in rule}
+
+
+def test_dmarc_organizational_fallback_uses_p_when_sp_is_absent() -> None:
+    domain = "eng.acme.example"
+    answers: dict[tuple[str, DnsRecordType], tuple[str, ...] | DnsStatus] = {
+        (domain, DnsRecordType.TXT): (STRICT_SPF,),
+        (f"_mta-sts.{domain}", DnsRecordType.TXT): (MTA_STS,),
+        (f"default._domainkey.{domain}", DnsRecordType.TXT): (DKIM_KEY,),
+        ("_dmarc.acme.example", DnsRecordType.TXT): (
+            "v=DMARC1; p=none; rua=mailto:dmarc@acme.example",
+        ),
+    }
+
+    found = by_rule(run(answers, domain=domain, org_domain="acme.example")[0])
+
+    assert set(found) == {"dns.email.dmarc_policy_none"}
+
+
+def test_dmarc_still_missing_when_organizational_domain_has_no_record() -> None:
+    domain = "eng.acme.example"
+    answers: dict[tuple[str, DnsRecordType], tuple[str, ...] | DnsStatus] = {
+        (domain, DnsRecordType.TXT): (STRICT_SPF,),
+        (f"_mta-sts.{domain}", DnsRecordType.TXT): (MTA_STS,),
+        (f"default._domainkey.{domain}", DnsRecordType.TXT): (DKIM_KEY,),
+    }
+
+    found = by_rule(run(answers, domain=domain, org_domain="acme.example")[0])
+
+    assert "dns.email.dmarc_missing" in found
+
+
 def test_dkim_any_selector_hit_clears_the_finding() -> None:
     answers = healthy_answers()
     del answers[(f"default._domainkey.{ASSET}", DnsRecordType.TXT)]
@@ -307,6 +386,22 @@ def test_dkim_all_selector_errors_fail_open() -> None:
 
 def test_mta_sts_present_clears_the_info_finding() -> None:
     assert "dns.email.mta_sts_missing" not in by_rule(run(healthy_answers())[0])
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        "v=STSv1",
+        "v=STSv1; id=",
+        "v=STSv1; id=bad_id!",
+        "v=STSv1; id=" + "a" * 33,
+    ],
+)
+def test_mta_sts_without_a_usable_id_counts_as_missing(record: str) -> None:
+    answers = healthy_answers()
+    answers[(MTA_STS_NAME, DnsRecordType.TXT)] = (record,)
+
+    assert "dns.email.mta_sts_missing" in by_rule(run(answers)[0])
 
 
 def test_parked_domain_without_mx_still_gets_spf_and_dmarc_findings() -> None:

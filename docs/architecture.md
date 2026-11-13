@@ -177,9 +177,13 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 - **Email security (#17):** `dns.email` is a check-only plugin on root domains (no assets,
   relations or observations) that reads TXT records for the apex, `_dmarc`, `_mta-sts` and common
   `<selector>._domainkey` names in one `lookup_many` round and evaluates SPF (missing,
-  multiple, permissive `+all`/`?all`, >10 DNS-querying terms), DMARC (missing — including
-  multiple records, monitor-only, no reporting, partial `pct`), DKIM (no common selector
-  publishes a usable key; low confidence) and MTA-STS (missing, info). Evidence is the raw
+  multiple, permissive `+all`/`?all`, >10 reachable DNS-querying terms), DMARC (missing —
+  including multiple records, monitor-only, no reporting, partial `pct`), DKIM (no common
+  selector publishes a usable key; low confidence) and MTA-STS (missing, info). A scanned
+  name without a usable DMARC record falls back to its organizational domain's record
+  (`ScannerRuntime.org_domain`, fed by the ScopeGuard's public-suffix classifier), whose
+  `sp` policy then applies; an invalid `p`/`sp` is read as `p=none` when a valid reporting
+  URI exists, per RFC 7489. Evidence is the raw
   TXT records as `dns_record` evidence. A failed query fails open (that check is skipped);
   only an all-error run raises `TransientJobError`. No HTTP fetch: MTA-STS is the DNS
   signal only, and parked-domain hardening (`v=spf1 -all` + `p=reject`) is covered by the
