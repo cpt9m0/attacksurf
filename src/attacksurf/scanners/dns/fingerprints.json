@@ -1,0 +1,241 @@
+[
+  {
+    "service": "Agile CRM",
+    "cname": [
+      "agilecrm.com"
+    ],
+    "fingerprint": "Sorry, this page is no longer available.",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Airee.ru",
+    "cname": [
+      "airee.ru"
+    ],
+    "fingerprint": "Ошибка 402. Сервис Айри.рф не оплачен",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Anima",
+    "cname": [
+      "animaapp.io"
+    ],
+    "fingerprint": "The page you were looking for does not exist.",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "AWS/Elastic Beanstalk",
+    "cname": [
+      "elasticbeanstalk.com"
+    ],
+    "fingerprint": null,
+    "nxdomain": true,
+    "http_status": null
+  },
+  {
+    "service": "AWS/S3",
+    "cname": [
+      "s3.amazonaws.com"
+    ],
+    "fingerprint": "The specified bucket does not exist",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Bitbucket",
+    "cname": [
+      "bitbucket.io"
+    ],
+    "fingerprint": "Repository not found",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Discourse",
+    "cname": [
+      "trydiscourse.com"
+    ],
+    "fingerprint": null,
+    "nxdomain": true,
+    "http_status": null
+  },
+  {
+    "service": "Gemfury",
+    "cname": [
+      "furyns.com"
+    ],
+    "fingerprint": "404: This page could not be found.",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Ghost",
+    "cname": [
+      "ghost.io"
+    ],
+    "fingerprint": "Site unavailable\\.&#124;Failed to resolve DNS path for this host",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "HatenaBlog",
+    "cname": [
+      "hatenablog.com"
+    ],
+    "fingerprint": "404 Blog is not found",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Help Juice",
+    "cname": [
+      "helpjuice.com"
+    ],
+    "fingerprint": "We could not find what you're looking for.",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Help Scout",
+    "cname": [
+      "helpscoutdocs.com"
+    ],
+    "fingerprint": "No settings were found for this company:",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Helprace",
+    "cname": [
+      "helprace.com"
+    ],
+    "fingerprint": null,
+    "nxdomain": false,
+    "http_status": 301
+  },
+  {
+    "service": "JetBrains",
+    "cname": [
+      "youtrack.cloud"
+    ],
+    "fingerprint": "is not a registered InCloud YouTrack",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "LaunchRock",
+    "cname": [
+      "launchrock.com"
+    ],
+    "fingerprint": null,
+    "nxdomain": false,
+    "http_status": 500
+  },
+  {
+    "service": "Microsoft Azure",
+    "cname": [
+      "cloudapp.net",
+      "cloudapp.azure.com",
+      "azurewebsites.net",
+      "blob.core.windows.net",
+      "azure-api.net",
+      "azurehdinsight.net",
+      "azureedge.net",
+      "azurecontainer.io",
+      "database.windows.net",
+      "azuredatalakestore.net",
+      "search.windows.net",
+      "azurecr.io",
+      "redis.cache.windows.net",
+      "servicebus.windows.net",
+      "visualstudio.com"
+    ],
+    "fingerprint": null,
+    "nxdomain": true,
+    "http_status": null
+  },
+  {
+    "service": "Ngrok",
+    "cname": [
+      "ngrok.io"
+    ],
+    "fingerprint": "Tunnel .*.ngrok.io not found",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Readme.io",
+    "cname": [
+      "readme.io"
+    ],
+    "fingerprint": "The creators of this project are still working on making everything perfect!",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Strikingly",
+    "cname": [
+      "s.strikinglydns.com"
+    ],
+    "fingerprint": "PAGE NOT FOUND.",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Surge.sh",
+    "cname": [
+      "na-west1.surge.sh"
+    ],
+    "fingerprint": "project not found",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "SurveySparrow",
+    "cname": [
+      "surveysparrow.com"
+    ],
+    "fingerprint": "Account not found.",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Uberflip",
+    "cname": [
+      "read.uberflip.com"
+    ],
+    "fingerprint": "The URL you've accessed does not provide a hub.",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Uptimerobot",
+    "cname": [
+      "stats.uptimerobot.com"
+    ],
+    "fingerprint": "page not found",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Wordpress",
+    "cname": [
+      "wordpress.com"
+    ],
+    "fingerprint": "Do you want to register .*.wordpress.com?",
+    "nxdomain": false,
+    "http_status": null
+  },
+  {
+    "service": "Worksites",
+    "cname": [
+      "worksites.net"
+    ],
+    "fingerprint": "Hello! Sorry, but the website you&rsquo;re looking for doesn&rsquo;t exist.",
+    "nxdomain": false,
+    "http_status": null
+  }
+]

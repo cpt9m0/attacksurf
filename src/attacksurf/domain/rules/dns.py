@@ -1,4 +1,4 @@
-"""DNS rules: record exposure (#16) and email authentication (#17)."""
+"""DNS rules: record exposure (#16), email authentication (#17), takeover candidates (#18)."""
 
 from attacksurf.domain.findings import Severity
 from attacksurf.domain.rules.catalog import Rule
@@ -185,6 +185,65 @@ MTA_STS_MISSING = Rule(
     references=("https://www.rfc-editor.org/rfc/rfc8461",),
 )
 
+TAKEOVER_DANGLING_CNAME = Rule(
+    id="dns.takeover.dangling_cname",
+    title="Dangling CNAME points at a deprovisioned service",
+    description=(
+        "The name CNAMEs to $target on $service, a service whose unclaimed instances stop "
+        "resolving, and the target no longer resolves (NXDOMAIN). Anyone can usually register "
+        "the abandoned name or account and serve content under this subdomain, inheriting its "
+        "cookies, trust and search ranking."
+    ),
+    default_severity=Severity.HIGH,
+    remediation=(
+        "Remove the CNAME record for $domain pointing at $target, or re-provision the "
+        "$service resource it named and confirm it resolves again. Do not leave the record "
+        "in place while the resource is unclaimed."
+    ),
+    references=(
+        "https://github.com/EdOverflow/can-i-take-over-xyz",
+        "https://www.rfc-editor.org/rfc/rfc1034",
+    ),
+)
+
+TAKEOVER_FINGERPRINT_MATCH = Rule(
+    id="dns.takeover.fingerprint_match",
+    title="CNAME target reports an unclaimed service instance",
+    description=(
+        "The name CNAMEs to $target on $service, and the service answers with its "
+        '"not found" signature for unclaimed instances. The resource the record was created '
+        "for has been deleted, so anyone can usually claim the name and serve content under "
+        "this subdomain."
+    ),
+    default_severity=Severity.HIGH,
+    remediation=(
+        "Remove the CNAME record for $domain pointing at $target, or re-create the $service "
+        "resource it named so the service stops reporting it as unclaimed."
+    ),
+    references=("https://github.com/EdOverflow/can-i-take-over-xyz",),
+)
+
+TAKEOVER_DANGLING_NS = Rule(
+    id="dns.takeover.dangling_ns",
+    title="NS delegation points at a nameserver that no longer exists",
+    description=(
+        "The name is delegated to the nameserver $target, which no longer resolves "
+        "(NXDOMAIN). The delegation is broken, and where the nameserver's own domain has "
+        "lapsed anyone can re-register it and answer authoritatively for this zone, "
+        "controlling every record under it."
+    ),
+    default_severity=Severity.CRITICAL,
+    remediation=(
+        "Remove or replace the NS record for $domain delegating to $target. Point the "
+        "delegation only at nameservers that exist and serve this zone, and confirm the "
+        "nameserver's own domain registration is current."
+    ),
+    references=(
+        "https://github.com/EdOverflow/can-i-take-over-xyz",
+        "https://www.rfc-editor.org/rfc/rfc1912",
+    ),
+)
+
 DNS_RULES: tuple[Rule, ...] = (
     PRIVATE_IP_EXPOSED,
     SPF_MISSING,
@@ -197,4 +256,7 @@ DNS_RULES: tuple[Rule, ...] = (
     DMARC_PCT_PARTIAL,
     DKIM_NOT_FOUND,
     MTA_STS_MISSING,
+    TAKEOVER_DANGLING_CNAME,
+    TAKEOVER_FINGERPRINT_MATCH,
+    TAKEOVER_DANGLING_NS,
 )
