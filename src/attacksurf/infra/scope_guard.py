@@ -5,14 +5,22 @@ for active checks, and hands the plugin run-scoped adapters that re-check every 
 HTTP host against the plugin's declared `ScannerGrant` (ADR 0013).
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Protocol
 from urllib.parse import urlsplit
 from uuid import UUID
 
 from attacksurf.domain.assets import AssetType
 from attacksurf.domain.cache import NullCache, ScanCache
-from attacksurf.domain.net import DnsResolver, HttpBody, SafeHttpClient, ScannerRuntime
+from attacksurf.domain.net import (
+    DnsLookup,
+    DnsQuery,
+    DnsResolver,
+    HttpBody,
+    IpIntel,
+    SafeHttpClient,
+    ScannerRuntime,
+)
 from attacksurf.domain.sandbox import SandboxResult, SandboxRunner, UnconfiguredSandboxRunner
 from attacksurf.domain.scanners import AssetRef, ScanContext, Scanner, ScannerGate, ScannerGrant
 from attacksurf.domain.scope import (
@@ -29,7 +37,7 @@ from attacksurf.infra import public_suffix
 from attacksurf.infra.http import bounded_limit
 
 MAX_REDIRECTS = 4
-MAX_DNS_LOOKUPS = 20
+MAX_DNS_LOOKUPS = 40
 
 
 class OwnershipChecker(Protocol):
@@ -63,6 +71,7 @@ class ScopeGuard(ScannerGate):
         classify: Callable[[str], PublicSuffix] = public_suffix.classify,
         sandbox: SandboxRunner | None = None,
         cache: ScanCache | None = None,
+        ip_intel: IpIntel | None = None,
     ) -> None:
         self._dns = dns
         self._http = http
@@ -70,6 +79,7 @@ class ScopeGuard(ScannerGate):
         self._classify = classify
         self._sandbox = sandbox or UnconfiguredSandboxRunner()
         self._cache = cache if cache is not None else NullCache()
+        self._ip_intel = ip_intel
 
     def check(self, ctx: ScanContext, asset: AssetRef, scanner: Scanner) -> ScannerRuntime:
         """Validate and authorize one run. Raises `ScopeError`, and the job is then skipped."""
@@ -89,7 +99,13 @@ class ScopeGuard(ScannerGate):
             check_host=self._check_host,
         )
         sandbox = _GuardedSandbox(self._sandbox, allowed=grant.sandbox_analyzers)
-        return ScannerRuntime(guarded_dns, http.client_for(guarded_dns), sandbox, cache=self._cache)
+        return ScannerRuntime(
+            guarded_dns,
+            http.client_for(guarded_dns),
+            sandbox,
+            cache=self._cache,
+            ip_intel=self._ip_intel,
+        )
 
     def _check_target(self, asset: AssetRef, scanner: Scanner) -> None:
         if asset.type not in scanner.asset_types:
@@ -118,7 +134,7 @@ class ScopeGuard(ScannerGate):
 
 
 class _GuardedDns:
-    """Per-run DNS budget; every answer is validated, so CNAME tricks are caught too."""
+    """Per-run DNS budget. Connection answers are validated; raw records are data only."""
 
     def __init__(self, inner: DnsResolver, *, max_lookups: int) -> None:
         self._inner = inner
@@ -136,6 +152,12 @@ class _GuardedDns:
     def resolve_name(self, host: str) -> tuple[str, ...]:
         self._take()
         return tuple(str(address) for address in check_addresses(self._inner.resolve_name(host)))
+
+    def lookup_many(self, queries: Sequence[DnsQuery]) -> tuple[DnsLookup, ...]:
+        """Raw records are data, not connection targets: only the budget is enforced."""
+        for _query in queries:
+            self._take()
+        return self._inner.lookup_many(queries)
 
 
 class _GuardedSandbox:

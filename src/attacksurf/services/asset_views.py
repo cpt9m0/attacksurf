@@ -29,6 +29,18 @@ from attacksurf.infra.db.tenancy import scoped
 PAGE_SIZE = 25
 MAX_FINDINGS = 200
 MAX_SCANS = 50
+MAX_DETAIL_RECORDS = 20
+MAX_DETAIL_LENGTH = 512
+_DNS_FIELDS = (
+    ("a", "A"),
+    ("aaaa", "AAAA"),
+    ("cname", "CNAME"),
+    ("mx", "MX"),
+    ("ns", "NS"),
+    ("txt", "TXT"),
+    ("caa", "CAA"),
+    ("soa", "SOA"),
+)
 
 
 class AssetStatus(StrEnum):
@@ -82,11 +94,34 @@ class RelationRow:
 
 
 @dataclass(frozen=True)
+class DnsRecordRow:
+    type: str
+    values: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DnsDetails:
+    chain: tuple[str, ...]  # asset -> CNAME hops -> A/AAAA, for display
+    records: tuple[DnsRecordRow, ...]
+    private_ips: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class IpDetails:
+    ptr: str | None
+    asn: int | None
+    org: str | None
+    country: str | None
+
+
+@dataclass(frozen=True)
 class AssetDetail:
     asset: AssetRow
     outgoing: tuple[RelationRow, ...]  # this asset --kind--> peer
     incoming: tuple[RelationRow, ...]  # peer --kind--> this asset
     discovered: int  # assets found under it (roots only)
+    dns: DnsDetails | None = None
+    ip: IpDetails | None = None
 
 
 @dataclass(frozen=True)
@@ -169,11 +204,18 @@ def get_asset_detail(session: Session, org_id: UUID, asset_id: UUID) -> AssetDet
             )
             or 0
         )
+    details = session.scalar(
+        scoped(Asset, org_id).where(Asset.id == asset_id).with_only_columns(Asset.details)
+    )
+    if details is None:
+        raise AssetNotFound("Asset not found.")
     return AssetDetail(
         asset=asset,
         outgoing=_relations(session, org_id, asset_id, outgoing=True),
         incoming=_relations(session, org_id, asset_id, outgoing=False),
         discovered=discovered,
+        dns=_dns_details(details, asset.value),
+        ip=_ip_details(details),
     )
 
 
@@ -316,6 +358,62 @@ def _filter_conditions(flt: AssetFilter) -> list[ColumnElement[bool]]:
     elif flt.status is AssetStatus.ARCHIVED:
         conditions.append(Asset.is_active.is_(False))
     return conditions
+
+
+def _dns_details(details: Any, asset_value: str) -> DnsDetails | None:
+    raw = details.get("dns") if isinstance(details, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    records: list[DnsRecordRow] = []
+    by_key: dict[str, tuple[str, ...]] = {}
+    for key, label in _DNS_FIELDS:
+        values = _detail_values(raw.get(key))
+        if values:
+            by_key[key] = values
+            records.append(DnsRecordRow(type=label, values=values))
+    chain = _detail_values(raw.get("cname_chain"))
+    addresses = (*by_key.get("a", ()), *by_key.get("aaaa", ()))
+    private = _detail_values(raw.get("private_ips"))
+    if not records and not chain and not addresses and not private:
+        return None
+    if not chain or chain[0] != asset_value:
+        chain = (asset_value, *chain)
+    display = tuple(dict.fromkeys((*chain, *addresses)))
+    return DnsDetails(chain=display, records=tuple(records), private_ips=private)
+
+
+def _ip_details(details: Any) -> IpDetails | None:
+    raw = details.get("ip") if isinstance(details, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    ptr = _detail_text(raw.get("ptr"))
+    org = _detail_text(raw.get("org"))
+    country = _detail_text(raw.get("country"))
+    asn = raw.get("asn")
+    number = asn if isinstance(asn, int) and not isinstance(asn, bool) else None
+    if ptr is None and org is None and country is None and number is None:
+        return None
+    return IpDetails(ptr=ptr, asn=number, org=org, country=country)
+
+
+def _detail_values(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    result: list[str] = []
+    for item in value:
+        text = _detail_text(item)
+        if text is not None:
+            result.append(text)
+        if len(result) >= MAX_DETAIL_RECORDS:
+            break
+    return tuple(result)
+
+
+def _detail_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text[:MAX_DETAIL_LENGTH] or None
 
 
 def _relations(

@@ -1,12 +1,13 @@
 """ScopeGuard: target validation, ownership gating and the per-run network allowlists."""
 
+from collections.abc import Sequence
 from uuid import uuid4
 
 import pytest
 
 from attacksurf.domain.assets import AssetType
 from attacksurf.domain.cache import NullCache
-from attacksurf.domain.net import HttpBody, ScannerRuntime
+from attacksurf.domain.net import DnsLookup, DnsQuery, DnsRecordType, HttpBody, ScannerRuntime
 from attacksurf.domain.sandbox import SandboxError
 from attacksurf.domain.scanners import (
     AssetRef,
@@ -42,6 +43,10 @@ class StubDns:
         self.calls.append(("A+AAAA", host))
         return self.answers.get(host, ("93.184.216.34",))
 
+    def lookup_many(self, queries: Sequence[DnsQuery]) -> tuple[DnsLookup, ...]:
+        self.calls.extend((query.record_type.value, query.name) for query in queries)
+        return tuple(DnsLookup(query, self.answers.get(query.name, ())) for query in queries)
+
 
 class StubHttp:
     def __init__(self) -> None:
@@ -66,7 +71,6 @@ class StubHttp:
 
 class _RunHttp(StubHttp):
     """What a run gets from `with_redirect_policy`, mirroring the real client exactly.
-
     The real `SafeHttpClient` consults its policy hook before the first request and every hop,
     so this fake must too: a permissive fake would hide a guard bypass (see
     `test_run_client_enforces_the_allowlist_before_the_first_request`).
@@ -278,6 +282,9 @@ class StaticAnswers:
         self.calls.append(host)
         return self.answers[host]
 
+    def lookup_many(self, queries: Sequence[DnsQuery]) -> tuple[DnsLookup, ...]:
+        return tuple(DnsLookup(query, self.answers.get(query.name, ())) for query in queries)
+
 
 def test_dns_only_grant_denies_http_entirely() -> None:
     scope, _ = make_guard()
@@ -333,6 +340,31 @@ def test_guarded_dns_validates_every_answer_and_enforces_the_budget() -> None:
         guarded.resolve_name("split.example")
     with pytest.raises(ScopeError, match="budget"):
         guarded.resolve_ipv4("ok.example")
+
+
+def test_guarded_dns_returns_raw_private_answers_without_validating_them() -> None:
+    """Raw records are data: the resolver reports 10.0.0.1 but a connection path still blocks it."""
+    dns = StubDns({"split.example": ("10.0.0.1",)})
+    guarded = _GuardedDns(dns, max_lookups=2)
+
+    result = guarded.lookup_many((DnsQuery("split.example", DnsRecordType.A),))
+
+    assert result[0].values == ("10.0.0.1",)
+    with pytest.raises(ScopeError, match="private"):
+        guarded.resolve_name("split.example")
+    with pytest.raises(ScopeError, match="budget"):
+        guarded.lookup_many((DnsQuery("split.example", DnsRecordType.A),))
+
+
+def test_guarded_dns_charges_one_unit_per_raw_query() -> None:
+    guarded = _GuardedDns(StubDns(), max_lookups=2)
+
+    guarded.lookup_many(
+        (DnsQuery("a.example", DnsRecordType.A), DnsQuery("a.example", DnsRecordType.AAAA))
+    )
+
+    with pytest.raises(ScopeError, match="budget"):
+        guarded.lookup_many((DnsQuery("a.example", DnsRecordType.A),))
 
 
 def test_guarded_dns_caps_a_scanner_declared_budget() -> None:

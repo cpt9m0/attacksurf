@@ -55,13 +55,19 @@ Scanners never touch the network directly. Every run passes `ScopeGuard` first
 (`infra/scope_guard.py`, ADR 0013): the target is validated, ownership is required for active
 checks, and the plugin receives only DNS/HTTP adapters bounded by its frozen `ScannerGrant`
 (allowlisted public data services, or the target after verification; a DNS budget; the
-sandbox analyzers it may name, none by default), plus a namespaced run cache. The cache is not
+sandbox analyzers it may name, none by default), plus a namespaced run cache and optional
+offline IP intel. DNS queries go to operator-configured public resolvers only
+(`DNS_RESOLVERS`, validated as public IPs), with no search domains; a query to a nameserver
+found in an answer is never sent. The cache is not
 network access and is not grant-controlled: it stores only public source data (CT names today,
 RDAP later), never findings, evidence, tenant data or credentials; keys are namespaced beside
 Celery's, values and TTLs are bounded, and every Redis error is a miss rather than a job failure
 (ADR 0022). Declared
 services are re-checked and resolved before the run starts; every DNS answer and HTTP host
-(each request, including every redirect hop) is validated again when used. A scan profile's
+(each request, including every redirect hop) is validated again when used. `lookup_many`
+returns raw records as data and deliberately does not validate addresses, so private A/AAAA
+answers can be reported by `dns.resolve`; the connection paths (`resolve_ipv4`/`resolve_name`)
+still validate every address, and only those feed the pinned HTTP client. A scan profile's
 `max_discovered_assets` caps what one root can add, counting against the scan root under a row
 lock so overlapping scans can't each claim the full allowance and a check on a discovered
 subdomain cannot claim a fresh one; a policy error fails only its job.
@@ -70,7 +76,10 @@ Active/analysis queues remain reserved and cannot be selected in a scan profile;
 run only on assets whose root domain proved ownership by DNS TXT (ADR 0014). CT discovery's
 random-label wildcard probes use the same guarded DNS adapter and DNS budget; a wildcard marker
 (`Asset.details["wildcard"] = true`) is data for later resolution, never a finding or a claim
-that a name exists.
+that a name exists. `dns.resolve` records A/AAAA/CNAME/MX/NS/TXT/CAA/SOA in capped
+`Asset.details`, creates IP assets/edges, and emits the info finding
+`dns.records.private_ip_exposed` for private or special-purpose addresses; it never contacts
+those addresses. A missing ip2asn file disables ASN/organisation enrichment only.
 
 Repository fetches (ADR 0017, not built yet) pass the same gate through `check_fetch` and are
 not scanners: `worker-fetch` reaches only allowlisted forges, using a streaming transport

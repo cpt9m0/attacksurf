@@ -6,6 +6,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- DNS resolution (`dns.resolve`): configurable public resolvers with async, bounded queries;
+  A/AAAA/CNAME/MX/NS/TXT/CAA/SOA records stored in `Asset.details["dns"]`; IP assets with
+  `resolves_to` edges and in-root `cname_to` chains; reverse DNS and optional offline ip2asn
+  enrichment; non-resolving subdomains marked inactive; and the info finding
+  `dns.records.private_ip_exposed` for private/special-purpose addresses. Asset detail shows the
+  CNAME → IP chain and records (ADR 0025, #16).
 - Sandbox launcher building blocks: env-only settings (the proxy URL is a `SecretStr`, since it
   may embed credentials), an analyzer catalog (empty until the first analyzer ships), an artifact
   resolver that refuses symlinks and anything outside the artifact root, a create-body builder

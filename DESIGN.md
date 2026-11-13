@@ -114,6 +114,7 @@ Specs (visuals) stay TBD.
 | AI panel | AI triage output, clearly labeled as AI-generated, shows model + prompt version | TBD |
 | Empty state | illustration/icon + one-line explanation + primary action | TBD |
 | Modal / confirm | destructive actions (archive asset, accept risk): `confirm_dialog(id, trigger_label, title, message, action, confirm_label, trigger_variant="danger", confirm_variant="danger")`, a native `<dialog>` opened by `Alpine.data("confirmDialog")`; focus starts on Cancel, Escape closes, confirm POSTs with CSRF. Keep the danger variant for anything that removes data; reversible or recoverable actions (rotate a token) use `secondary` | TBD |
+| DNS chain / records | monospace `asset → CNAME → IP` chain with `overflow-wrap:anywhere`, then a data table of record type → values; non-public addresses called out in muted text. All values are scan data and stay autoescaped | TBD |
 | Ownership card | proof of domain control: status badge, the exact TXT record in a `.copy-field` with a copy button (`Alpine.data("copyField")`, the code block stays selectable without the Clipboard API), and admin-only actions (start / verify now / rotate behind a confirm). Subdomains show their root's record read-only | TBD |
 
 ## 6. Interaction patterns (HTMX)
