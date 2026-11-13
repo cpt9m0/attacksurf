@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid5
 
 from sqlalchemy import case, func, literal, tuple_
@@ -624,8 +625,24 @@ def _materially_changed(
 
 def _evidence_digest(evidence: tuple[RawEvidence, ...]) -> str:
     """SHA-256 of the evidence set, order-insensitive; an empty set has its own digest."""
-    keys = sorted({(item.kind.value, _canonical_json(item.data)) for item in evidence})
+    keys = sorted({(item.kind.value, _digest_json(item.data)) for item in evidence})
     return hashlib.sha256(json.dumps(keys, ensure_ascii=False).encode()).hexdigest()
+
+
+def _digest_json(data: dict[str, Any]) -> str:
+    """Canonical JSON for material-change comparison.
+
+    A DNS RRset's answer order is not meaningful (resolvers may return the same records in a
+    different order), so `values` is sorted; a CNAME chain's order is the path and is kept.
+    """
+    values = data.get("values")
+    if (
+        data.get("record") != "CNAME"
+        and isinstance(values, list)
+        and all(isinstance(value, str) for value in values)
+    ):
+        data = {**data, "values": sorted(values)}
+    return _canonical_json(data)
 
 
 _EMPTY_EVIDENCE_DIGEST = _evidence_digest(())

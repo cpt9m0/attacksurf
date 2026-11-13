@@ -41,7 +41,9 @@ The pieces it left open:
   reopens an `accepted_risk`/`false_positive` finding only when its severity or confidence
   changed, or when the incoming evidence set (kind + canonical JSON, order-insensitive) differs
   from the last observed set. `Finding.evidence_digest` stores the SHA-256 of that set, with an
-  empty batch as a batch of its own, so the comparison is O(1) and never loads evidence history;
+  empty batch as a batch of its own, so the comparison is O(1) and never loads evidence history.
+  A DNS RRset's answer order is not meaningful, so `values` is sorted before hashing; a CNAME
+  chain's order is the path and is kept.
   `NULL` (a row migrated from before this feature) has an unknown baseline: its first
   observation records the baseline and never reopens on its own, so a migration cannot discard
   a suppression. The comparison happens

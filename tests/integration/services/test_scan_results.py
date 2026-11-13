@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from attacksurf.domain.assets import AssetNotFound, AssetSource, AssetType, RelationKind
 from attacksurf.domain.events import FindingReopened
-from attacksurf.domain.findings import Confidence, FindingStatus, Severity
+from attacksurf.domain.findings import Confidence, EvidenceKind, FindingStatus, Severity
 from attacksurf.domain.rules import Rule
 from attacksurf.domain.scanners import (
     AssetObservation,
@@ -301,6 +301,47 @@ def test_persist_reopens_a_suppressed_finding_when_its_assessment_changes(
 
     assert finding.status is FindingStatus.OPEN
     assert [type(event) for event in events] == [FindingReopened]
+
+
+def test_persist_ignores_reordered_dns_record_values_for_material_change(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+
+    def output(values: tuple[str, ...]) -> ScanOutput:
+        return ScanOutput(
+            findings=(
+                RawFinding(
+                    rule_id=RULE.id,
+                    evidence=(
+                        RawEvidence(
+                            kind=EvidenceKind.DNS_RECORD,
+                            data={
+                                "record": "TXT",
+                                "name": "_dmarc.example",
+                                "values": list(values),
+                            },
+                        ),
+                    ),
+                ),
+            )
+        )
+
+    persist_scan_output(db_session, scan, scan.root_asset_id, output(("a", "b")), catalog=catalog)
+    finding = db_session.scalars(scoped(Finding, scan.org_id)).one()
+    finding.status = FindingStatus.ACCEPTED_RISK
+    db_session.flush()
+
+    events = persist_scan_output(
+        db_session,
+        _later_scan(db_session, scan),
+        scan.root_asset_id,
+        output(("b", "a")),
+        catalog=catalog,
+    )
+
+    assert finding.status is FindingStatus.ACCEPTED_RISK
+    assert events == []
 
 
 def test_persist_ignores_evidence_order_for_material_change(
