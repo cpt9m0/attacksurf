@@ -257,10 +257,14 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   `fixed_at` cleared); an active finding is fixed only when a `COMPLETED` check/discovery job of
   this scan has its own `scanner` and `asset_id` and its `last_seen` is not newer than the scan
   start, so a failed/skipped check proves nothing and a delayed older scan never undoes a newer
-  observation. Suppressed findings are never auto-fixed: persistence reopens them only when
-  severity/confidence changed or the evidence set differs from their latest batch. The same
-  transaction diffs discovered assets (`new`; `disappeared` only when this scan's discovery
-  completed and an earlier completed scan of the root exists), writes `Scan.stats`
+  observation. `fixed_at` is the fixing scan's start, and only a fix older than this scan
+  regresses, so a delayed positive from an older scan cannot undo a newer fix. Suppressed
+  findings are never auto-fixed: persistence reopens them only when this observation is at least
+  as new as the stored one and severity/confidence changed or the evidence set differs from the
+  latest batch (read alone with `max(captured_at)`). The same
+  transaction diffs discovered assets (`new`; `disappeared` subdomains only, and only when this
+  scan's discovery completed and an earlier completed scan of the root exists: IPs need
+  per-hostname resolution coverage), writes `Scan.stats`
   (`findings.{new,fixed,regressed,total}` with zero-filled `by_severity`, `assets.{new,
   disappeared}` capped at 1000 entries) and audits `scan.diffed`; `FindingFixed` and
   `FindingRegressed` publish after commit. A redelivery finds the stats already present and

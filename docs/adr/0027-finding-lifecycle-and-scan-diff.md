@@ -34,19 +34,26 @@ The pieces it left open:
 - **Suppressed findings stay suppressed unless the evidence changes materially.** Re-observation
   reopens an `accepted_risk`/`false_positive` finding only when its severity or confidence
   changed, or when the incoming evidence set (kind + canonical JSON, order-insensitive) differs
-  from the finding's latest recorded evidence batch. The comparison happens in persistence,
-  before the upsert, and is applied as a conditional `CASE` that re-checks the current status,
-  so a concurrent user decision is not overwritten blindly. A reopen emits `FindingReopened`.
+  from the finding's latest recorded evidence batch (fetched alone with `max(captured_at)`, so
+  the finding's history size never slows persistence). The comparison happens in persistence,
+  before the upsert, and is applied as a conditional `CASE` that re-checks the current status
+  and the observation order, so neither a concurrent user decision nor a delayed older scan can
+  override the decision blindly. A reopen emits `FindingReopened`.
 - **The diff stage owns scan-level transitions.** `services.scan_diff.diff_scan` runs after the
   `persist` barrier: it marks re-observed fixed findings `regressed`, fixes active findings whose
   scanner completed and did not re-observe them, diffs assets, writes `Scan.stats` and audits
   `scan.diffed` in one transaction, then publishes `FindingFixed`/`FindingRegressed`.
-  `FindingFixed`/`FindingRegressed`/`FindingReopened` carry identifiers only.
+  `FindingFixed`/`FindingRegressed`/`FindingReopened` carry identifiers only. `fixed_at` records
+  the fixing scan's start, not wall-clock time, and a finding only regresses when that fix
+  predates the scanning scan: a delayed observation from an older scan can update
+  `last_seen_scan_id` after a newer scan already fixed the finding, and must not undo it.
 - **Asset diff.** `new` = discovered assets (subdomains and IPs under the scan root) with
-  `first_seen` at or after this scan's start. `disappeared` = assets the previous completed scan
-  of the same root still saw (`last_seen` between that scan's start and this one's), reported
-  only when this scan's discovery stage actually completed: a failed or absent discovery means
-  we did not look.
+  `first_seen` at or after this scan's start. `disappeared` = subdomains the previous completed
+  scan of the same root still saw (`last_seen` between that scan's start and this one's),
+  reported only when this scan's discovery stage actually completed: a failed or absent
+  discovery means we did not look. IP assets are excluded: they come from `dns.resolve`, and a
+  failed resolution leaves their `last_seen` stale, so they would look gone when nothing was
+  resolved (per-hostname resolution coverage is a follow-up).
 - **`Scan.stats` shape.** `findings.{new,fixed,regressed,total}` are `{total, by_severity}` with
   every severity zero-filled; `total` counts findings observed by this scan in any post-diff
   status (suppressed included). `assets.{new,disappeared}` are `{total, assets: [{id, type,
@@ -66,8 +73,11 @@ The pieces it left open:
 - Suppressed findings are compared against their latest evidence batch, so two scans that share
   a timestamp are compared as one batch. Batches are small (≤10 items) and the comparison is
   order-insensitive.
-- Concurrent scans of the same root can both diff; the conditional updates and the `last_seen <=
-  seen` guard keep an older scan from undoing a newer observation, and #21 adds the
+- Concurrent scans of the same root can both diff; the conditional updates, the `newer` reopen
+  gate, the `last_seen <= seen` fix guard and the `fixed_at < seen` regress guard keep an older
+  scan from undoing a newer observation or decision in either direction. #21 adds the
   concurrent-scan prevention that makes the window rare.
+- IP assets are not reported as disappeared yet; a follow-up can add per-hostname resolution
+  coverage (a completed `dns.resolve` job for each hostname that pointed at the address).
 - No UI is added here: #21 renders `Scan.stats`, #22 the finding timeline. The status and event
   contracts are fixed by this ADR.
