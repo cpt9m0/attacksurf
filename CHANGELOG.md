@@ -6,6 +6,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- DNS hygiene checks (`dns.dnssec`, `dns.ns`, `dns.mx`, `dns.caa`, `dns.whois`, `dns.axfr`):
+  DS/DNSKEY delegation-chain checks (`dns.dnssec.not_enabled` info, `dns.dnssec.broken_chain`
+  high), single-nameserver / lame-delegation / inconsistent-SOA detection (`dns.ns.*`), MX
+  targets that are aliases or do not resolve (`dns.mx.*`), missing CAA (`dns.caa.missing`),
+  registration expiry and a missing registrar transfer lock via RDAP (`dns.whois.*`, 24-hour
+  cache), and unauthenticated zone transfers on verified roots (`dns.axfr.allowed`, high). Adds
+  grant-gated authoritative DNS, RDAP and zone-transfer adapters and wires the checks into the
+  `dns_passive` profile (ADR 0026, #19).
 - Subdomain takeover checks (`dns.takeover`, `dns.takeover.http`): dangling CNAMEs to
   known-claimable services that no longer resolve and NS delegations to nameservers that no
   longer exist are flagged from DNS alone; on verified domains a single HTTP probe also

@@ -5,7 +5,8 @@ their security data. Both make it a target. These rules apply to all code.
 
 ## Responsible use
 
-- **Passive checks** (public DNS, Certificate Transparency, RDAP) may run on any registered domain.
+- **Passive checks** (public DNS, read-only authoritative SOA/DNSKEY probes, Certificate
+  Transparency, RDAP) may run on any registered domain.
 - **Active checks** (zone transfer now; port/web probing later) run **only on assets whose
   ownership is verified** (DNS TXT token, ADR 0014). ScopeGuard enforces this; scanners cannot
   bypass it. A proof is a `_attacksurf-verify.<root>` TXT record with a random per-asset token;
@@ -17,6 +18,11 @@ their security data. Both make it a target. These rules apply to all code.
   itself, classified as an active (`TARGET`) check so it too runs only on verified assets.
   The response is matched against known "unclaimed instance" signatures; nothing is ever
   registered, claimed or written to a third-party service.
+- **DNS hygiene (#19)** only *observes*. The authoritative probes are single read-only
+  SOA/DNSKEY queries to the scanned zone's own nameservers (validated public addresses); the
+  only active check is one AXFR request per nameserver of a **verified** zone apex, and only the
+  number of records in the first response is kept — zone content is never stored. RDAP is
+  queried only for the scanned domain's registration, through IANA's bootstrap registry.
 - **Out of scope, always:** exploitation, brute forcing, credential attacks, DoS, actually
   claiming takeover-able resources, and scanning of third-party targets.
 
@@ -30,6 +36,7 @@ size — the ceiling applies to the *decoded* body, so a compressed response can
 and a plugin-supplied limit cannot raise it. A `TARGET` HTTP grant always requires verified
 ownership, whatever the plugin declares. Scanners may only contact declared public data
 services; active checks (target HTTP) require a verified, unexpired ownership proof |
+| SSRF via authoritative probes or RDAP | Nameservers come from the resolver, and every one of their addresses is validated with the scan-target policy before a query; answers are read, never followed, and AXFR only targets a name that owns NS records itself. RDAP base URLs come from IANA's bootstrap, must be `https`, and are reached through the same pinned client; only the scanned domain's registration is requested (ADR 0026) |
 | SSRF via the ownership check | The check follows a zone's nameservers, which the domain's owner controls. Every nameserver address is validated with the scan-target policy (no private, loopback, link-local/metadata, multicast or reserved ranges) and an internal-only delegation simply fails; replies are read, never followed, and only a direct TXT record for the exact name counts. Bounded: 3 nameservers, 2 s each, 64 KiB responses (ADR 0014) |
 | Cross-tenant data access | `org_id` on every tenant row, scoped queries, an isolation test per endpoint; links between tenant rows (asset parent and relations, scans, jobs, findings, evidence) use composite foreign keys `(id, org_id)`, so the database itself rejects a link to another org's row; Postgres RLS later |
 | XSS from scan data (TXT records, HTML, banners) | Jinja autoescape, never `|safe` on scan data; CSP `default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'` (no `unsafe-inline`/`unsafe-eval`; Alpine CSP build; a test rejects inline script/style/handlers in rendered pages) |
@@ -60,8 +67,9 @@ Scanners never touch the network directly. Every run passes `ScopeGuard` first
 (`infra/scope_guard.py`, ADR 0013): the target is validated, ownership is required for active
 checks, and the plugin receives only DNS/HTTP adapters bounded by its frozen `ScannerGrant`
 (allowlisted public data services, or the target after verification; a DNS budget; the
-sandbox analyzers it may name, none by default), plus a namespaced run cache and optional
-offline IP intel. DNS queries go to operator-configured public resolvers only
+sandbox analyzers it may name, none by default; and the #19 capabilities below), plus a
+namespaced run cache and optional offline IP intel. DNS queries go to operator-configured
+public resolvers only
 (`DNS_RESOLVERS`, validated as public IPs), with no search domains; a query to a nameserver
 found in an answer is never sent. The cache is not
 network access and is not grant-controlled: it stores only public source data (CT names today,
@@ -88,6 +96,19 @@ those addresses. A missing ip2asn file disables ASN/organisation enrichment only
 `dns.email` evaluates SPF/DMARC/DKIM/MTA-STS publication from TXT answers through the
 same guarded DNS adapter and DNS budget; it performs no HTTP fetch (MTA-STS is the DNS
 signal only) and emits findings with raw-record evidence, never new assets.
+
+The #19 capabilities are separate, grant-declared adapters, never raw clients. The
+authoritative adapter resolves a zone's nameservers through the guarded resolver, requires
+every address to be public, and sends at most three read-only SOA/DNSKEY queries (2 s each,
+64 KiB answers); unreachable servers are not reported as findings. `zone_transfer` is an active
+check: the registry rejects it without `requires_verification`, the gate requires a verified
+asset, and the adapter only attempts a transfer when the scanned name owns NS records itself
+(so a parent zone is never transferred), reads only the first message and keeps only its record
+count. RDAP resolves the TLD's base URL from the fixed `data.iana.org` bootstrap, requires
+`https`, allows redirects only to the bootstrap/RDAP host, and may look up only the run's target
+or its registrable domain; trimmed registration data (never findings, evidence or tenant data)
+is cached for 24 hours (ADR 0026). Only the DS -> DNSKEY linkage is checked for DNSSEC, not
+RRSIG signatures.
 
 Repository fetches (ADR 0017, not built yet) pass the same gate through `check_fetch` and are
 not scanners: `worker-fetch` reaches only allowlisted forges, using a streaming transport
