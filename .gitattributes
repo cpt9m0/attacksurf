@@ -4,3 +4,5 @@
 
 # Vendored libraries are pinned by SHA-256 (vendor/SHA256SUMS): never convert them.
 src/attacksurf/web/static/vendor/** -text
+# Hostile archive corpus (tests/archive_fixtures.py): bytes are the fixture.
+tests/fixtures/archives/** -text

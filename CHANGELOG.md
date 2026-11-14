@@ -6,6 +6,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Safe archive extraction for the analysis sandbox: `attacksurf.sandbox_tools.extract`, a
+  standard-library tool that analyzer images will run before their scanner. It unpacks zip and
+  tar(.gz/.bz2/.xz) with its own loop, never creates links, strips setuid/setgid/sticky bits,
+  skips symlinks, hard links, device nodes and FIFOs with a reason, and rejects the whole
+  artifact on unsafe or duplicate paths, corrupt archives, data after a tar's end, differing zip
+  headers or a cap (512 MiB total, 64 MiB per file, 100,000 entries including created
+  directories, depth 32, ratio 200:1), all counted while writing; for tar the size budget also
+  covers bytes the parser skips. It writes a manifest (path, size, SHA-256, skipped entries)
+  and prints a bounded summary; exit status 3 means rejected, 4 an extractor failure. Not wired to a run yet; ships with a hostile archive corpus in
+  `tests/fixtures/archives/` (ADR 0017, #86).
 - Encrypted artifact storage for uploaded and fetched repositories and binaries: an `Artifact`
   model (migration 0010), streaming AES-256-GCM envelope encryption with a per-artifact key
   wrapped by the new `APP_ENCRYPTION_KEY`, a per-artifact size limit enforced while reading

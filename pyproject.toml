@@ -207,6 +207,30 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "sandbox tools never import the app or its dependencies: they ship in analyzer images (ADR 0017)"
+type = "forbidden"
+source_modules = ["attacksurf.sandbox_tools"]
+# The standard-library-only rule itself is a unit test over every import
+# (tests/unit/sandbox_tools); this names the app and each runtime dependency as a second net.
+forbidden_modules = [
+    "attacksurf.app",
+    "attacksurf.web",
+    "attacksurf.workers",
+    "attacksurf.services",
+    "attacksurf.domain",
+    "attacksurf.infra",
+    "attacksurf.scanners",
+    "attacksurf.ai",
+    "attacksurf.config",
+    "attacksurf.sandbox_proxy",
+    "attacksurf.sandbox_launcher",
+    "alembic", "anthropic", "argon2", "celery", "cryptography", "dns", "flask",
+    "flask_limiter", "flask_login", "flask_wtf", "gunicorn", "httpx", "idna", "jinja2",
+    "kombu", "openai", "psycopg", "pydantic", "pydantic_settings", "redis", "sqlalchemy",
+    "structlog", "tldextract", "werkzeug",
+]
+
+[[tool.importlinter.contracts]]
 name = "database access stays in infra/services (web only via web.db)"
 type = "forbidden"
 source_modules = [
