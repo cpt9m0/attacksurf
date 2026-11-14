@@ -206,7 +206,7 @@ def record_asset(
     One atomic `INSERT ... ON CONFLICT`, so concurrent scans can't create duplicates.
     Re-seeing an asset never downgrades `source=user` and keeps its first parent; a user
     adding a discovered asset detaches it, since user-added assets are roots.
-    Raises `InvalidAssetValue` / `UnsupportedAssetType` for values that can't be normalized
+    Raises `InvalidAssetValue` for values that can't be normalized
     and `AssetNotFound` if `parent_id` isn't one of the org's assets.
     """
     if parent_id is not None:

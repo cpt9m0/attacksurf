@@ -6,3 +6,5 @@
 src/attacksurf/web/static/vendor/** -text
 # Hostile archive corpus (tests/archive_fixtures.py): bytes are the fixture.
 tests/fixtures/archives/** -text
+# Synthetic binary headers (tests/binary_fixtures.py): bytes are the fixture.
+tests/fixtures/binaries/** -text

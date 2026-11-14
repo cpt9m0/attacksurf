@@ -4,7 +4,6 @@ from attacksurf.domain.assets import (
     MAX_URL_LENGTH,
     AssetType,
     InvalidAssetValue,
-    UnsupportedAssetType,
     normalize_asset_value,
     normalize_hostname,
     normalize_ip,
@@ -160,9 +159,22 @@ def test_normalize_asset_value_dispatches_by_type(
     assert normalize_asset_value(asset_type, raw) == expected
 
 
-def test_binary_is_not_supported_yet() -> None:
-    with pytest.raises(UnsupportedAssetType):
-        normalize_asset_value(AssetType.BINARY, "anything")
+def test_binary_value_is_the_lowercase_sha256_of_its_bytes() -> None:
+    digest = "AB" * 32
+
+    value = normalize_asset_value(AssetType.BINARY, f" sha256:{digest} ")
+
+    assert value == "sha256:" + "ab" * 32
+    assert normalize_asset_value(AssetType.BINARY, value) == value
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["", "anything", "ab" * 32, "sha256:" + "ab" * 31, "sha256:" + "zz" * 32, "md5:" + "ab" * 32],
+)
+def test_binary_value_rejects_anything_but_a_sha256_digest(raw: str) -> None:
+    with pytest.raises(InvalidAssetValue):
+        normalize_asset_value(AssetType.BINARY, raw)
 
 
 @pytest.mark.parametrize(

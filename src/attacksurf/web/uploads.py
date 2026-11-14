@@ -1,4 +1,4 @@
-"""Upload plumbing shared by every upload route (#87 archives; binaries later): the request
+"""Upload plumbing shared by every upload route (#87 archives, #101 binaries): the request
 size gate, the artifact store accessor, the rate limit and the error-to-status mapping."""
 
 from pathlib import Path
@@ -25,8 +25,11 @@ DEFAULT_MAX_BODY_BYTES = 2 * 1024**2
 # Room for the multipart boundaries, part headers and the CSRF field around the file.
 MULTIPART_OVERHEAD_BYTES = 64 * 1024
 # Upload endpoint -> the form partial HTMX swaps in place; re-rendered when an upload is refused.
-UPLOAD_ENDPOINTS = {"ui.upload_repo": "pages/_upload_repo_form.html"}
-UPLOAD_LIMIT = "20 per hour"  # per signed-in user
+UPLOAD_ENDPOINTS = {
+    "ui.upload_repo": "pages/_upload_repo_form.html",
+    "ui.upload_binary": "pages/_upload_binary_form.html",
+}
+UPLOAD_LIMIT = "20 per hour"  # per signed-in user, across all upload endpoints
 # Refusals raised before the view runs (body ceiling, rate limit), shown as the field error.
 _REFUSED = {
     413: "That file is too large to upload.",
@@ -67,7 +70,9 @@ def init_uploads(app: Flask, settings: Settings) -> None:
             or get_artifact_store() is None
         ):
             return
-        with app.extensions["auth_limiter"].limit(UPLOAD_LIMIT, key_func=_uploader_key):
+        # One allowance for all upload routes together: a plain `limit` counts per endpoint.
+        limiter = app.extensions["auth_limiter"]
+        with limiter.shared_limit(UPLOAD_LIMIT, scope="uploads", key_func=_uploader_key):
             # Werkzeug stops reading at this many bytes, with or without a Content-Length.
             request.max_content_length = settings.artifact_max_bytes + MULTIPART_OVERHEAD_BYTES
 

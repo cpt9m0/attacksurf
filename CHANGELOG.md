@@ -6,6 +6,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Upload a binary or mobile app: the Assets page takes an ELF, PE or Mach-O executable, an
+  Android `.apk` or an iOS `.ipa` (gated by its leading bytes; a text file is refused with a
+  415 before anything is stored), stores it encrypted as an artifact of a binary asset named
+  `sha256:<digest of its bytes>` and queues a `binary_static` scan. The file name is kept for
+  display only and shown escaped; the same bytes uploaded again reuse the asset. The scan stays
+  queued until the analysis worker ships (#84). Binaries are never executed, emulated or
+  decrypted. All upload routes share one allowance of 20 uploads per user per hour (#101).
+- Binary format detection for the analysis sandbox: `attacksurf.sandbox_tools.detect`, a
+  standard-library tool that names the format from fixed-size headers (ELF, PE, thin and
+  universal Mach-O, told apart from Java class files) and from a size-capped zip central
+  directory (APK, IPA; inconsistent or APK-and-IPA zips are rejected), without decompressing
+  anything; exit status 3 means rejected, 4 an I/O
+  failure. Not wired to a run yet; ships with a synthetic corpus in `tests/fixtures/binaries/`
+  (#101).
 - Upload a codebase archive: the Assets page takes a `.zip` or `.tar(.gz/.bz2/.xz)` (checked by
   its leading bytes, never opened outside the sandbox), stores it encrypted as an artifact of
   a repo asset `upload/<name>` and queues a `code` scan that records the archive's SHA-256 as

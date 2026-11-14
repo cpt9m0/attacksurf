@@ -665,6 +665,7 @@ dl.meta dt {
 
 dl.meta dd {
   margin: 0;
+  overflow-wrap: anywhere; /* an uploaded file's name can be 255 characters */
 }
 
 .tabs {

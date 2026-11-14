@@ -20,7 +20,8 @@ from attacksurf.domain.assets import AssetSource, AssetType
 from attacksurf.domain.scans import JobStatus, ScanNotQueued, ScanStatus
 from attacksurf.infra.db.models import Artifact, Asset, AuditLog, Job, Org, Scan
 from attacksurf.scanners.profiles import CODE_PROFILE, PROFILES
-from attacksurf.services.repos import CODE_SCAN_TASK, RepoUpload, upload_repo_archive
+from attacksurf.services.repos import CODE_SCAN_TASK, upload_repo_archive
+from attacksurf.services.uploads import AssetUpload
 from tests.fakes import FakeArtifactStore, FakeQueue
 
 ZIP = (Path(__file__).resolve().parents[2] / "fixtures" / "archives" / "ok.zip").read_bytes()
@@ -43,7 +44,7 @@ def _upload(
     filename: str = "My App.zip",
     queue: FakeQueue | None = None,
     policy: ArtifactPolicy = POLICY,
-) -> RepoUpload:
+) -> AssetUpload:
     return upload_repo_archive(
         session,
         store,
@@ -155,7 +156,7 @@ def test_failed_upload_never_removes_a_concurrent_upload_of_the_same_name(
     """Regression: the failed upload used to delete "its" asset, and with it the other
     upload's artifact row and scan, leaving that upload's file orphaned in the store."""
     org_id = _org(db_session)
-    finished: list[RepoUpload] = []
+    finished: list[AssetUpload] = []
     calls: list[UUID] = []
 
     class Interleaved(FakeArtifactStore):

@@ -15,7 +15,13 @@
 
 <section class="card card-body" aria-labelledby="upload-repo-title">
   <h2 id="upload-repo-title">Upload a codebase</h2>
-  {% include "pages/_upload_repo_form.html" %}
+  {#- On a full page each form gets its own error; an HTMX swap passes `upload_error` itself. -#}
+  {% with upload_error = archive_error %}{% include "pages/_upload_repo_form.html" %}{% endwith %}
+</section>
+
+<section class="card card-body" aria-labelledby="upload-binary-title">
+  <h2 id="upload-binary-title">Upload a binary or mobile app</h2>
+  {% with upload_error = binary_error %}{% include "pages/_upload_binary_form.html" %}{% endwith %}
 </section>
 
 {#- Filters swap only #asset-results (hx-select), so the search box keeps focus while typing;

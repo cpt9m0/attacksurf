@@ -1,5 +1,6 @@
 """HTML UI blueprint (Jinja + HTMX pages)."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -18,9 +19,10 @@ from attacksurf.domain.assets import (
     InvalidAssetValue,
 )
 from attacksurf.domain.scans import ScanNotQueued
-from attacksurf.services import asset_views, repos, verifications
+from attacksurf.services import asset_views, binaries, repos, verifications
 from attacksurf.services import assets as assets_service
 from attacksurf.services.asset_views import AssetFilter, AssetStatus
+from attacksurf.services.uploads import AssetUpload
 from attacksurf.web import uploads
 from attacksurf.web.asset_params import parse_asset_filter
 from attacksurf.web.auth import require_role
@@ -54,6 +56,7 @@ _TYPE_LABELS = {
     AssetType.IP: "IP address",
     AssetType.URL: "URL",
     AssetType.REPO: "Code repository",
+    AssetType.BINARY: "Binary",
 }
 ASSET_TABS = (("overview", "Overview"), ("findings", "Findings"), ("scans", "Scan history"))
 
@@ -104,34 +107,13 @@ def add_domain() -> BaseResponse:
 @bp.post("/assets/upload")
 def upload_repo() -> BaseResponse:
     """Store an uploaded archive as a repo asset and queue its scan (#87)."""
-    archive = request.files.get("archive")
-    store = uploads.get_artifact_store()
-    try:
-        if store is None:
-            raise ArtifactStorageUnavailable(uploads.NOT_CONFIGURED)
-        if archive is None or not archive.filename:
-            raise InvalidAssetValue("Choose an archive to upload.")
-        upload = repos.upload_repo_archive(
-            get_session(),
-            store,
-            uploads.get_artifact_policy(),
-            get_task_queue(),
-            org_id=_org_id(),
-            filename=archive.filename,
-            source=archive.stream,
-            actor_id=current_user.session_user.user_id,
-        )
-    except (AssetError, ArtifactError, ScanNotQueued) as exc:
-        status = uploads.upload_error_status(exc)
-        if is_htmx_request():
-            return uploads.upload_form(str(exc), status)
-        return _assets_page(AssetFilter(), 1, status=status, upload_error=str(exc))
-    flash(
-        f"Uploaded {upload.asset_value}. Its scan is queued until the analysis worker is "
-        "available.",
-        "success",
-    )
-    return _navigate(url_for("ui.asset_detail", asset_id=upload.asset_id))
+    return _upload("archive", "Choose an archive to upload.", repos.upload_repo_archive)
+
+
+@bp.post("/assets/upload-binary")
+def upload_binary() -> BaseResponse:
+    """Store an uploaded executable or mobile app as a binary asset and queue its scan (#101)."""
+    return _upload("binary", "Choose a file to upload.", binaries.upload_binary)
 
 
 @bp.get("/assets/<uuid:asset_id>")
@@ -252,6 +234,37 @@ def _navigate(target: str) -> BaseResponse:
     return redirect(target, 303)
 
 
+def _upload(field: str, missing: str, use_case: Callable[..., AssetUpload]) -> BaseResponse:
+    """Run one upload use case on the file in `field`; errors land on that form's field."""
+    upload = request.files.get(field)
+    store = uploads.get_artifact_store()
+    try:
+        if store is None:
+            raise ArtifactStorageUnavailable(uploads.NOT_CONFIGURED)
+        if upload is None or not upload.filename:
+            raise InvalidAssetValue(missing)
+        done = use_case(
+            get_session(),
+            store,
+            uploads.get_artifact_policy(),
+            get_task_queue(),
+            org_id=_org_id(),
+            filename=upload.filename,
+            source=upload.stream,
+            actor_id=current_user.session_user.user_id,
+        )
+    except (AssetError, ArtifactError, ScanNotQueued) as exc:
+        status = uploads.upload_error_status(exc)
+        if is_htmx_request():
+            return uploads.upload_form(str(exc), status)
+        return _assets_page(AssetFilter(), 1, status=status, **{f"{field}_error": str(exc)})
+    flash(
+        f"Uploaded {done.asset_value}. Its scan is queued until the analysis worker is available.",
+        "success",
+    )
+    return _navigate(url_for("ui.asset_detail", asset_id=done.asset_id))
+
+
 def _ownership_card(asset_id: UUID) -> Response:
     """The ownership card of one asset; on a subdomain, its root's proof, read-only."""
     return render_page("pages/_ownership.html", **_ownership_context(asset_id))
@@ -298,6 +311,7 @@ def _assets_page(flt: AssetFilter, page: int, status: int = 200, **form: str) ->
         status_options=[(s.value, s.value.capitalize()) for s in AssetStatus],
         add_value=form.get("add_value", ""),
         add_error=form.get("add_error"),
-        upload_error=form.get("upload_error"),
+        archive_error=form.get("archive_error"),
+        binary_error=form.get("binary_error"),
         **uploads.upload_context(),
     )

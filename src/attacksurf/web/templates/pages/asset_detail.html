@@ -35,6 +35,9 @@
 
 <dl class="meta card card-body">
   <div><dt>Type</dt><dd>{{ asset.type }}</dd></div>
+  {%- if detail.uploaded_as %}
+  <div><dt>Uploaded file</dt><dd class="mono">{{ detail.uploaded_as }}</dd></div>
+  {%- endif %}
   <div><dt>Source</dt><dd>{{ "Added by your team" if asset.source == "user" else "Discovered" }}</dd></div>
   <div><dt>First seen</dt><dd>{{ relative_time(asset.first_seen) }}</dd></div>
   <div><dt>Last seen</dt><dd>{{ relative_time(asset.last_seen) }}</dd></div>

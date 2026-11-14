@@ -1,0 +1,16 @@
+{#- The binary twin of `_upload_repo_form.html`: swapped in place by HTMX, re-rendered with
+    `upload_error` on a rejected upload. No `accept`: executables often have no extension, and
+    the format is decided from the bytes. -#}
+{%- from "components/form.html" import csrf_field, file_field -%}
+{%- if uploads_enabled %}
+<form id="upload-binary" class="form form-inline" method="post" action="{{ url_for('ui.upload_binary') }}" enctype="multipart/form-data"
+      hx-post="{{ url_for('ui.upload_binary') }}" hx-encoding="multipart/form-data" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="find button">
+  {{ csrf_field() }}
+  {{ file_field("binary", "Binary", error=upload_error,
+                hint="An ELF, PE (.exe, .dll) or Mach-O executable, an Android .apk or an iOS .ipa, up to " ~ (upload_max_bytes | filesizeformat(binary=true))
+                     ~ ". It is stored encrypted, identified by its SHA-256 and never run. The scan stays queued until the analysis worker is available.") }}
+  <button type="submit" class="btn btn-primary">Upload and scan</button>
+</form>
+{%- else %}
+<p id="upload-binary" class="muted">{{ not_configured }}</p>
+{%- endif %}

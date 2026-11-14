@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from attacksurf.domain.artifacts import SNIFF_BYTES, sniff_archive
+from attacksurf.domain.artifacts import SNIFF_BYTES, sniff_archive, sniff_binary
+from tests.binary_fixtures import CORPUS, DETECTED
 
 ARCHIVES = Path(__file__).resolve().parents[2] / "fixtures" / "archives"
 
@@ -30,3 +31,18 @@ def test_sniff_archive_recognizes_supported_formats_by_leading_bytes(
 )
 def test_sniff_archive_rejects_everything_else(head: bytes) -> None:
     assert sniff_archive(head) is None
+
+
+@pytest.mark.parametrize("name", sorted(DETECTED))
+def test_sniff_binary_lets_every_supported_fixture_through(name: str) -> None:
+    hint = sniff_binary(CORPUS[name][:SNIFF_BYTES])
+
+    # A zip is only told apart (APK, IPA or neither) inside the sandbox.
+    assert hint == {"apk": "zip", "ipa": "zip"}.get(DETECTED[name][1], DETECTED[name][1])
+
+
+@pytest.mark.parametrize(
+    "head", [b"", b"M", CORPUS["text.txt"], b"#!/bin/sh\n", b"\x1f\x8b\x08", b"\x00" * 600]
+)
+def test_sniff_binary_rejects_everything_else(head: bytes) -> None:
+    assert sniff_binary(head) is None

@@ -452,8 +452,9 @@ Only the TXT method avoids cache surprises; prefer it.
 
 ## Upload size limits
 
-Three limits apply to `POST /assets/upload`, and the smallest wins: **Cloudflare** rejects
-request bodies over 100 MB on Free and Pro plans, `deploy/Caddyfile` allows 257 MiB on that path
+Three limits apply to `POST /assets/upload` and `POST /assets/upload-binary`, and the smallest
+wins: **Cloudflare** rejects request bodies over 100 MB on Free and Pro plans,
+`deploy/Caddyfile` allows 257 MiB on those paths
 (2 MB elsewhere), and the app allows `ARTIFACT_MAX_BYTES` (default 256 MiB) plus framing. So
 behind the tunnel an archive over 100 MB fails at the edge with Cloudflare's own 413 page.
 Raising `ARTIFACT_MAX_BYTES` also means raising the Caddyfile value. gunicorn's default 30 s
