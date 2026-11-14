@@ -6,6 +6,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Upload a codebase archive: the Assets page takes a `.zip` or `.tar(.gz/.bz2/.xz)` (checked by
+  its leading bytes, never opened outside the sandbox), stores it encrypted as an artifact of
+  a repo asset `upload/<name>` and queues a `code` scan that records the archive's SHA-256 as
+  its revision. Uploading the same name again adds a version to the same asset. The scan stays
+  queued until the analysis worker ships (#84). Request bodies are now capped everywhere (2 MiB;
+  `ARTIFACT_MAX_BYTES` plus framing on the upload route, 413 beyond it), uploads are rate
+  limited per user, and repo values are normalized (`host/owner/name`, ADR 0017). The prod
+  stack gets an `artifact-store` volume; uploads stay off there until `APP_ENCRYPTION_KEY` is
+  set (#87).
 - Safe archive extraction for the analysis sandbox: `attacksurf.sandbox_tools.extract`, a
   standard-library tool that analyzer images will run before their scanner. It unpacks zip and
   tar(.gz/.bz2/.xz) with its own loop, never creates links, strips setuid/setgid/sticky bits,

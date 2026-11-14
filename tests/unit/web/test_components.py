@@ -203,3 +203,19 @@ def test_relative_time_without_a_value_renders_a_dash(app: Flask) -> None:
 
     assert "—" in html
     assert "<time" not in html
+
+
+def test_file_field_renders_a_file_input_without_a_value(app: Flask) -> None:
+    html = render(
+        app,
+        '{% from "components/form.html" import file_field %}'
+        '{{ file_field("archive", "Archive", accept=".zip", error=e, hint="Up to 1 MiB") }}',
+        e="<b>bad</b>",
+    )
+
+    assert 'type="file"' in html
+    assert 'accept=".zip"' in html
+    assert "value=" not in html
+    assert 'aria-describedby="f-archive-hint f-archive-error"' in html
+    assert 'aria-invalid="true"' in html
+    assert "&lt;b&gt;bad&lt;/b&gt;" in html

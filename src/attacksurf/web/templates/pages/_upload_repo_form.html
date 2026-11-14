@@ -1,0 +1,15 @@
+{#- Swapped in place by HTMX like the add-domain form; re-rendered with `upload_error` on a
+    rejected upload. File names and errors are autoescaped. -#}
+{%- from "components/form.html" import csrf_field, file_field -%}
+{%- if uploads_enabled %}
+<form id="upload-repo" class="form form-inline" method="post" action="{{ url_for('ui.upload_repo') }}" enctype="multipart/form-data"
+      hx-post="{{ url_for('ui.upload_repo') }}" hx-encoding="multipart/form-data" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="find button">
+  {{ csrf_field() }}
+  {{ file_field("archive", "Archive", accept=".zip,.tar,.tgz,.gz,.bz2,.xz", error=upload_error,
+                hint="A .zip or .tar (.gz, .bz2, .xz) of your source code, up to " ~ (upload_max_bytes | filesizeformat(binary=true))
+                     ~ ". It is stored encrypted and never run. The scan stays queued until the analysis worker is available.") }}
+  <button type="submit" class="btn btn-primary">Upload and scan</button>
+</form>
+{%- else %}
+<p id="upload-repo" class="muted">{{ not_configured }}</p>
+{%- endif %}

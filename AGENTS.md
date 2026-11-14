@@ -173,7 +173,10 @@ sync" rule below is satisfied**. Do not claim done without running them.
 - Block private/link-local/metadata IP ranges for any outbound request (SSRF).
 - Secrets: env vars or encrypted in DB (org API keys). Never commit `.env`, keys, or tokens.
   Never print them in logs, errors, or UI.
-- Uploaded codebases/binaries (future) are never executed; analysis runs sandboxed.
+- Uploaded codebases/binaries are never executed, parsed or extracted by the app or a worker
+  (only leading bytes are sniffed); analysis runs sandboxed. A new upload route adds its
+  endpoint and form partial to `web.uploads.UPLOAD_ENDPOINTS` (body ceiling before CSRF, rate
+  limit, in-place form errors).
 - New dependency? Check it's maintained and widely used; prefer stdlib. Pin via `uv.lock`.
 - See `docs/security.md`.
 

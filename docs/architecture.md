@@ -408,6 +408,25 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
 - Read side: `services/asset_views.py` returns frozen dataclasses (`AssetRow`, `AssetDetail`,
   `AssetPage`, …) so `web/` never handles ORM rows; `web/asset_params.py` parses list filters
   (`type`, `root`, `tag`, `q`, `status`, `page`; 400 on bad values) for pages and API alike.
+- `web/uploads.py` (shared by every upload route): `init_uploads` caps all request bodies at
+  2 MiB and raises the ceiling to `ARTIFACT_MAX_BYTES` + 64 KiB for `UPLOAD_ENDPOINTS` in a
+  `before_request` registered ahead of CSRF (which parses the whole form before a view runs);
+  `get_artifact_store()` is None without `APP_ENCRYPTION_KEY`. That hook also spends the
+  per-user rate limit and leaves the 2 MiB ceiling for anonymous requests and when storage is
+  off, so a refused request never has a large body read. `UPLOAD_ENDPOINTS` maps each endpoint
+  to its form partial: `upload_form` re-renders it with a field error, also for an HTMX 413 /
+  429 raised before the view (`refused_upload_form`, used by `web/errors.py`);
+  `upload_error_status` maps use-case errors to 413 / 415 / 503 / 422.
+- `POST /assets/upload` → `services.repos.upload_repo_archive`: sniffs the leading bytes
+  (`domain.artifacts.sniff_archive`; never a parse, ADR 0017), upserts the repo asset
+  `upload/<slug of the file name>` (original name in `Asset.details["upload"]`), stores the
+  `Artifact`, then creates a `Scan` with profile `code` (`scanners.profiles.CODE_PROFILE`, not
+  in `PROFILES`) whose `stats` hold `revision` (the archive SHA-256) and `artifact_id`, and
+  enqueues `analysis.code_scan`. That queue has no worker until #84, so the scan stays
+  `queued`. Three commits (asset, artifact, scan + audit + job): an upload that fails in
+  storage leaves its (possibly empty) asset, because deleting it could remove a concurrent
+  upload of the same name; an enqueue failure fails the scan, deletes the artifact and raises
+  `ScanNotQueued` (503).
 - `/api/v1/assets` (session auth, writes need `X-CSRFToken`): `GET` list, `POST {"value"}` adds a
   root domain (201 / 422 / 409), `GET /<id>` detail with relations, `GET /<id>/findings`,
   `GET /<id>/scans`, `POST /<id>/archive` (admin). Errors are `{"error", "message"}`.

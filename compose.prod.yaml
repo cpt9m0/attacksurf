@@ -36,6 +36,12 @@ x-app: &app
     # mounted secrets by the entrypoint above (passwords may contain `@`).
     DATABASE_URL: "postgresql+psycopg://attacksurf:__PGPASS__@postgres:5432/attacksurf"
     REDIS_URL: "redis://:__REDIS_PASS__@redis:6379/0"
+    # Pinned: must match the artifact-store volume mount below.
+    ARTIFACT_STORE_ROOT: /var/lib/attacksurf/artifact-store
+  volumes:
+    # Encrypted uploads (ADR 0028). Without it they would live in the container's writable
+    # layer and vanish on every deploy while their database rows stay.
+    - artifact-store:/var/lib/attacksurf/artifact-store
   depends_on:
     postgres:
       condition: service_healthy
@@ -145,3 +151,4 @@ networks:
 
 volumes:
   pgdata:
+  artifact-store:

@@ -7,6 +7,7 @@ from flask import Flask, Response, g, jsonify, request
 from werkzeug.exceptions import HTTPException, InternalServerError
 
 from attacksurf.web.rendering import render_page
+from attacksurf.web.uploads import refused_upload_form
 
 log = structlog.get_logger(__name__)
 
@@ -17,6 +18,7 @@ _MESSAGES = {
     400: "The form expired or was sent from another site. Reload the page and try again.",
     403: "You don't have permission to view this page.",
     404: "We couldn't find that page. It may have moved or never existed.",
+    413: "That upload or form is too large for this server to accept.",
     429: "Too many attempts. Wait a minute and try again.",
     500: "Something went wrong on our side. Try again; if it keeps happening, report it with "
     "the request ID below.",
@@ -34,7 +36,7 @@ def _handle_http_error(error: HTTPException) -> Response:
         response = jsonify(error=error.name)
         response.status_code = code
     else:
-        response = _error_page(error, code)
+        response = refused_upload_form(code) or _error_page(error, code)
     # Keep protocol headers the exception carries (Allow on 405, Retry-After on 429, ...).
     for name, value in error.get_response().headers.items():
         if name.lower() not in _BODY_HEADERS:

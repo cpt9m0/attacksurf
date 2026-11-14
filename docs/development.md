@@ -124,7 +124,9 @@ All settings live in `src/attacksurf/config.py` and are read from environment va
 Artifact storage (ADR 0028): `APP_ENCRYPTION_KEY` (URL-safe base64 of 32 bytes; without it
 artifacts can't be stored or read), `ARTIFACT_MAX_BYTES`, `ARTIFACT_ORG_QUOTA_BYTES`,
 `ARTIFACT_RETENTION_HOURS` (0 = delete once analysis completes) and `ARTIFACT_STORE_ROOT`
-(ciphertext; must not overlap `SANDBOX_ARTIFACT_ROOT`).
+(ciphertext; must not overlap `SANDBOX_ARTIFACT_ROOT`). Archive upload on the Assets page
+(#87) needs `APP_ENCRYPTION_KEY`; without it the form shows "not configured". Its scan stays
+queued: nothing consumes the `analysis` queue until #84.
 
 Auth settings: `ALLOW_SIGNUP` (default `true`; when `false` only the first user can sign up),
 `SESSION_LIFETIME_HOURS` (default 12), `PROXY_COUNT` (trusted proxy hops in front of the app).
