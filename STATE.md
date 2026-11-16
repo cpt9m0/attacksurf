@@ -2,62 +2,51 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-12 · **Branch:** `23-llm-adr-0024` · **Issue:** #23 (LLM providers)
+**Updated:** 2026-11-16 · **Branch:** `84-sandbox-launcher-service` · **Issue:** #84 (analysis sandbox)
 
 ## Status
-`main` (65aa36c) has the sandbox proxy `/info` endpoint (#157, ADR 0023) and the sandbox launcher
-building blocks (#158, PR 3b). This branch adds ADR 0024, which supersedes ADR 0019's
-`temperature` parameter and SDK retry count: adapters send no sampling settings, and
-`ai/limits.MAX_RETRIES` is 0 because Celery retries the task. ADR 0019's contract and retry
-paragraphs are back to their accepted wording, each with a "Superseded by ADR 0024" note; its
-error-handling, deadline-enforcement and live-verification additions stay, since they fill in
-what 0019 already required. Citations in `architecture.md`, `ai/limits.py`, `domain/llm.py`, the
-`llm-prompt` skill, `CHANGELOG.md` and two test comments now point to ADR 0024. PR #160 is open,
-merged with `main`; the only conflict was this file.
+PR 3c (sandbox launcher service) has all five commits locally; nothing is pushed and no PR is open
+yet. `main` has 3a (proxy `/info`, #157) and 3b (building blocks, #158).
 
 ## Last task
-- Added `docs/adr/0024-no-llm-sampling-or-sdk-retries.md`; numbers 0022 (CT discovery) and 0023
-  (sandbox runtime check) were taken on `main` in the meantime.
-- Restored ADR 0019's two paragraphs and added the supersession notes; the other #147 additions
-  remain because they don't change the accepted decision.
-- Merged `origin/main` (65aa36c) into the branch and resolved the `STATE.md` conflict.
+- Commits 1-4: shared `FakeDocker` (`tests/docker_fakes.py`), `runner.py` (run supervision),
+  `server.py` (`GET /healthz`, `POST /runs`), `__main__.py` (`select_runtime`: `runsc` required
+  in prod, `runc` only outside prod with `SANDBOX_ALLOW_RUNC=true`, otherwise exit non-zero).
+- Commit 5: docs in `AGENTS.md`, `docs/architecture.md`, `docs/security.md`,
+  `docs/development.md` and `CHANGELOG.md`. No ADR: ADR 0016 and ADR 0023 are implemented as
+  written.
 
 ## Next step
-1. Merge #160 once CI is green, then reply on #147's review thread with the link (the existing
-   reply names ADR 0022; the number is now 0024).
-2. PR 3c for #84 (`runner.py`, `server.py` with `POST /runs`, `__main__.py`) per issue #84's
-   merge-order checklist.
-3. PR 4a (usage tracking) on `23-llm-usage` from `origin/main`; PR 4b (factory, closes #23)
-   after PR 3 (OpenAI-compatible). The migration is `0008` unless another PR takes it first.
+1. Run `pre-pr-check`, push the branch and open PR 3c as draft with
+   `Merge order: 3c of #84. Merge after #158, before <3d PR>. See #84.`; tick 3a-3c in #84 once
+   merged.
+2. PR 3d (`84-sandbox-runner-client`): `infra/sandbox.py` `LauncherSandboxRunner`, then wire it
+   into `workers/runtime.scanner_gate()`; docs must add the tenant-safety note (the worker
+   confirms the artifact belongs to the org before calling the launcher).
 
 ## Open threads
-- #23: PR 3 must mirror ADR 0019 and ADR 0024 (no SDK retries, no sampling parameters,
-  `finish_reason` `length`/`content_filter` fail at once, deadline per call) and add `openai` to
-  the import-linter SDK contract. Org-supplied base URLs need ScopeGuard validation (#24).
-- #84: 3a and 3b are merged, so PR 3c can start; 3d is the worker-side client. The PR 3 plan
-  (4 PRs, commits, testing gate) lived in
-  `docs/plans/84-pr3-sandbox-launcher-split-4-prs.md`, which is untracked and absent from this
-  checkout, so issue #84 is the current source of truth for the split.
-- Optional one-line `/info` note in the `docs/architecture.md` proxy box: not decided.
+- #23: PR 3 (OpenAI-compatible provider) must mirror ADR 0019 and ADR 0024; PR 4a/4b follow
+  (migration `0008` unless another PR takes it).
+- #160 (ADR 0024): merge when CI is green, then fix the ADR number in the #147 review reply.
+- Propose a follow-up issue after 3d: sweep leftover `attacksurf-*` containers after a launcher
+  or proxy crash (before #92).
+- `docs/plans/` is untracked; issue #84 is the source of truth for the PR split.
 
 ## Notes for the next agent
-- PR 3c `runner.py` must decide the outcome from its own flags (`timed_out`, cap tripped) before
-  any stream error: a kill mid-frame reaches `read_stdout` as `MalformedStream`. It strips the
-  proxy's HTTP response head before handing frames to `read_stdout`.
-- PR 3c moves `FakeDocker` to `tests/docker_fakes.py`; it must be able to script stdout/stderr
-  frames split across writes.
-- PR 3d's ~3 MiB reply cap assumes stdout is at most 2 MiB (base64 about 2.67 MiB).
 - The launcher copies proxy constants and `domain.scanners.MAX_OUTPUT_BYTES` on purpose (it may
   not import them); a parity test guards each copy. Don't "fix" that by importing.
+- PR 3d's ~3 MiB reply cap assumes stdout is at most 2 MiB (base64 about 2.67 MiB).
+- `sandbox-images.lock` does not exist yet (PR 5 adds it with the fixture analyzer); the catalog
+  is empty, so every `POST /runs` is a 404 and local runs need a `{}` lock file.
+- A container that exits before Docker registers the removed-wait fails the run (503) rather
+  than guessing an exit code; the worker may retry.
 - ADR numbers move fast: check `origin/main` and open branches for the next free number right
   before pushing a new ADR.
 - Production plugins are registered explicitly in `src/attacksurf/app.py` and
   `src/attacksurf/workers/app.py`; a new plugin needs both imports.
 - Tests that need Redis behavior use `tests.fakes.FakeCache`.
-- The runtime image is Python 3.15; CI tests 3.12, 3.13 and 3.15. A base-image bump needs a
-  `pydantic-core` release with wheels for that CPython.
+- The runtime image is Python 3.15; CI tests 3.12, 3.13 and 3.15.
 - DB tests need `TEST_DATABASE_URL`; the dev Compose stack exposes PostgreSQL on
-  `127.0.0.1:5432` with an `attacksurf_test` database (`make test` runs them in `web`). The
-  Windows dev machine uses a git-excluded `compose.override.yaml` on host port 5433.
+  `127.0.0.1:5432` with an `attacksurf_test` database (`make test` runs them in `web`).
 - The ruff format hook strips imports that aren't used yet: add imports together with their
   first use.

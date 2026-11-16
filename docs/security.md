@@ -89,6 +89,30 @@ unfinished work is capped at four threads per child, and prefork children recycl
 tasks. Future network adapters must enforce their own timeouts and response-size caps. This
 is error isolation, not a sandbox for executing user-supplied scanner code.
 
+### Sandbox launcher
+
+`sandbox-launcher` turns "run analyzer X on artifact Y" into one proxy-approved container
+(ADR 0016). It is reachable only on the internal network and has no authentication, so the worker
+must confirm the artifact belongs to the org before asking. What it guarantees:
+
+- **Fixed menu.** The request is exactly `{analyzer, artifact_id}`; image, command, mount and
+  limits come from the catalog and the artifact root. Malformed bodies are 400 before any sandbox
+  exists; an unknown analyzer or artifact is the same 404.
+- **Limits it enforces itself.** Wall time (at most 840 s, below the proxy's 900 s) is decided by
+  the launcher's own deadline, then it kills; stdout over 2 MiB kills the run. Either way partial
+  output is dropped. Stderr is never returned.
+- **Cleanup on every path.** After a successful create the container is killed and removed before
+  the call returns, falling back to a forced delete; `sandbox_cleanup_failed` (error level) means
+  a container may be left behind and should alert.
+- **No content in logs or errors.** One `sandbox_run` line per run with analyzer, runtime,
+  duration, outcome, exit code and byte count; replies and request values never reach a log or
+  an exception message.
+- **Start-up rule.** In prod it exits unless `runsc` is a registered runtime; `runc` is allowed
+  only outside prod with `SANDBOX_ALLOW_RUNC=true`, and logs `sandbox_launcher_runc_fallback`. If
+  the proxy can't be asked, it exits rather than retry.
+- **Known limit.** A container that exits and is removed before Docker registers the removed-wait
+  makes the wait fail, so the run fails (503) instead of reporting an unconfirmed exit code.
+
 ## Accounts
 
 Signup is open by default (`ALLOW_SIGNUP=true`). With `ALLOW_SIGNUP=false` only the first user
