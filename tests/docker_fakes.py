@@ -58,6 +58,7 @@ class FakeRun:
     chunks: list[bytes] = field(default_factory=list)
     exit_code: int = 0
     hold_open: bool = False  # keep running (and attached) until killed
+    hold_exit: bool = False  # close the stream but keep running until the test calls `end`
     attach_status: int = 101  # anything else: a plain error reply, no stream
     start_status: int = 204
     started: threading.Event = field(default_factory=threading.Event)
@@ -140,7 +141,11 @@ class _FakeDockerHandler(BaseHTTPRequestHandler):
             self._attach(run)
 
     def _wait(self, run: FakeRun | None) -> None:
-        if run is not None and self.path.endswith("?condition=removed"):
+        if (
+            run is not None
+            and self.server.wait_status == 200
+            and self.path.endswith("?condition=removed")
+        ):
             self._wait_removed(run)
         else:
             self._reply(self.server.wait_status, self.server.wait_body)
@@ -176,11 +181,11 @@ class _FakeDockerHandler(BaseHTTPRequestHandler):
             for chunk in run.chunks:
                 self.wfile.write(chunk)
                 self.wfile.flush()
-            if run.hold_open:
-                run.killed.wait(FAKE_TIMEOUT_SECONDS)
         except OSError:
             pass  # the reader went away (output cap or wall time): the run carries on
-        finally:
+        if run.hold_open:
+            run.killed.wait(FAKE_TIMEOUT_SECONDS)
+        if not run.hold_exit:
             run.end(run.exit_code)
 
     def _wait_removed(self, run: FakeRun) -> None:
