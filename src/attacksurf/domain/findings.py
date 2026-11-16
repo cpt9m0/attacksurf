@@ -43,8 +43,15 @@ class Confidence(StrEnum):
 class FindingStatus(StrEnum):
     OPEN = "open"
     FIXED = "fixed"
+    REGRESSED = "regressed"  # a fixed finding that a later scan observed again
     ACCEPTED_RISK = "accepted_risk"
     FALSE_POSITIVE = "false_positive"
+
+
+# Still a live issue for the tenant: counts as an open finding in views and may be fixed by a
+# later scan. The suppressed states are the user's decision and are never auto-fixed.
+ACTIVE_STATUSES = frozenset({FindingStatus.OPEN, FindingStatus.REGRESSED})
+SUPPRESSED_STATUSES = frozenset({FindingStatus.ACCEPTED_RISK, FindingStatus.FALSE_POSITIVE})
 
 
 class EvidenceKind(StrEnum):

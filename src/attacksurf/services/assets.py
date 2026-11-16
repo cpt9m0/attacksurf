@@ -197,9 +197,12 @@ def record_asset(
     source: AssetSource,
     parent_id: UUID | None = None,
     seen_at: datetime | None = None,
+    scan_id: UUID | None = None,
 ) -> Asset:
     """Insert the asset or, if the org already has it, mark it seen again. Doesn't commit.
 
+    `scan_id` records which scan discovered it, so a later diff can attribute the discovery to
+    that scan even when scans overlap (ADR 0027); user-added roots pass none.
     One atomic `INSERT ... ON CONFLICT`, so concurrent scans can't create duplicates.
     Re-seeing an asset never downgrades `source=user` and keeps its first parent; a user
     adding a discovered asset detaches it, since user-added assets are roots.
@@ -222,6 +225,7 @@ def record_asset(
         parent_id=parent_id,
         first_seen=seen,
         last_seen=seen,
+        first_seen_scan_id=scan_id,
     )
     new = stmt.excluded
     # Only a sighting after the scan that found it gone reactivates it; delayed older results don't.
@@ -232,6 +236,10 @@ def record_asset(
             # greatest/least: results processed out of order never move the window backwards.
             "last_seen": func.greatest(Asset.last_seen, new.last_seen),
             "first_seen": func.least(Asset.first_seen, new.first_seen),
+            "first_seen_scan_id": case(
+                (new.first_seen < Asset.first_seen, new.first_seen_scan_id),
+                else_=Asset.first_seen_scan_id,
+            ),
             "is_active": reactivate,
             "deactivated_at": case((reactivate, null()), else_=Asset.deactivated_at),
             "source": case((Asset.source == AssetSource.USER, Asset.source), else_=new.source),

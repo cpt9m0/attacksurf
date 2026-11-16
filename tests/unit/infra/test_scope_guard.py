@@ -1,12 +1,13 @@
 """ScopeGuard: target validation, ownership gating and the per-run network allowlists."""
 
+from collections.abc import Sequence
 from uuid import uuid4
 
 import pytest
 
 from attacksurf.domain.assets import AssetType
 from attacksurf.domain.cache import NullCache
-from attacksurf.domain.net import HttpBody, ScannerRuntime
+from attacksurf.domain.net import DnsLookup, DnsQuery, DnsRecordType, HttpBody, ScannerRuntime
 from attacksurf.domain.sandbox import SandboxError
 from attacksurf.domain.scanners import (
     AssetRef,
@@ -16,6 +17,7 @@ from attacksurf.domain.scanners import (
     UnconfiguredGate,
 )
 from attacksurf.domain.scope import HttpPermission, PublicSuffix, ScopeError, ScopePolicyError
+from attacksurf.infra import public_suffix
 from attacksurf.infra.http import MAX_BODY_BYTES, SafeHttpClient
 from attacksurf.infra.scope_guard import (
     MAX_DNS_LOOKUPS,
@@ -42,6 +44,19 @@ class StubDns:
         self.calls.append(("A+AAAA", host))
         return self.answers.get(host, ("93.184.216.34",))
 
+    def lookup_many(self, queries: Sequence[DnsQuery]) -> tuple[DnsLookup, ...]:
+        self.calls.extend((query.record_type.value, query.name) for query in queries)
+        return tuple(DnsLookup(query, self.answers.get(query.name, ())) for query in queries)
+
+    def lookup_records(self, name: str, rdtype: str) -> tuple[str, tuple[str, ...]]:
+        self.calls.append((rdtype, name))
+        return name, self.answers.get(name, ())
+
+    def lookup_records_checking_disabled(
+        self, name: str, rdtype: str
+    ) -> tuple[str, tuple[str, ...]]:
+        return self.lookup_records(name, rdtype)
+
 
 class StubHttp:
     def __init__(self) -> None:
@@ -66,7 +81,6 @@ class StubHttp:
 
 class _RunHttp(StubHttp):
     """What a run gets from `with_redirect_policy`, mirroring the real client exactly.
-
     The real `SafeHttpClient` consults its policy hook before the first request and every hop,
     so this fake must too: a permissive fake would hide a guard bypass (see
     `test_run_client_enforces_the_allowlist_before_the_first_request`).
@@ -152,6 +166,16 @@ def test_gate_defaults_to_a_null_cache() -> None:
     runtime = scope.check(context(), target(), scanner())
 
     assert isinstance(runtime.cache, NullCache)
+
+
+def test_gate_passes_the_registrable_domain_classifier_to_the_run() -> None:
+    scope, _ = make_guard()
+
+    runtime = scope.check(context(), target(), scanner())
+
+    assert runtime.org_domain is public_suffix.registrable
+    assert runtime.org_domain is not None
+    assert runtime.org_domain("eng.example.com") == "example.com"
 
 
 def test_passive_scanner_gets_run_scoped_adapters_and_no_lookups_at_planning() -> None:
@@ -278,6 +302,17 @@ class StaticAnswers:
         self.calls.append(host)
         return self.answers[host]
 
+    def lookup_many(self, queries: Sequence[DnsQuery]) -> tuple[DnsLookup, ...]:
+        return tuple(DnsLookup(query, self.answers.get(query.name, ())) for query in queries)
+
+    def lookup_records(self, name: str, rdtype: str) -> tuple[str, tuple[str, ...]]:
+        return name, self.answers.get(name, ())
+
+    def lookup_records_checking_disabled(
+        self, name: str, rdtype: str
+    ) -> tuple[str, tuple[str, ...]]:
+        return self.lookup_records(name, rdtype)
+
 
 def test_dns_only_grant_denies_http_entirely() -> None:
     scope, _ = make_guard()
@@ -333,6 +368,31 @@ def test_guarded_dns_validates_every_answer_and_enforces_the_budget() -> None:
         guarded.resolve_name("split.example")
     with pytest.raises(ScopeError, match="budget"):
         guarded.resolve_ipv4("ok.example")
+
+
+def test_guarded_dns_returns_raw_private_answers_without_validating_them() -> None:
+    """Raw records are data: the resolver reports 10.0.0.1 but a connection path still blocks it."""
+    dns = StubDns({"split.example": ("10.0.0.1",)})
+    guarded = _GuardedDns(dns, max_lookups=2)
+
+    result = guarded.lookup_many((DnsQuery("split.example", DnsRecordType.A),))
+
+    assert result[0].values == ("10.0.0.1",)
+    with pytest.raises(ScopeError, match="private"):
+        guarded.resolve_name("split.example")
+    with pytest.raises(ScopeError, match="budget"):
+        guarded.lookup_many((DnsQuery("split.example", DnsRecordType.A),))
+
+
+def test_guarded_dns_charges_one_unit_per_raw_query() -> None:
+    guarded = _GuardedDns(StubDns(), max_lookups=2)
+
+    guarded.lookup_many(
+        (DnsQuery("a.example", DnsRecordType.A), DnsQuery("a.example", DnsRecordType.AAAA))
+    )
+
+    with pytest.raises(ScopeError, match="budget"):
+        guarded.lookup_many((DnsQuery("a.example", DnsRecordType.A),))
 
 
 def test_guarded_dns_caps_a_scanner_declared_budget() -> None:
@@ -496,3 +556,81 @@ def test_granted_scanner_still_fails_closed_when_no_runner_is_wired() -> None:
 
     with pytest.raises(SandboxError, match="not configured"):
         runtime.sandbox.run("fixture.echo", uuid4())
+
+
+# --- Authoritative DNS, RDAP and zone-transfer capabilities (#19) ---------------------------
+
+
+def test_authoritative_capability_is_only_wired_when_granted() -> None:
+    scope, _ = make_guard()
+    runtime = scope.check(context(), target(), scanner())
+
+    with pytest.raises(ScopePolicyError, match="authoritative"):
+        runtime.authoritative.query("acme.com", DnsRecordType.SOA)
+
+
+def test_authoritative_queries_are_restricted_to_the_target() -> None:
+    scope, _ = make_guard()
+    granted = scanner(grant=ScannerGrant(authoritative_dns=True, dns_lookups=3))
+    runtime = scope.check(context(), target(), granted)
+
+    with pytest.raises(ScopePolicyError, match="target's zone"):
+        runtime.authoritative.query("other.com", DnsRecordType.SOA)
+    answers = runtime.authoritative.query("acme.com", DnsRecordType.SOA)
+    assert answers.zone == "acme.com"
+
+
+def test_authoritative_grant_needs_a_dns_budget() -> None:
+    busy = scanner(grant=ScannerGrant(authoritative_dns=True, dns_lookups=2))
+    with pytest.raises(ScopePolicyError, match="DNS lookup"):
+        make_guard()[0].check(context(), target(), busy)
+
+
+def test_zone_transfer_requires_ownership_even_without_the_plugin_flag() -> None:
+    active = scanner(
+        requires_verification=False,
+        grant=ScannerGrant(zone_transfer=True, dns_lookups=3),
+    )
+    with pytest.raises(ScopeError, match="verified"):
+        make_guard()[0].check(context(), target(), active)
+
+
+def test_zone_transfer_capability_is_wired_and_restricted() -> None:
+    scope = verify_all(make_guard()[0])
+    granted = scanner(grant=ScannerGrant(zone_transfer=True, dns_lookups=3))
+    runtime = scope.check(context(), target(), granted)
+
+    with pytest.raises(ScopePolicyError, match="target's zone"):
+        runtime.zone_transfer.attempt("other.com")
+    assert runtime.zone_transfer.attempt("acme.com") == ()
+
+
+def test_zone_transfer_grant_needs_a_dns_budget() -> None:
+    busy = scanner(grant=ScannerGrant(zone_transfer=True, dns_lookups=2))
+    with pytest.raises(ScopePolicyError, match="DNS lookup"):
+        verify_all(make_guard()[0]).check(context(), target(), busy)
+
+
+def test_rdap_capability_is_only_wired_when_granted() -> None:
+    scope, _ = make_guard()
+    runtime = scope.check(context(), target(), scanner())
+
+    with pytest.raises(ScopePolicyError, match="RDAP"):
+        runtime.rdap.lookup("acme.com")
+
+
+def test_rdap_lookups_are_restricted_to_the_target_or_its_registrable_domain() -> None:
+    scope, _ = make_guard()
+    granted = scanner(grant=ScannerGrant(rdap=True, dns_lookups=2))
+    runtime = scope.check(context(), target(), granted)
+
+    with pytest.raises(ScopePolicyError, match="registration"):
+        runtime.rdap.lookup("other.com")
+    # The stub client answers with an empty JSON array, which is not a bootstrap registry.
+    assert runtime.rdap.lookup("acme.com") is None
+
+
+def test_rdap_grant_needs_a_dns_budget() -> None:
+    busy = scanner(grant=ScannerGrant(rdap=True, dns_lookups=1))
+    with pytest.raises(ScopePolicyError, match="DNS lookup"):
+        make_guard()[0].check(context(), target(), busy)

@@ -3,25 +3,40 @@
 import hashlib
 import json
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid5
 
-from sqlalchemy import case, func, tuple_
+from sqlalchemy import case, func, literal, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from attacksurf.domain.assets import AssetNotFound, AssetSource, AssetType
-from attacksurf.domain.events import FindingCreated
-from attacksurf.domain.findings import finding_fingerprint
+from attacksurf.domain.events import FindingCreated, FindingReopened
+from attacksurf.domain.findings import (
+    SUPPRESSED_STATUSES,
+    Confidence,
+    FindingStatus,
+    Severity,
+    finding_fingerprint,
+)
 from attacksurf.domain.ids import uuid7
 from attacksurf.domain.rules import RULES, Rule, get_rule
-from attacksurf.domain.scanners import AssetRef, RawFinding, ScanOutput
+from attacksurf.domain.scanners import (
+    AssetObservation,
+    AssetRef,
+    RawEvidence,
+    RawFinding,
+    ScanOutput,
+)
 from attacksurf.domain.scans import ScanCancelled
-from attacksurf.infra.db.models import Asset, Evidence, Finding, Scan
+from attacksurf.infra.db.models import Asset, Evidence, Finding, FindingObservation, Scan
 from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.services.assets import record_asset, record_relation
 from attacksurf.services.scans import TERMINAL
+
+OBSERVED_AT = "observed_at"
 
 
 def persist_scan_output(
@@ -32,7 +47,8 @@ def persist_scan_output(
     *,
     catalog: Mapping[str, Rule] = RULES,
     discovered_limit: int | None = None,
-) -> list[FindingCreated]:
+    scanner: str | None = None,
+) -> list[FindingCreated | FindingReopened]:
     """Upsert observed data; caller commits then dispatches returned events.
 
     References may name only the input or explicitly discovered assets. Plugins cannot choose
@@ -44,11 +60,17 @@ def persist_scan_output(
     exceeding the cap never fails the job. Wildcard-zone markers are merged into `Asset.details`
     for the root and the discovered zones that survived the cap (ADR 0022).
 
+    `scanner` is the `Job.scanner` name that produced the output; it is stored on each finding
+    so the diff stage can fix a finding only when its own scanner succeeded (ADR 0027). A
+    suppressed finding is reopened (and reported as `FindingReopened`) when this output differs
+    materially from what the user suppressed.
+
     Raises `ScanCancelled` for a cancelled scan and `AssetNotFound` when the scan's root is
     archived (ADR 0021). Locks are taken in the order `archive_root_domain` uses (scan rows, then
     the root): the caller already holds the scan row lock. The root is read `FOR KEY SHARE`,
     which never conflicts with the archive, or locked `FOR UPDATE` once when the cap or a root
-    wildcard marker needs it.
+    wildcard marker needs it. The input and discovered assets are then locked/upserted in a
+    stable type/value order, so overlapping roots can't deadlock on opposite answer orders.
     """
     asset = get_scoped(session, Asset, asset_id, scan.org_id)
     if asset is None:
@@ -57,36 +79,52 @@ def persist_scan_output(
         raise ScanCancelled("Scan was cancelled.")
     input_ref = (asset.type, asset.value)
     root = _lock_root(session, scan, asset, output, discovered_limit=discovered_limit)
-    refs = {input_ref: asset.id}
+    root_ref = (root.type, root.value)
     # Every name the plugin reported is a valid reference, including ones the cap will drop
-    # (a reference to a name it never reported is still a plugin bug and fails the job).
-    declared = set(refs) | {(a.type, a.value) for a in output.assets}
+    # (a reference to a name it never reported is still a plugin bug and fails the job). The
+    # scan root is always valid: a subdomain may CNAME to its apex.
+    declared = {input_ref, root_ref} | {(a.type, a.value) for a in output.assets}
     _validate_references(output, declared, catalog)
     admitted: set[tuple[AssetType, str]] | None = None
     if discovered_limit is not None:
         keep = _admit(
             session, scan.org_id, scan.root_asset_id, asset, output, limit=discovered_limit
         )
-        admitted = {(ref.type, ref.value) for ref in keep}
+        admitted = {(ref.type, ref.value) for ref in keep} | {root_ref}
         output = output.model_copy(update={"assets": keep})
     seen = scan.started_at or scan.created_at
-    rows: dict[tuple[AssetType, str], Asset] = {
-        input_ref: root if asset.id == scan.root_asset_id else asset
-    }
-    written: set[tuple[AssetType, str]] = set()
-    for discovered in output.assets:
-        row = record_asset(
-            session,
-            scan.org_id,
-            discovered.type,
-            discovered.value,
-            source=AssetSource.DISCOVERED,
-            parent_id=scan.root_asset_id,
-            seen_at=seen,
-        )
-        written.add((row.type, row.value))
-        refs[(row.type, row.value)] = row.id
-        rows[(row.type, row.value)] = row
+    rows: dict[tuple[AssetType, str], Asset] = {root_ref: root}
+    refs: dict[tuple[AssetType, str], UUID] = {root_ref: root.id}
+    # The root exists independently of this output; `_usable` may link a subdomain's CNAME to it.
+    written: set[tuple[AssetType, str]] = {root_ref}
+    for asset_type, value in _ordered_asset_refs(input_ref, root_ref, output.assets):
+        key = (asset_type, value)
+        if key == input_ref:
+            row = _lock_input(session, scan, asset_id)
+        else:
+            row = record_asset(
+                session,
+                scan.org_id,
+                asset_type,
+                value,
+                source=AssetSource.DISCOVERED,
+                parent_id=scan.root_asset_id,
+                seen_at=seen,
+                scan_id=scan.id,
+            )
+        written.add(key)
+        refs[key] = row.id
+        rows[key] = row
+    asset = rows[input_ref]
+    _apply_observations(
+        output,
+        rows=rows,
+        written=written,
+        input_ref=input_ref,
+        admitted=admitted,
+        seen=seen,
+        scan_id=scan.id,
+    )
     # The cap may have dropped a discovered name; links to it are skipped, never guessed.
     for relation in output.relations:
         if not _usable(relation.from_asset, written, input_ref, admitted):
@@ -102,19 +140,28 @@ def persist_scan_output(
             seen_at=seen,
         )
     _mark_wildcards(rows, output.wildcard_zones)
-    events: list[FindingCreated] = []
+    events: list[FindingCreated | FindingReopened] = []
     for raw in output.findings:
         target_ref = (raw.asset.type, raw.asset.value) if raw.asset else input_ref
         if not _usable(raw.asset, written, input_ref, admitted):
             continue  # reported for an asset the cap dropped: nothing to attach it to
         target_id = refs[target_ref]
-        finding_id, created = _upsert_finding(
-            session, scan, target_id, raw, get_rule(raw.rule_id, catalog)
+        finding_id, created, reopened = _upsert_finding(
+            session, scan, target_id, raw, get_rule(raw.rule_id, catalog), scanner=scanner
         )
-        if created:
-            events.append(FindingCreated(scan.org_id, scan.id, finding_id))
+        event = _finding_event(scan, finding_id, created=created, reopened=reopened)
+        if event is not None:
+            events.append(event)
         _upsert_evidence(session, scan, finding_id, raw, seen)
     return events
+
+
+def _finding_event(
+    scan: Scan, finding_id: UUID, *, created: bool, reopened: bool
+) -> FindingCreated | FindingReopened | None:
+    if created:
+        return FindingCreated(scan.org_id, scan.id, finding_id)
+    return FindingReopened(scan.org_id, scan.id, finding_id) if reopened else None
 
 
 def _lock_root(
@@ -185,18 +232,113 @@ def _validate_references(
         _resolve(declared, relation.to_asset)
     for zone in output.wildcard_zones:
         _resolve(declared, zone)
+    for observation in output.observations:
+        _resolve(declared, observation.asset)
     for raw in output.findings:
         get_rule(raw.rule_id, catalog)
         if raw.asset:
             _resolve(declared, raw.asset)
 
 
+_ASSET_ORDER = {asset_type: index for index, asset_type in enumerate(AssetType)}
+
+
+def _ordered_asset_refs(
+    input_ref: tuple[AssetType, str],
+    root_ref: tuple[AssetType, str],
+    assets: tuple[AssetRef, ...],
+) -> tuple[tuple[AssetType, str], ...]:
+    """Input + discovered refs in the one order every persistence transaction locks them."""
+    refs = {input_ref, root_ref}
+    refs.update((asset.type, asset.value) for asset in assets)
+    refs.discard(root_ref)
+    return tuple(sorted(refs, key=lambda ref: (_ASSET_ORDER[ref[0]], ref[1])))
+
+
+def _lock_input(session: Session, scan: Scan, asset_id: UUID) -> Asset:
+    row = session.scalars(
+        scoped(Asset, scan.org_id).where(Asset.id == asset_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).one_or_none()
+    if row is None:
+        raise AssetNotFound("Asset not found.")
+    return row
+
+
+def _apply_observations(
+    output: ScanOutput,
+    *,
+    rows: dict[tuple[AssetType, str], Asset],
+    written: set[tuple[AssetType, str]],
+    input_ref: tuple[AssetType, str],
+    admitted: set[tuple[AssetType, str]] | None,
+    seen: datetime,
+    scan_id: UUID,
+) -> None:
+    for observation in output.observations:
+        if not _usable(observation.asset, written, input_ref, admitted):
+            continue
+        row = rows.get((observation.asset.type, observation.asset.value))
+        if row is not None:
+            _observe(row, observation, seen, scan_id)
+
+
+def _observe(row: Asset, observation: AssetObservation, seen: datetime, scan_id: UUID) -> None:
+    """Merge details and apply a lifecycle claim without moving state backwards.
+
+    A scanner may deactivate only a discovered asset: roots are user-owned and stay active even
+    when their DNS no longer resolves. Details are only replaced by an observation at least as
+    new as the stored one, so a delayed older result cannot erase newer records; lifecycle has
+    its own monotonic checks below. The scan that deactivated the asset is recorded, so an
+    overlapping scan's diff never claims it (ADR 0027).
+    """
+    if observation.details:
+        observed_at = _details_time(row.details)
+        if observed_at is None or seen >= observed_at:
+            row.details = {
+                **(row.details or {}),
+                **observation.details,
+                OBSERVED_AT: seen.isoformat(),
+            }
+    if observation.active is None:
+        return
+    if observation.active:
+        row.last_seen = max(row.last_seen, seen)
+        if row.deactivated_at is None or seen > row.deactivated_at:
+            row.is_active = True
+            row.deactivated_at = None
+            row.deactivated_by_scan_id = None
+        return
+    if row.parent_id is not None and seen >= row.last_seen:
+        # Advance even when already inactive: a later negative observation must outrank a
+        # delayed positive one that would otherwise pass the reactivation check.
+        if row.deactivated_at is None or seen > row.deactivated_at:
+            row.deactivated_at = seen
+            row.deactivated_by_scan_id = scan_id
+        row.is_active = False
+
+
+def _details_time(details: object) -> datetime | None:
+    """When the stored details were observed, or None for rows written before this marker."""
+    if not isinstance(details, dict):
+        return None
+    raw = details.get(OBSERVED_AT)
+    if not isinstance(raw, str):
+        return None
+    try:
+        value = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 def _upsert_evidence(
     session: Session, scan: Scan, finding_id: UUID, raw: RawFinding, seen: datetime
 ) -> None:
     for evidence in raw.evidence:
-        data = json.dumps(evidence.data, sort_keys=True, ensure_ascii=False, allow_nan=False)
-        digest = hashlib.sha256(f"{finding_id}:{evidence.kind}:{data}".encode()).hexdigest()
+        digest = hashlib.sha256(
+            f"{finding_id}:{evidence.kind}:{_canonical_json(evidence.data)}".encode()
+        ).hexdigest()
         # Replay of a task/scan cannot append the same evidence again. No schema change.
         session.execute(
             insert(Evidence)
@@ -305,9 +447,50 @@ def _admit(
 
 
 def _upsert_finding(
-    session: Session, scan: Scan, asset_id: UUID, raw: RawFinding, rule: Rule
-) -> tuple[UUID, bool]:
+    session: Session,
+    scan: Scan,
+    asset_id: UUID,
+    raw: RawFinding,
+    rule: Rule,
+    *,
+    scanner: str | None,
+) -> tuple[UUID, bool, bool]:
+    """Insert or refresh one finding; returns `(id, created, reopened)`.
+
+    A suppressed finding is reopened only when this output differs materially from what the user
+    suppressed: changed severity/confidence, or an evidence set other than the last observed one
+    (compared by digest, so an empty batch is a batch and history is never loaded). The
+    comparison is read before the upsert and applied as a conditional `CASE`, so a status change
+    committed in between is never overwritten blindly. Every observation is also recorded for
+    this scan, which is what `Scan.stats` counts (ADR 0027).
+    """
     seen = scan.started_at or scan.created_at
+    severity = raw.severity or rule.default_severity
+    digest = _evidence_digest(raw.evidence)
+    fingerprint = finding_fingerprint(scan.org_id, asset_id, rule.id, raw.location)
+    existing = session.execute(
+        scoped(Finding, scan.org_id)
+        .where(Finding.fingerprint == fingerprint)
+        .with_only_columns(
+            Finding.id,
+            Finding.status,
+            Finding.severity,
+            Finding.confidence,
+            Finding.evidence_digest,
+        )
+    ).one_or_none()
+    reopen = (
+        existing is not None
+        and existing.status in SUPPRESSED_STATUSES
+        and _materially_changed(
+            existing.severity,
+            existing.confidence,
+            existing.evidence_digest,
+            new_severity=severity,
+            new_confidence=raw.confidence,
+            new_digest=digest,
+        )
+    )
     stmt = insert(Finding).values(
         id=uuid7(),
         org_id=scan.org_id,
@@ -315,12 +498,14 @@ def _upsert_finding(
         first_seen_scan_id=scan.id,
         last_seen_scan_id=scan.id,
         rule_id=rule.id,
-        fingerprint=finding_fingerprint(scan.org_id, asset_id, rule.id, raw.location),
+        fingerprint=fingerprint,
         location=raw.location,
         title=rule.title,
         description=rule.description,
-        severity=raw.severity or rule.default_severity,
+        severity=severity,
         confidence=raw.confidence,
+        scanner=scanner,
+        evidence_digest=digest,
         first_seen=seen,
         last_seen=seen,
         remediation=rule.render_remediation(raw.remediation_context),
@@ -332,7 +517,8 @@ def _upsert_finding(
         )
     )
     if created_id is not None:
-        return created_id, True
+        _record_observation(session, scan, created_id, severity)
+        return created_id, True, False
     new = stmt.excluded
     # Equal timestamps still need a deterministic order: replay must not move scan pointers.
     newer = (new.last_seen > Finding.last_seen) | (
@@ -359,8 +545,22 @@ def _upsert_finding(
             "remediation",
             "references",
             "last_seen_scan_id",
+            "evidence_digest",
         )
     }
+    if scanner is not None:
+        # An output without provenance (a direct caller) never erases what a scan recorded.
+        updates["scanner"] = case((newer, new.scanner), else_=Finding.scanner)
+    if reopen:
+        # Re-check the current row and the observation order: a delayed older result must not
+        # reopen a decision a newer observation already left suppressed.
+        updates["status"] = case(
+            (
+                newer & Finding.status.in_(tuple(SUPPRESSED_STATUSES)),
+                literal(FindingStatus.OPEN.value),
+            ),
+            else_=Finding.status,
+        )
     updates.update(
         first_seen=func.least(Finding.first_seen, new.first_seen),
         first_seen_scan_id=case(
@@ -377,4 +577,82 @@ def _upsert_finding(
         ).returning(Finding),
         execution_options={"populate_existing": True},
     ).one()
-    return finding.id, False
+    _record_observation(session, scan, finding.id, severity)
+    return finding.id, False, reopen and finding.status is FindingStatus.OPEN
+
+
+def _record_observation(session: Session, scan: Scan, finding_id: UUID, severity: Severity) -> None:
+    """Remember that this scan observed the finding; a replay cannot add a second row."""
+    session.execute(
+        insert(FindingObservation)
+        .values(
+            id=uuid7(),
+            org_id=scan.org_id,
+            scan_id=scan.id,
+            finding_id=finding_id,
+            severity=severity,
+        )
+        .on_conflict_do_nothing(
+            index_elements=[
+                FindingObservation.org_id,
+                FindingObservation.scan_id,
+                FindingObservation.finding_id,
+            ]
+        )
+    )
+
+
+def _materially_changed(
+    severity: Severity,
+    confidence: Confidence,
+    digest: str | None,
+    *,
+    new_severity: Severity,
+    new_confidence: Confidence,
+    new_digest: str,
+) -> bool:
+    """Whether this observation differs from what the user suppressed (ADR 0027).
+
+    `digest=None` is a row migrated from before evidence digests existed: its baseline is
+    unknown, so the first observation only records the baseline and never reopens on its own.
+    """
+    if severity != new_severity or confidence != new_confidence:
+        return True
+    if digest is None:
+        return False
+    return new_digest != digest
+
+
+def _evidence_digest(evidence: tuple[RawEvidence, ...]) -> str:
+    """SHA-256 of the evidence set, order-insensitive; an empty set has its own digest."""
+    keys = sorted({(item.kind.value, _digest_json(item.data)) for item in evidence})
+    return hashlib.sha256(json.dumps(keys, ensure_ascii=False).encode()).hexdigest()
+
+
+# Evidence collections whose order carries no meaning: a DNS RRset's answer set and an RDAP
+# registration's statuses. A CNAME record's `values` is the chain path and keeps its order.
+_UNORDERED_EVIDENCE_KEYS = ("values", "statuses")
+
+
+def _digest_json(data: dict[str, Any]) -> str:
+    """Canonical JSON for material-change comparison.
+
+    A resolver or registry may return the same set in a different order, so unordered
+    collections are sorted before hashing; a CNAME chain's order is the path and is kept.
+    """
+    normalized = dict(data)
+    for key in _UNORDERED_EVIDENCE_KEYS:
+        items = normalized.get(key)
+        if key == "values" and normalized.get("record") == "CNAME":
+            continue
+        if isinstance(items, list) and all(isinstance(item, str) for item in items):
+            normalized[key] = sorted(items)
+    return _canonical_json(normalized)
+
+
+_EMPTY_EVIDENCE_DIGEST = _evidence_digest(())
+
+
+def _canonical_json(data: object) -> str:
+    """Same canonical form `_upsert_evidence` hashes, so equal evidence compares equal."""
+    return json.dumps(data, sort_keys=True, ensure_ascii=False, allow_nan=False)

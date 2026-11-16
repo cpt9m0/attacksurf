@@ -39,6 +39,8 @@ own key) **triages, prioritizes, and explains** them in plain language with fix 
 
 ### Domains & DNS (MVP)
 - **Subdomain enumeration** from Certificate Transparency logs, with wildcard DNS detection
+- **DNS resolution**: A/AAAA/CNAME/MX/NS/TXT/CAA/SOA records, CNAME → IP chains, IP assets
+  with reverse DNS and offline ASN/organisation, and non-resolving subdomain tracking
 - **Subdomain takeover detection**: dangling CNAMEs and NS records pointing to unclaimed cloud services
 - **Email security**: SPF, DMARC, DKIM, MTA-STS checks (is your domain spoofable?)
 - **DNS hygiene**: DNSSEC, nameserver and MX configuration, CAA, zone transfer (AXFR) exposure
@@ -106,7 +108,7 @@ Flask + HTMX web app, Celery workers, PostgreSQL, Redis. Each check is a small p
 |---|---|---|
 | 1 | Foundation: tooling, DB, auth, UI shell | 🚧 in progress |
 | 2 | Scan engine: plugins, pipeline, ScopeGuard | ✅ built |
-| 3 | DNS module | planned |
+| 3 | DNS module | 🚧 in progress |
 | 4 | AI triage and summaries | planned |
 | 5 | Scheduling, alerts, deployment → **v0.1.0** | planned |
 | next | Website ([#66](https://github.com/cpt9m0/attacksurf/issues/66)), codebase ([#67](https://github.com/cpt9m0/attacksurf/issues/67)), binary ([#68](https://github.com/cpt9m0/attacksurf/issues/68)), IP scanning | planned |

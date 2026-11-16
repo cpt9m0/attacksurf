@@ -62,6 +62,38 @@
   {%- if asset.type in ("domain", "subdomain") %}
   {{ ownership_card(view_id, proof_root_value, ownership, can_manage_ownership, checking) }}
   {%- endif %}
+  {%- if detail.dns %}
+  <section class="card" aria-labelledby="dns-title">
+    <h2 class="card-title" id="dns-title">DNS records</h2>
+    {%- if detail.dns.chain %}
+    <p class="dns-chain mono" aria-label="DNS resolution chain">
+      {%- for hop in detail.dns.chain %}{{ hop }}{% if not loop.last %} <span aria-hidden="true">→</span> {% endif %}{% endfor %}
+    </p>
+    {%- endif %}
+    {%- if detail.dns.records %}
+    {% call(row, key) data_table([("type", "Record"), ("values", "Value")],
+        detail.dns.records, "DNS records", "No DNS records", "") %}
+      {%- if key == "type" %}<code>{{ row.type }}</code>
+      {%- elif key == "values" %}{% for value in row.values %}<code class="dns-value">{{ value }}</code>{% if not loop.last %}<br>{% endif %}{% endfor %}{% endif %}
+    {% endcall %}
+    {%- endif %}
+    {%- if detail.dns.private_ips %}
+    <p class="muted">Non-public addresses:
+      {%- for address in detail.dns.private_ips %} <code>{{ address }}</code>{% if not loop.last %},{% endif %}{% endfor %}</p>
+    {%- endif %}
+  </section>
+  {%- endif %}
+  {%- if detail.ip %}
+  <section class="card" aria-labelledby="ip-title">
+    <h2 class="card-title" id="ip-title">IP address</h2>
+    <dl class="meta card-body">
+      <div><dt>PTR</dt><dd class="mono">{{ detail.ip.ptr or "—" }}</dd></div>
+      <div><dt>ASN</dt><dd>{% if detail.ip.asn is not none %}AS{{ detail.ip.asn }}{% else %}—{% endif %}</dd></div>
+      <div><dt>Organisation</dt><dd>{{ detail.ip.org or "—" }}</dd></div>
+      <div><dt>Country</dt><dd>{{ detail.ip.country or "—" }}</dd></div>
+    </dl>
+  </section>
+  {%- endif %}
   <section class="card" aria-labelledby="outgoing-title">
     <h2 class="card-title" id="outgoing-title">Points to</h2>
     {% call(row, key) data_table([("kind", "Relation"), ("peer", "Asset"), ("type", "Type"), ("last_seen", "Last seen")],

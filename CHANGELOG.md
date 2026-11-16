@@ -11,6 +11,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   at the wall time or past 2 MiB of stdout and always removing the container. It refuses to
   start in prod unless `runsc` is a registered runtime, and exits instead of running with a
   weaker sandbox (ADR 0016, ADR 0023, #84).
+- Scan diffing and the finding lifecycle: a scan marks findings it no longer sees `fixed` only
+  when their own scanner completed for that asset, a previously fixed finding observed again
+  becomes `regressed`, suppressed (`accepted_risk`/`false_positive`) findings reopen only on
+  materially different evidence, and `Scan.stats` records new/fixed/regressed/total findings by
+  severity plus new assets and disappeared subdomains for the scan-history view (ADR 0027,
+  #20).
+- DNS hygiene checks (`dns.dnssec`, `dns.ns`, `dns.mx`, `dns.caa`, `dns.whois`, `dns.axfr`):
+  DS/DNSKEY delegation-chain checks (`dns.dnssec.not_enabled` info, `dns.dnssec.broken_chain`
+  high), single-nameserver / lame-delegation / inconsistent-SOA detection (`dns.ns.*`), MX
+  targets that are aliases or do not resolve (`dns.mx.*`), missing CAA (`dns.caa.missing`),
+  registration expiry and a missing registrar transfer lock via RDAP (`dns.whois.*`, 24-hour
+  cache), and unauthenticated zone transfers on verified roots (`dns.axfr.allowed`, high). Adds
+  grant-gated authoritative DNS, RDAP and zone-transfer adapters and wires the checks into the
+  `dns_passive` profile (ADR 0026, #19).
+- Subdomain takeover checks (`dns.takeover`, `dns.takeover.http`): dangling CNAMEs to
+  known-claimable services that no longer resolve and NS delegations to nameservers that no
+  longer exist are flagged from DNS alone; on verified domains a single HTTP probe also
+  flags resolving services answering with their "unclaimed instance" signature. Reports
+  `dns.takeover.dangling_cname` / `dns.takeover.fingerprint_match` (high) and
+  `dns.takeover.dangling_ns` (critical) against a pinned subset of the can-i-take-over-xyz
+  fingerprint dataset (CC-BY-4.0); wired into the `dns_passive` profile checks (#18).
+- Email security check (`dns.email`): passive evaluation of SPF, DMARC, DKIM and MTA-STS
+  publication from TXT DNS records, reporting `dns.email.*` findings (missing/multiple/
+  permissive SPF, >10 SPF DNS lookups, missing/monitor-only/unreported/partial DMARC,
+  undiscovered DKIM selectors at low confidence, missing MTA-STS as info) with raw TXT
+  records as evidence; wired into the `dns_passive` profile checks (#17).
+- DNS resolution (`dns.resolve`): configurable public resolvers with async, bounded queries;
+  A/AAAA/CNAME/MX/NS/TXT/CAA/SOA records stored in `Asset.details["dns"]`; IP assets with
+  `resolves_to` edges and in-root `cname_to` chains; reverse DNS and optional offline ip2asn
+  enrichment; non-resolving subdomains marked inactive; and the info finding
+  `dns.records.private_ip_exposed` for private/special-purpose addresses. Asset detail shows the
+  CNAME → IP chain and records (ADR 0025, #16).
 - Sandbox launcher building blocks: env-only settings (the proxy URL is a `SecretStr`, since it
   may embed credentials), an analyzer catalog (empty until the first analyzer ships), an artifact
   resolver that refuses symlinks and anything outside the artifact root, a create-body builder

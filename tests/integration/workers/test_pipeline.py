@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from threading import Event
 from uuid import UUID, uuid4
 
@@ -8,7 +8,8 @@ from sqlalchemy import update
 from sqlalchemy.orm import Session, sessionmaker
 
 from attacksurf.domain.assets import AssetNotFound
-from attacksurf.domain.events import FindingCreated, ScanCompleted
+from attacksurf.domain.events import FindingCreated, FindingFixed, ScanCompleted
+from attacksurf.domain.findings import FindingStatus
 from attacksurf.domain.jobs import JobNotFound, JobTask, TransientJobError
 from attacksurf.domain.scanners import (
     AssetRef,
@@ -18,12 +19,13 @@ from attacksurf.domain.scanners import (
     ScanOutput,
     ScanProfile,
 )
-from attacksurf.domain.scans import JobStatus, ScanStatus
+from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger
 from attacksurf.infra.db.models import Asset, AssetRelation, Evidence, Finding, Job, Scan
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.infra.events import InProcessDispatcher
 from attacksurf.services import assets as assets_service
 from attacksurf.services import jobs, scanner_jobs, scans
+from attacksurf.services.scan_results import persist_scan_output
 from attacksurf.workers import runtime
 from attacksurf.workers.app import app
 from attacksurf.workers.tasks import pipeline
@@ -95,6 +97,72 @@ def test_fake_scanner_pipeline_completes_with_assets_findings_and_isolated_error
     pipeline.discover.apply(kwargs={"org_id": str(scan.org_id), "job_id": str(kickoff.id)})
     assert len(db_session.scalars(scoped(Evidence, scan.org_id)).all()) == 2
     assert len(received) == 3
+
+
+def test_diff_task_fixes_a_finding_its_scanner_completed_for(
+    db_session: Session, pipeline_env: InProcessDispatcher
+) -> None:
+    tenant = make_scan(db_session)
+    base = datetime(2026, 11, 1, tzinfo=UTC)
+    first = Scan(
+        org_id=tenant.org_id,
+        root_asset_id=tenant.root_asset_id,
+        profile="dns_passive",
+        status=ScanStatus.RUNNING,
+        triggered_by=ScanTrigger.USER,
+        started_at=base,
+    )
+    db_session.add(first)
+    db_session.flush()
+    persist_scan_output(
+        db_session,
+        first,
+        first.root_asset_id,
+        ScanOutput(findings=(RawFinding(rule_id=RULE.id),)),
+        catalog={RULE.id: RULE},
+        scanner=FakeCheck.name,
+    )
+    first.status = ScanStatus.COMPLETED
+    first.finished_at = first.started_at
+    second = Scan(
+        org_id=tenant.org_id,
+        root_asset_id=tenant.root_asset_id,
+        profile="dns_passive",
+        status=ScanStatus.RUNNING,
+        triggered_by=ScanTrigger.USER,
+        started_at=base + timedelta(hours=1),
+    )
+    db_session.add(second)
+    db_session.flush()
+    db_session.add(
+        Job(
+            org_id=tenant.org_id,
+            scan_id=second.id,
+            stage="check",
+            scanner=FakeCheck.name,
+            asset_id=second.root_asset_id,
+            status=JobStatus.COMPLETED,
+        )
+    )
+    diff_job = jobs.create_job(
+        db_session,
+        FakeQueue(db_session),
+        org_id=tenant.org_id,
+        scan_id=second.id,
+        stage="diff",
+        task_name="passive.diff",
+    )
+    received: list[object] = []
+    pipeline_env.handlers.append(received.append)
+
+    pipeline.diff.apply(kwargs={"org_id": str(second.org_id), "job_id": str(diff_job.id)})
+
+    db_session.expire_all()
+    finding = db_session.scalars(scoped(Finding, tenant.org_id)).one()
+    assert finding.status is FindingStatus.FIXED
+    assert diff_job.status is JobStatus.COMPLETED
+    assert second.stats["findings"]["fixed"]["total"] == 1
+    assert [type(event) for event in received] == [FindingFixed]
 
 
 def test_start_scan_rejects_another_tenants_root(db_session: Session) -> None:
@@ -497,8 +565,8 @@ def test_dispatch_of_a_scan_the_archive_missed_does_not_leave_it_queued(
     cancellation never saw the scan. Dispatching used to return silently, leaving it `queued`.
     """
     scan, kickoff = _started_scan(db_session, "missed")
-    real_root_active = scans._root_active
-    monkeypatch.setattr(scans, "_root_active", lambda *args: False)  # the root was archived
+    real_root_active = scans.root_is_active
+    monkeypatch.setattr(scans, "root_is_active", lambda *args: False)  # the root was archived
 
     pipeline.discover.apply(kwargs={"org_id": str(scan.org_id), "job_id": str(kickoff.id)})
 

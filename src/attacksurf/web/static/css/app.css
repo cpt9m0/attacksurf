@@ -758,3 +758,14 @@ dl.meta dd {
   flex-wrap: wrap;
   margin-left: 0;
 }
+
+/* DNS resolution chain and record values (#16) */
+.dns-chain {
+  margin: 0 0 var(--space-4);
+  overflow-wrap: anywhere;
+}
+
+.dns-value {
+  display: inline-block;
+  overflow-wrap: anywhere;
+}

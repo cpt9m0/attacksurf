@@ -7,13 +7,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from attacksurf.config import Settings, get_settings
 from attacksurf.domain.cache import ScanCache
-from attacksurf.domain.net import DnsResolver, TxtLookup
+from attacksurf.domain.net import IpIntel, TxtLookup
 from attacksurf.domain.scanners import ScannerGate
 from attacksurf.infra.authoritative_dns import AuthoritativeTxtLookup
 from attacksurf.infra.cache import RedisScanCache
 from attacksurf.infra.db.session import create_db_engine, create_session_factory
 from attacksurf.infra.dns import DnsPythonResolver
 from attacksurf.infra.http import SafeHttpClient
+from attacksurf.infra.ip_intel import Ip2AsnLookup
 from attacksurf.infra.scope_guard import ScopeGuard
 from attacksurf.services.ownership import DbOwnershipChecker
 
@@ -33,14 +34,26 @@ def session_factory() -> sessionmaker[Session]:
 
 
 @lru_cache(maxsize=1)
-def dns_resolver() -> DnsResolver:
-    return DnsPythonResolver()
+def dns_resolver() -> DnsPythonResolver:
+    current = settings()
+    return DnsPythonResolver(
+        nameservers=current.dns_resolver_addresses,
+        timeout=current.dns_timeout_seconds,
+        lifetime=current.dns_lifetime_seconds,
+        max_concurrency=current.dns_max_concurrency,
+    )
 
 
 @lru_cache(maxsize=1)
 def txt_lookup() -> TxtLookup:
     """Ownership checks: needs the A/AAAA/NS answers, so it takes the dnspython resolver."""
-    return AuthoritativeTxtLookup(DnsPythonResolver())
+    return AuthoritativeTxtLookup(dns_resolver())
+
+
+@lru_cache(maxsize=1)
+def ip_intel() -> IpIntel:
+    """Offline ASN/org enrichment; an unset path means lookups return None."""
+    return Ip2AsnLookup(settings().ip_asn_db_path)
 
 
 @lru_cache(maxsize=1)
@@ -67,6 +80,7 @@ def scanner_gate() -> ScannerGate:
         http=http_client(),
         ownership=DbOwnershipChecker(session_factory()),
         cache=scan_cache(),
+        ip_intel=ip_intel(),
     )
 
 

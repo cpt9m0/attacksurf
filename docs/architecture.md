@@ -134,11 +134,11 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 | Entity | Purpose |
 |---|---|
 | `Org`, `User`, `Membership` | tenancy; every tenant row carries `org_id`. `User` is global (one login, many orgs); `Membership.role` is `owner`/`admin`/`member` (`domain.accounts.has_role`) |
-| `Asset` | polymorphic target: `domain`, `subdomain`, `ip`, `url`, `repo`, `binary`; one row per `(org_id, type, value)` with `value` normalized by `domain.assets.normalize_asset_value` (hostnames lowercase punycode via `idna`, canonical IPs, `http(s)` URLs without credentials/fragment/default port; repo/binary not yet); `source` user/discovered, `parent_id` = asset a discovered one was found under (set once at first sighting, so no cycles; user-added assets are roots; deleting a parent cascades to its discovered children), `first_seen`/`last_seen`, `is_active` + `deactivated_at` (only sightings after it reactivate), `tags`, `details` (a JSONB bag for scan-derived metadata: CT discovery stores `{"wildcard": true}` on wildcard zones; #16 adds DNS records). Roots come from `services.assets.add_root_domain` (any name `check_public_hostname` accepts, registrable or subdomain; re-adding an archived root restores it) and are removed only by `archive_root_domain` (root + its discovered children go inactive; findings and scans are kept) |
+| `Asset` | polymorphic target: `domain`, `subdomain`, `ip`, `url`, `repo`, `binary`; one row per `(org_id, type, value)` with `value` normalized by `domain.assets.normalize_asset_value` (hostnames lowercase punycode via `idna`, canonical IPs, `http(s)` URLs without credentials/fragment/default port; repo/binary not yet); `source` user/discovered, `parent_id` = asset a discovered one was found under (set once at first sighting, so no cycles; user-added assets are roots; deleting a parent cascades to its discovered children), `first_seen`/`last_seen`, `first_seen_scan_id` + `deactivated_by_scan_id` (which scan discovered/deactivated it, so an overlapping scan's diff cannot claim it), `is_active` + `deactivated_at` (only sightings after it reactivate), `tags`, `details` (a JSONB bag for scan-derived metadata: CT discovery stores `{"wildcard": true}` on wildcard zones; DNS resolution stores `dns` records/chain and `ip` PTR/ASN/organisation, plus an `observed_at` marker so stale scans cannot replace newer details, ADR 0025). Roots come from `services.assets.add_root_domain` (any name `check_public_hostname` accepts, registrable or subdomain; re-adding an archived root restores it) and are removed only by `archive_root_domain` (root + its discovered children go inactive; findings and scans are kept) |
 | `AssetRelation` | graph edges: `subdomain_of`, `cname_to`, `resolves_to`, `serves`; unique per `(org_id, from, to, kind)`, no self-edges. `services.assets.record_asset` / `record_relation` upsert atomically (`INSERT … ON CONFLICT`): re-seen rows extend `last_seen`, never downgrade `source=user`, don't commit (the pipeline commits once), and raise `AssetNotFound` for a parent or endpoint that isn't the org's (locked `FOR KEY SHARE` so it can't vanish before the insert) |
 | `Verification` | proof of ownership of a root domain (`_attacksurf-verify.<root>` TXT, `pending`/`verified`/`revoked`, `verified_at`, `last_checked_at`, `recheck_at`, `expires_at`; unique per `(org_id, asset_id)`). Renewals are due after 20 hours; authorization expires after 24 hours. Subdomains inherit their root's proof; a `verified` row counts only while `expires_at` is in the future. Written by `services.verifications` / `services.ownership`, read by `DbOwnershipChecker` (ADRs 0014, 0015) |
-| `Scan`, `Job` | one run of a profile (`dns_passive`, …) against a root asset (`queued/running/completed/failed/cancelled`, triggered by `user`/`schedule`, `stats`), and its jobs: a pipeline stage, or one scanner on one asset (`skipped` = not run, e.g. denied by ScopeGuard). `scan_id` is NULL for work that isn't part of a scan (ownership verification). Deleting the root asset deletes its scans (their jobs are kept with `scan_id` NULL); deleting another asset keeps the job with `asset_id` NULL |
-| `Finding`, `Evidence` | normalized result, one row per issue across scans: unique `(org_id, fingerprint)`, with `fingerprint = domain.findings.finding_fingerprint(org_id, asset_id, rule_id, location)` (SHA-256 of a versioned JSON array; `location` tells apart several issues of one rule on one asset). `rule_id` points into the rule catalog (`domain.rules`: title, default severity, remediation template, references). Status `open → fixed / accepted_risk / false_positive` (`fixed_at` set exactly when `fixed`); regression detection in #20. Deleting a scan keeps its findings (scan references become NULL); evidence (`dns_record`/`http_response`/`raw`) goes with its finding |
+| `Scan`, `Job` | one run of a profile (`dns_passive`, …) against a root asset (`queued/running/completed/failed/cancelled`, triggered by `user`/`schedule`; `stats` holds the #20 diff: new/fixed/regressed findings by severity and new/disappeared assets, ADR 0027), and its jobs: a pipeline stage, or one scanner on one asset (`skipped` = not run, e.g. denied by ScopeGuard). `scan_id` is NULL for work that isn't part of a scan (ownership verification). Deleting the root asset deletes its scans (their jobs are kept with `scan_id` NULL); deleting another asset keeps the job with `asset_id` NULL |
+| `Finding`, `Evidence` | normalized result, one row per issue across scans: unique `(org_id, fingerprint)`, with `fingerprint = domain.findings.finding_fingerprint(org_id, asset_id, rule_id, location)` (SHA-256 of a versioned JSON array; `location` tells apart several issues of one rule on one asset). `rule_id` points into the rule catalog (`domain.rules`: title, default severity, remediation template, references). `scanner` is the `Job.scanner` that last observed it (`NULL` before #20: never auto-fixed), and `evidence_digest` is the SHA-256 of the last observed evidence set (empty included) for material-change checks. Status `open → fixed → regressed → fixed` (the diff stage `services.scan_diff` owns those transitions, ADR 0027), plus the user's `accepted_risk`/`false_positive`, which reopen to `open` only on a material change; `fixed_at` is set exactly when `fixed`. `FindingObservation` records one row per `(scan, finding)` with the severity at observation time: it is what a scan's own stats and fix/regress decisions use, so they never depend on the mutable `last_seen_scan_id`; rows cascade with their scan and finding. Deleting a scan keeps its findings (scan references become NULL); evidence (`dns_record`/`http_response`/`raw`) goes with its finding |
 | `OrgSettings`, `LLMUsage` | LLM provider config (encrypted keys) and token/cost tracking |
 | `ScanSchedule`, `AuditLog` | continuous monitoring and an append-only audit trail (`services.audit.audit()`, written in the same transaction as the change) |
 
@@ -153,18 +153,23 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   A scan **profile** (e.g. `dns_passive`) selects the scanners to run.
 - A failing scanner fails only its job, not the scan.
 - Implemented framework (ADR 0011/0013): `domain/scanners.py` defines pydantic `ScanOutput`,
-  `AssetRef(type, value)`, relations, raw rule findings/evidence, `ScanContext`, the `Scanner`
-  protocol, the frozen `ScannerGrant` and `ScannerRuntime` (validated DNS/HTTP adapters, the
-  run cache and the grant-checked sandbox port from `domain/sandbox.py`). Plugins
+  `AssetRef(type, value)`, relations, raw rule findings/evidence, `AssetObservation` details,
+  `ScanContext`, the `Scanner` protocol, the frozen `ScannerGrant` and `ScannerRuntime`
+  (validated DNS/HTTP adapters, raw record lookups, the run cache, offline IP intel and the
+  grant-checked sandbox port from `domain/sandbox.py`). Plugins
   declare `name`, `asset_types`, `queue`, `requires_verification`, `timeout_seconds`
   (0 < timeout <= 240 s) and `grant`, and return `run(ctx, asset) -> ScanOutput`.
   `ScanOutput.wildcard_zones` marks assets that are wildcard DNS zones rather than hosts; a
   discovery profile's cap reaches the plugin through `ScanContext.max_discovered_assets`.
+  `ScanOutput.observations` carries per-asset details and lifecycle claims; persistence merges
+  the details and may deactivate only discovered assets.
 - `scanners/registry.py` supplies `@register_scanner`; `workers/app.py` and `app.create_app`
   import production plugin modules explicitly, so each process registers them once.
   `scanners/profiles.py`
-  selects discovery/check plugins by name. `dns_passive` runs `dns.discovery.ct` with
-  `max_discovered_assets=1000`; empty/unknown profiles are rejected. Profiles cannot route to
+  selects discovery/check plugins by name. `dns_passive` runs `dns.discovery.ct` for discovery
+  and `dns.resolve`, `dns.email`, `dns.takeover`, `dns.takeover.http`, `dns.dnssec`, `dns.ns`,
+  `dns.mx`, `dns.caa`, `dns.whois` and `dns.axfr` for checks, with `max_discovered_assets=1000`;
+  empty/unknown profiles are rejected. Profiles cannot route to
   the reserved `active`/`analysis` queues before those workers are implemented.
 - **CT discovery (#15, ADR 0022):** `dns.discovery.ct` queries crt.sh's JSON endpoint and falls
   back to Cert Spotter when crt.sh fails, times out or truncates. Names are normalized, filtered
@@ -173,6 +178,64 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   failures. A bounded number of random-label DNS lookups (`ctx.runtime.dns`) detects wildcard
   zones, and detected zones are persisted as `Asset.details["wildcard"] = true`. When both
   sources fail the scanner raises `TransientJobError`, so Celery retries with backoff.
+- **DNS resolution (#16, ADR 0025):** `dns.resolve` queries A, AAAA, CNAME, MX, NS, TXT, CAA
+  and SOA through the configured public resolvers, follows CNAMEs up to five hops, resolves the
+  terminal name, and stores capped records in `Asset.details["dns"]`. A/AAAA answers create IP
+  assets and `resolves_to` edges; in-root CNAME hops create `cname_to` edges (external targets
+  stay in `cname_chain`). Reverse DNS and an optional offline ip2asn database fill
+  `Asset.details["ip"]`; private/special-purpose addresses emit the info finding
+  `dns.records.private_ip_exposed`. A discovered subdomain with no records becomes inactive;
+  roots/user assets and wildcard-marked zones are never deactivated. A partial lookup failure
+  withholds the DNS details replacement (and a failed PTR lookup withholds that IP's `ip`
+  subtree), so the last complete observation stays; NUL bytes in TXT values are stored as `\0`
+  because PostgreSQL JSONB rejects U+0000. `Asset.details["observed_at"]` orders observations,
+  so a delayed older result cannot replace newer details.
+- **Email security (#17):** `dns.email` is a check-only plugin on root domains (no assets,
+  relations or observations) that reads TXT records for the apex, `_dmarc`, `_mta-sts` and common
+  `<selector>._domainkey` names in one `lookup_many` round and evaluates SPF (missing,
+  multiple, permissive `+all`/`?all`, >10 reachable DNS-querying terms), DMARC (missing —
+  including multiple records, monitor-only, no reporting, partial `pct`), DKIM (no common
+  selector publishes a usable key; low confidence) and MTA-STS (missing, info). A scanned
+  name without a usable DMARC record falls back to its organizational domain's record
+  (`ScannerRuntime.org_domain`, fed by the ScopeGuard's public-suffix classifier), whose
+  `sp` policy then applies; an invalid `p`/`sp` is read as `p=none` when a valid reporting
+  URI exists, per RFC 7489. Evidence is the raw
+  TXT records as `dns_record` evidence. A failed query fails open (that check is skipped);
+  only an all-error run raises `TransientJobError`. No HTTP fetch: MTA-STS is the DNS
+  signal only, and parked-domain hardening (`v=spf1 -all` + `p=reject`) is covered by the
+  missing-record remediation text.
+- **Subdomain takeover (#18):** two check-only plugins split by the ScopeGuard gate, because a
+  `TARGET` HTTP grant makes the gate skip unverified assets before the plugin runs. `dns.takeover`
+  is passive and DNS-only on domains and subdomains: it follows the CNAME chain (≤5 hops) and
+  reports `dns.takeover.dangling_cname` (high) when the terminal name suffix-matches a
+  known-claimable service whose deprovisioned instances return NXDOMAIN, and
+  `dns.takeover.dangling_ns` (critical, medium confidence) per NS host whose own name is
+  NXDOMAIN. `dns.takeover.http` declares `requires_verification` with a `TARGET` grant on the
+  passive queue, so it runs only while the root's ownership proof is valid; when the terminal
+  CNAME matches a resolving service it makes one plain-HTTP GET of the asset (a deprovisioned
+  instance rarely has a valid cert for the victim name) and reports
+  `dns.takeover.fingerprint_match` (high) when the body or status carries the service's
+  signature, with the CNAME chain and a response snippet as evidence. Services are matched
+  against a pinned subset of the can-i-take-over-xyz dataset (CC-BY-4.0, vulnerable entries
+  with a CNAME pattern and a usable signal; `scanners/dns/fingerprints-NOTICE.md`), matched as
+  literal substrings, never regex. Neither plugin claims or registers anything; HTTP errors
+  are no-finding, and only an all-error DNS round raises `TransientJobError`.
+- **DNS hygiene (#19, ADR 0026):** six check-only plugins. `dns.dnssec` reads the DS record at
+  the delegation (stub) and the zone's DNSKEY RRset from its own nameservers, reporting
+  `dns.dnssec.not_enabled` (info, low confidence) and `dns.dnssec.broken_chain` (high) when no
+  published key matches the DS; only the DS -> DNSKEY linkage is verified, not RRSIG
+  signatures. `dns.ns` probes each authoritative server for SOA and reports
+  `dns.ns.single_nameserver` (low), `dns.ns.lame_delegation` (medium, per server) and
+  `dns.ns.inconsistent_soa` (medium). `dns.mx` reports MX targets that are CNAMEs
+  (`dns.mx.points_to_cname`, low) or have no address records (`dns.mx.unresolvable`, medium),
+  skipping a null MX. `dns.caa` reports a missing CAA record (`dns.caa.missing`, info) after
+  checking the asset and every ancestor up to the registrable domain. `dns.whois` reads RDAP
+  registration data through the IANA
+  bootstrap (24 h cache) for `dns.whois.expiring_soon` (medium below 30 days, high below 7) and
+  `dns.whois.registrar_lock_missing` (medium). `dns.axfr` is an active check on verified zone
+  apexes: one AXFR per nameserver, `dns.axfr.allowed` (high) with only the first message's
+  record count as evidence. The zone-level checks run only when the asset is itself a zone apex;
+  all six accept `DOMAIN` assets only, so they run once per scan root.
 - `services.scans.start_scan` validates a tenant-owned, active domain root, audits and commits
   the scan/kickoff job, then enqueues `passive.discover`. Two waves use Celery chords:
   discovery on the root, then checks on the active root and its known direct children, filtered
@@ -204,26 +267,50 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   archived root even when a stale session copy still says active (ADR 0021).
   Threads cannot be killed: safe network adapters need their own deadlines, four unfinished
   threads exhaust that child's capacity, and prefork children recycle after 100 tasks.
-- `diff` (#20) and `triage` (#25) are no-op seams for now; no finding lifecycle transitions or
-  stats are inferred. Finalization completes only after scanner/barrier work is terminal;
-  scanner failures do not make the whole scan fail. Identifier-only `FindingCreated` and
+- **Finding lifecycle and scan diffing (#20, ADR 0027):** `services.scan_diff.diff_scan` runs
+  after the `persist` barrier. A fixed finding observed again becomes `regressed` (with
+  `fixed_at` cleared); an active finding is fixed only when a `COMPLETED` check/discovery job of
+  this scan has its own `scanner` and `asset_id` and its `last_seen` is not newer than the scan
+  start, so a failed/skipped check proves nothing and a delayed older scan never undoes a newer
+  observation. `fixed_at` is the fixing scan's start, and only a fix older than this scan
+  regresses, so a delayed positive from an older scan cannot undo a newer fix. What this scan
+  observed comes from its `finding_observations` rows, not `last_seen_scan_id`, so overlapping
+  scans cannot skew its totals or fix/regress decisions. Suppressed findings are never
+  auto-fixed: persistence reopens them only when this observation is at least as new as the
+  stored one and severity/confidence changed or the evidence digest (empty batch included)
+  differs from the last observed set. The same
+  transaction diffs discovered assets by their scan-scoped columns (`new` = this scan's
+  `first_seen_scan_id`; `disappeared` = subdomains this scan deactivated by resolving them to
+  nothing, so it neither depends on discovery completeness nor on an overlapping scan's
+  changes; IPs need per-hostname resolution coverage), writes `Scan.stats` from the scan's
+  observation rows
+  (`findings.{new,fixed,regressed,total}` with zero-filled `by_severity`, `assets.{new,
+  disappeared}` capped at 1000 entries) and audits `scan.diffed`; `FindingFixed` and
+  `FindingRegressed` publish after commit. A redelivery finds the stats already present and
+  changes nothing. `triage` (#25) remains a no-op seam. Finalization completes only after
+  scanner/barrier work is terminal; scanner failures do not make the whole scan fail.
+  Identifier-only `FindingCreated`, `FindingFixed`, `FindingRegressed`, `FindingReopened` and
   `ScanCompleted` events publish after commit through `infra.events.InProcessDispatcher`;
-  handler errors are isolated. `FindingFixed` is reserved for #20. Delivery is best-effort.
+  handler errors are isolated. Delivery is best-effort.
 - **ScopeGuard** runs before every scanner (`infra/scope_guard.py`, ADR 0013): it validates the
   target (public domain under the bundled PSL; no internal/single-label names or IP literals;
   resolved addresses must be public), requires verified ownership for active checks, and returns
   run-scoped DNS/HTTP adapters bounded by the plugin's `ScannerGrant` (declared public data
-  services only, or the target after verification), plus the run cache.
+  services only, or the target after verification; plus the #19 capabilities: read-only
+  authoritative SOA/DNSKEY probes, RDAP for the target's registration, and zone transfers on a
+  verified zone apex), plus the run cache and offline IP intel.
   `workers.runtime.scanner_gate()` wires it with `services.ownership.DbOwnershipChecker`, so an
   active check runs
   only while the target's root has a verified, unexpired TXT proof (ADR 0014).
 - Scanners only reach the network through those adapters: `infra/http.py` pins the validated
   address (keeping `Host`/SNI), re-checks redirects against the grant, ignores env proxies and
-  caps time and body size; `infra/dns.py` uses the stub resolver without search domains. A test
-  fails if scanner modules import raw network libraries. Profiles may cap discovered assets per
-  root (`max_discovered_assets`), enforced by the scanner and at persistence; CT discovery also
-  marks wildcard zones in `Asset.details` so later resolution does not treat wildcard answers as
-  real hosts.
+  caps time and body size; `infra/dns.py` queries configurable public resolvers without search
+  domains and bounds each run by the plugin's DNS budget. Raw `lookup_many` records are data
+  only; connection paths still validate every address, so a private answer can be reported but
+  never dialed. A test fails if scanner modules import raw network libraries. Profiles may cap
+  discovered assets per root (`max_discovered_assets`), enforced by the scanner and at
+  persistence; CT discovery marks wildcard zones in `Asset.details`, and `dns.resolve` does not
+  deactivate a marked zone on an empty answer.
 - Repository fetches (ADR 0017, not built yet) use `ScopeGuard.check_fetch` and a separate
   streaming port for git smart HTTP (dulwich over the pinned client). There's no `git` binary
   with network access, hosts come from an allowlist in code, and packs are stored unparsed.

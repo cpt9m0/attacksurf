@@ -1,5 +1,6 @@
 """Typed application settings, read from environment variables and `.env`."""
 
+import ipaddress
 import secrets
 from functools import lru_cache
 from typing import Literal, Self
@@ -9,6 +10,7 @@ from pydantic import Field, PrivateAttr, SecretStr, field_validator, model_valid
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from attacksurf.domain.llm import ProviderKind
+from attacksurf.domain.scope import is_blocked_address
 
 MIN_PROD_SECRET_KEY_LENGTH = 32
 # Values that appear in docs/examples; using one in prod means a publicly known signing key.
@@ -32,6 +34,14 @@ class Settings(BaseSettings):
         "postgresql+psycopg://attacksurf:attacksurf@localhost:5432/attacksurf"
     )
     redis_url: SecretStr = SecretStr("redis://localhost:6379/0")
+
+    # DNS resolution (#16). Public recursive resolvers only; comma-separated in env.
+    dns_resolvers: str = "1.1.1.1,8.8.8.8"
+    dns_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
+    dns_lifetime_seconds: float = Field(default=5.0, gt=0, le=60)
+    dns_max_concurrency: int = Field(default=20, ge=1, le=100)
+    # Optional offline ip2asn TSV (start end asn country org); empty disables enrichment.
+    ip_asn_db_path: str | None = None
 
     # Auth (#7). With signup off, only the very first user can still sign up (instance admin).
     allow_signup: bool = True
@@ -66,6 +76,31 @@ class Settings(BaseSettings):
             self.secret_key = SecretStr(secrets.token_urlsafe(32))
             self._secret_key_generated = True
         return self
+
+    @field_validator("ip_asn_db_path")
+    @classmethod
+    def _empty_ip_asn_path(cls, value: str | None) -> str | None:
+        return value.strip() or None if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _validate_dns(self) -> Self:
+        addresses = self.dns_resolver_addresses
+        if not addresses:
+            raise ValueError("DNS_RESOLVERS must list at least one resolver")
+        for raw in addresses:
+            try:
+                address = ipaddress.ip_address(raw)
+            except ValueError:
+                raise ValueError("DNS_RESOLVERS must contain IP addresses") from None
+            if is_blocked_address(address):
+                raise ValueError("DNS_RESOLVERS must be public IP addresses")
+        if self.dns_lifetime_seconds < self.dns_timeout_seconds:
+            raise ValueError("DNS_LIFETIME_SECONDS must be at least DNS_TIMEOUT_SECONDS")
+        return self
+
+    @property
+    def dns_resolver_addresses(self) -> tuple[str, ...]:
+        return tuple(part.strip() for part in self.dns_resolvers.split(",") if part.strip())
 
     @property
     def secret_key_generated(self) -> bool:

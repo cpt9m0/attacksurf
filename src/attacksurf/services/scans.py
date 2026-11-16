@@ -81,7 +81,7 @@ def dispatch_stage(
     profiles: Mapping[str, ScanProfile],
 ) -> None:
     job, scan = load_job_scan(session, org_id, job_id)
-    if scan.status in TERMINAL or not _root_active(session, org_id, scan):
+    if scan.status in TERMINAL or not root_is_active(session, org_id, scan):
         _abandon_stage(session, org_id, job)
         session.commit()
         return
@@ -157,7 +157,7 @@ def _task(
     return JobTask(task_name, scan.org_id, row.id)
 
 
-def _root_active(session: Session, org_id: UUID, scan: Scan) -> bool:
+def root_is_active(session: Session, org_id: UUID, scan: Scan) -> bool:
     """Fresh read: an archive may have committed after this task loaded the scan.
 
     A cancelled scan normally shows its own status; checking the root too means a scan whose
@@ -205,7 +205,7 @@ def load_job_scan(session: Session, org_id: UUID, job_id: UUID) -> tuple[Job, Sc
 
 def finalize_scan(session: Session, org_id: UUID, job_id: UUID, events: EventDispatcher) -> None:
     _, scan = load_job_scan(session, org_id, job_id)
-    if scan.status in TERMINAL or not _root_active(session, org_id, scan):
+    if scan.status in TERMINAL or not root_is_active(session, org_id, scan):
         session.rollback()
         return
     pending = session.scalars(

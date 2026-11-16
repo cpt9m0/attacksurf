@@ -65,6 +65,8 @@ def test_production_gate_checks_ownership_in_the_database() -> None:
     assert isinstance(gate, ScopeGuard)
     assert isinstance(gate._ownership, DbOwnershipChecker)  # #14: proofs gate active checks
     assert callable(runtime.dns_resolver().resolve_ipv4)
+    assert callable(runtime.dns_resolver().lookup_many)
+    assert runtime.ip_intel() is runtime.ip_intel()
     assert runtime.http_client() is not runtime.http_client()
 
 

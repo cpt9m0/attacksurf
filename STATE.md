@@ -26,7 +26,7 @@ yet. `main` has 3a (proxy `/info`, #157) and 3b (building blocks, #158).
 
 ## Open threads
 - #23: PR 3 (OpenAI-compatible provider) must mirror ADR 0019 and ADR 0024; PR 4a/4b follow
-  (migration `0008` unless another PR takes it).
+  (migration `0009` unless another PR takes it; `0008` is #20).
 - #160 (ADR 0024): merge when CI is green, then fix the ADR number in the #147 review reply.
 - Propose a follow-up issue after 3d: sweep leftover `attacksurf-*` containers after a launcher
   or proxy crash (before #92).
