@@ -2,11 +2,12 @@
 
 import http.client
 import json
+import socket
 import socketserver
+import struct
 import threading
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, wait
-from http.server import BaseHTTPRequestHandler
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -19,118 +20,21 @@ from attacksurf.sandbox_proxy.server import (
     MAX_TRACKED_CONTAINERS,
     make_server,
 )
+from tests.docker_fakes import CREATED, DOCKER_INFO, HOST_DETAILS, FakeDocker, FakeRun, serving
 from tests.unit.sandbox_proxy.test_policy import IMAGE, create_body
 
 if not hasattr(socketserver, "UnixStreamServer"):
     # The proxy only runs on Linux; CI runs these tests, Windows dev machines can't.
     pytest.skip("needs Unix domain sockets", allow_module_level=True)
 
-CREATED = "e" * 64
 FOREIGN = "f" * 64
-
-# Trimmed from a real `docker info` reply on a gVisor host: everything except the runtime names
-# is host detail the proxy must keep to itself (ADR 0023).
-DOCKER_INFO: dict[str, Any] = {
-    "ID": "7f3c2a9e-5b1d-4e8a-9c6f-2d4b8e1a3f70",
-    "Name": "vps-fra-01",
-    "ServerVersion": "27.3.1",
-    "OperatingSystem": "Ubuntu 24.04.1 LTS",
-    "DockerRootDir": "/var/lib/docker",
-    "Labels": ["com.attacksurf.region=eu-central"],
-    "RegistryConfig": {"Mirrors": ["https://mirror.gcr.io/"]},
-    "DefaultRuntime": "runc",
-    "Runtimes": {
-        "runc": {"path": "runc"},
-        "io.containerd.runc.v2": {
-            "path": "runc",
-            "status": {"org.opencontainers.runtime-spec.features": "{}"},
-        },
-        "runsc": {"path": "/usr/local/bin/runsc", "runtimeArgs": ["--platform=systrap"]},
-    },
-}
-HOST_DETAILS = ("vps-fra-01", "/var/lib/docker", "/usr/local/bin/runsc", "systrap", "eu-central")
 UNAVAILABLE = {"message": "Docker runtimes are unavailable."}
-
-
-class FakeDocker(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
-    daemon_threads = True
-
-    def __init__(self, path: str) -> None:
-        super().__init__(path, _FakeDockerHandler)
-        self.calls: list[tuple[str, str, dict[str, str], bytes]] = []
-        self.next_id = CREATED
-        self.create_status = 201
-        self.drop_create_reply = False
-        self.remove_status = 204
-        self.drop_remove_reply = False
-        self.wait_status = 200
-        self.wait_body = b'{"StatusCode": 0}'
-        self.create_entered: threading.Event | None = None
-        self.create_release: threading.Event | None = None
-        self.info_status = 200
-        self.info_body = json.dumps(DOCKER_INFO).encode()
-        self.drop_info_reply = False
-        self.info_entered: threading.Event | None = None
-        self.info_release: threading.Event | None = None
-
-
-class _FakeDockerHandler(BaseHTTPRequestHandler):
-    server: FakeDocker  # type: ignore[assignment]
-
-    def log_message(self, format: str, *args: Any) -> None:
-        pass
-
-    def _handle(self) -> None:
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length)
-        self.server.calls.append((self.command, self.path, dict(self.headers), body))
-        if self.path.split("?", 1)[0].endswith("/containers/create"):
-            if self.server.drop_create_reply:
-                return
-            if self.server.create_entered is not None:
-                self.server.create_entered.set()
-            if self.server.create_release is not None:
-                assert self.server.create_release.wait(5)
-            self._reply(self.server.create_status, json.dumps({"Id": self.server.next_id}).encode())
-        elif "/attach" in self.path:
-            self.wfile.write(b"HTTP/1.1 101 UPGRADED\r\nUpgrade: tcp\r\n\r\ntool-output")
-        elif "/wait" in self.path:
-            self._reply(self.server.wait_status, self.server.wait_body)
-        elif self.command == "DELETE":
-            if self.server.drop_remove_reply:
-                return
-            self._reply(self.server.remove_status, b"")
-        else:
-            self._reply(204, b"")
-
-    do_POST = do_DELETE = _handle
-
-    def do_GET(self) -> None:
-        self.server.calls.append((self.command, self.path, dict(self.headers), b""))
-        if self.server.info_entered is not None:
-            self.server.info_entered.set()
-        if self.server.info_release is not None:
-            assert self.server.info_release.wait(5)
-        if self.server.drop_info_reply:
-            return
-        self._reply(self.server.info_status, self.server.info_body)
-
-    def _reply(self, status: int, body: bytes) -> None:
-        self.send_response(status)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        if body:
-            self.wfile.write(body)
 
 
 @pytest.fixture
 def docker(tmp_path: Path) -> Iterator[FakeDocker]:
-    server = FakeDocker(str(tmp_path / "d.sock"))
-    thread = threading.Thread(target=server.serve_forever, args=(0.01,), daemon=True)
-    thread.start()
-    yield server
-    server.shutdown()
-    server.server_close()
+    with serving(FakeDocker(str(tmp_path / "d.sock"))) as server:
+        yield server
 
 
 @pytest.fixture
@@ -141,12 +45,8 @@ def proxy(docker: FakeDocker) -> Iterator[int]:
         artifact_root=PurePosixPath("/srv/artifacts"),
         osv_image=None,
     )
-    server = make_server("127.0.0.1", 0, policy, str(docker.server_address))
-    thread = threading.Thread(target=server.serve_forever, args=(0.01,), daemon=True)
-    thread.start()
-    yield server.server_address[1]
-    server.shutdown()
-    server.server_close()
+    with serving(make_server("127.0.0.1", 0, policy, str(docker.server_address))) as server:
+        yield server.server_address[1]
 
 
 def call(
@@ -423,6 +323,81 @@ def test_attach_passes_the_raw_output_stream_through(proxy: int, docker: FakeDoc
     assert received.endswith(b"tool-output")
     upstream = docker.calls[-1][2]
     assert upstream["Upgrade"] == "tcp"
+
+
+def frame(stream: int, payload: bytes) -> bytes:
+    """One Docker raw-stream frame: stream id (1 stdout, 2 stderr), 3 zero bytes, size, payload."""
+    return struct.pack(">BxxxI", stream, len(payload)) + payload
+
+
+def attach(port: int) -> socket.socket:
+    """Open the attach stream through the proxy and return it with the response head consumed."""
+    stream = socket.create_connection(("127.0.0.1", port), timeout=5)
+    request = (
+        f"POST /containers/{CREATED}/attach?stream=1&stdout=1 HTTP/1.1\r\n"
+        "Host: proxy\r\nConnection: close\r\n\r\n"
+    )
+    stream.sendall(request.encode())
+    head = b""
+    while not head.endswith(b"\r\n\r\n"):
+        head += stream.recv(1)
+    assert head.startswith(b"HTTP/1.1 101")
+    return stream
+
+
+def read_to_close(stream: socket.socket) -> bytes:
+    received = b""
+    while chunk := stream.recv(4096):
+        received += chunk
+    return received
+
+
+def test_attach_relays_scripted_frames_split_across_writes(proxy: int, docker: FakeDocker) -> None:
+    stdout = frame(1, b"hello world")
+    stderr = frame(2, b"warning")
+    docker.run = FakeRun(chunks=[stdout[:3], stdout[3:10], stdout[10:], stderr])
+    create(proxy)
+    stream = attach(proxy)
+
+    assert call(proxy, "POST", f"/containers/{CREATED}/start")[0] == 204
+    received = read_to_close(stream)
+    stream.close()
+
+    assert received == stdout + stderr
+
+
+def test_attach_sends_nothing_before_start(proxy: int, docker: FakeDocker) -> None:
+    docker.run = FakeRun(chunks=[frame(1, b"early")])
+    create(proxy)
+    stream = attach(proxy)
+    stream.settimeout(0.3)
+
+    with pytest.raises(TimeoutError):
+        stream.recv(1)
+    assert not docker.run.started.is_set()
+    stream.settimeout(5)
+    assert call(proxy, "POST", f"/containers/{CREATED}/start")[0] == 204
+    assert read_to_close(stream) == frame(1, b"early")
+    stream.close()
+
+
+def test_kill_ends_a_held_open_attach_and_removed_wait_reports_it(
+    proxy: int, docker: FakeDocker
+) -> None:
+    docker.run = FakeRun(chunks=[frame(1, b"partial")], hold_open=True)
+    create(proxy)
+    stream = attach(proxy)
+    assert call(proxy, "POST", f"/containers/{CREATED}/start")[0] == 204
+    assert docker.run.started.wait(5)
+
+    assert call(proxy, "POST", f"/containers/{CREATED}/kill?signal=SIGKILL")[0] == 204
+    received = read_to_close(stream)
+    stream.close()
+    status, body = call(proxy, "POST", f"/containers/{CREATED}/wait?condition=removed")
+
+    assert received == frame(1, b"partial")
+    assert (status, json.loads(body)) == (200, {"StatusCode": 137})
+    assert call(proxy, "POST", f"/containers/{CREATED}/start")[0] == 403
 
 
 def test_creates_stop_when_too_many_containers_are_tracked(
