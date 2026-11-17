@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import func, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -21,7 +21,7 @@ from attacksurf.domain.scans import (
     ScanStatus,
     ScanTrigger,
 )
-from attacksurf.infra.db.models import Asset, Job, Scan
+from attacksurf.infra.db.models import Asset, Job, Org, Scan
 from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.scanners.registry import ScannerRegistry
 from attacksurf.services import jobs
@@ -53,6 +53,9 @@ def start_scan(
     scans first and the root second, so the two wait in one direction and never deadlock
     (ADR 0021). `max_starts_per_hour` caps starts of this profile in the trailing hour
     (all statuses: even a failed start consumed a worker slot); None means no quota.
+    The quota count and the insert are serialised on the org row: concurrent starts for
+    different roots lock different asset rows and could otherwise both read a below-limit
+    count and both insert (same pattern as the artifact quota, `services.artifacts`).
     """
     selected = profiles.get(profile)
     if selected is None:
@@ -77,6 +80,9 @@ def start_scan(
     if active is not None:
         raise ScanAlreadyActive(active.id)
     if max_starts_per_hour is not None:
+        # Serialise the org's starts (see docstring): the lock is held until the
+        # transaction commits in `create_job` below.
+        session.execute(select(Org.id).where(Org.id == org_id).with_for_update())
         recent = (
             session.scalar(
                 scoped(Scan, org_id)
