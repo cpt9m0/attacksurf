@@ -175,6 +175,20 @@ def test_run_kills_a_tool_that_closes_stdout_and_keeps_running(
     assert docker.run.killed.is_set()
 
 
+def test_run_counts_a_delayed_start_reply_against_the_wall_time(
+    client: ProxyClient, docker: FakeDocker, artifact_dir: Path
+) -> None:
+    # Docker has started the analyzer but sits on its reply: the clock must already be running.
+    docker.run = FakeRun(chunks=[frame(1, b"x")], hold_open=True, start_delay=5)
+    began = time.monotonic()
+
+    outcome = run(client, artifact_dir, wall_time=0.2)
+
+    assert time.monotonic() - began < 2
+    assert outcome == RunOutcome(None, b"", True, False)
+    assert docker.run.killed.is_set()
+
+
 def test_wall_time_and_grace_fit_under_the_proxy_timeout() -> None:
     assert SANDBOX_MAX_WALL_TIME_SECONDS + KILL_GRACE_SECONDS < RUN_TIMEOUT_SECONDS
 

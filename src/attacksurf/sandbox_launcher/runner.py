@@ -2,8 +2,9 @@
 
 The order matters. Create the container; arm the removed-wait first, because `AutoRemove` deletes
 the container the moment it exits and Docker then has nothing left to report an exit code from;
-attach before start so no output is missed; start; read stdout against a wall-time deadline; then
-take the exit code from the wait.
+attach before start so no output is missed; start the wall-time clock and send start (the request
+gets only the budget that is left, since the analyzer may run before Docker answers); read stdout
+against the deadline; then take the exit code from the wait.
 
 The deadline drives the reads: before every `recv` the socket timeout is set to the time left, so
 the runner decides "timed out" itself and only then kills. No timer kills mid-read, so a
@@ -133,8 +134,17 @@ def _supervise(
     waiter.armed()
     sock, first = proxy.attach(container_id)
     with closing(sock):
-        proxy.start(container_id)
+        # The clock starts before `start` is sent: Docker may run the analyzer and then be slow to
+        # answer, and that time counts. The request gets only what is left of the budget.
         deadline = time.monotonic() + wall_time
+        try:
+            proxy.start(container_id, min(CONTROL_TIMEOUT_SECONDS, deadline - time.monotonic()))
+        except ProxyError as error:
+            # No status means no reply (a timeout or a dropped connection). Past the deadline the
+            # container may be running unsupervised, so report the wall-time kill, not a failure.
+            if error.status is None and time.monotonic() >= deadline:
+                return RunOutcome(None, b"", timed_out=True)
+            raise
         try:
             stdout = read_stdout(_chunks(sock, first, deadline))
         except _WallTimeExceeded:

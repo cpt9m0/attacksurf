@@ -4,6 +4,7 @@ import re
 import socket
 import socketserver
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -256,3 +257,17 @@ def test_a_silent_proxy_times_out_as_proxy_error() -> None:
             release.set()
 
     assert error.value.stage == "wait"
+
+
+def test_start_times_out_after_the_given_budget(
+    client: ProxyClient, docker: FakeDocker, artifact_dir: Path
+) -> None:
+    docker.run = FakeRun(start_delay=5)
+    container_id = client.create(build_create_body(analyzer(), artifact_dir, "runsc"))
+    began = time.monotonic()
+
+    with pytest.raises(ProxyError) as error:
+        client.start(container_id, timeout=0.2)
+
+    assert time.monotonic() - began < 2
+    assert (error.value.stage, error.value.status) == ("start", None)

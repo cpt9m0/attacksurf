@@ -124,8 +124,12 @@ class ProxyClient:
             raise
         return sock, rest
 
-    def start(self, container_id: str) -> None:
-        status, _ = self._call("POST", f"/containers/{container_id}/start", stage="start")
+    def start(self, container_id: str, timeout: float = CONTROL_TIMEOUT_SECONDS) -> None:
+        """Start the container. The analyzer may already be running while Docker is slow to
+        answer, so a caller with a wall-time budget passes what is left of it as `timeout`."""
+        status, _ = self._call(
+            "POST", f"/containers/{container_id}/start", stage="start", timeout=timeout
+        )
         if status != HTTPStatus.NO_CONTENT:
             raise ProxyError("start", status)
 

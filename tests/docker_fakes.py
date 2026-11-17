@@ -61,6 +61,7 @@ class FakeRun:
     hold_exit: bool = False  # close the stream but keep running until the test calls `end`
     attach_status: int = 101  # anything else: a plain error reply, no stream
     start_status: int = 204
+    start_delay: float = 0  # hold the start reply (the container is up) until killed or elapsed
     started: threading.Event = field(default_factory=threading.Event)
     killed: threading.Event = field(default_factory=threading.Event)
     exited: threading.Event = field(default_factory=threading.Event)
@@ -117,6 +118,8 @@ class _FakeDockerHandler(BaseHTTPRequestHandler):
         elif run is not None and path.endswith("/start"):
             if run.start_status == 204:
                 run.started.set()
+            if run.start_delay:
+                run.killed.wait(run.start_delay)
             self._reply(run.start_status, b"")
         elif run is not None and path.endswith("/kill"):
             run.killed.set()
