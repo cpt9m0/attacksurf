@@ -5,8 +5,8 @@
 **Updated:** 2026-11-17 · **Branch:** `21-scans-ui` · **Issue:** #21 (Scans UI)
 
 ## Status
-Done: draft PR #173 pushed with Codex's 4 review comments addressed (2 fix commits),
-threads replied and resolved. CI run still to check; then address review.
+Done: draft PR #173 has Codex's green light ("Didn't find any major issues",
+reviewed commit `21b1e8d`). Next: check CI, then mark ready for review.
 
 ## Last task
 - #21 on branch `21-scans-ui` (9 commits): scans UI + `/api/v1/scans`, then review fixes:
