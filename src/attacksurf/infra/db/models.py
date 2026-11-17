@@ -1,16 +1,20 @@
 """ORM models. Alembic autogenerate sees every model imported here."""
 
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     Enum,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    LargeBinary,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -21,6 +25,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from attacksurf.domain.accounts import Role
+from attacksurf.domain.artifacts import ArtifactKind
 from attacksurf.domain.assets import MAX_URL_LENGTH, AssetSource, AssetType, RelationKind
 from attacksurf.domain.findings import (
     FINGERPRINT_LENGTH,
@@ -30,6 +35,7 @@ from attacksurf.domain.findings import (
     FindingStatus,
     Severity,
 )
+from attacksurf.domain.llm import KeySource, ProviderKind
 from attacksurf.domain.rules import MAX_RULE_ID_LENGTH
 from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger
 from attacksurf.domain.verification import MAX_TOKEN_LENGTH, VerificationMethod, VerificationStatus
@@ -219,6 +225,35 @@ class Verification(TenantScoped, Timestamps, Base):
     retry_after: Mapped[datetime | None]
 
 
+class Artifact(TenantScoped, Timestamps, Base):
+    """An uploaded or fetched repo/binary, stored encrypted (#85, ADR 0028).
+
+    The file at `storage_key` can only be decrypted with `key_envelope`, the per-artifact key
+    wrapped by the app key. Deleting an artifact erases that key and keeps the row as the
+    record; a cascade from its asset or org removes the row, and the key with it.
+    """
+
+    __tablename__ = "artifacts"
+    __table_args__ = (
+        _same_org_fk("asset_id", "assets"),
+        UniqueConstraint("storage_key"),
+        CheckConstraint("size_bytes >= 0", name="size_not_negative"),
+        CheckConstraint(
+            "(deleted_at IS NULL) = (key_envelope IS NOT NULL)", name="key_erased_on_delete"
+        ),
+        Index("ix_artifacts_delete_after", "delete_after"),  # the purge task's scan
+    )
+
+    asset_id: Mapped[UUID] = mapped_column(index=True)
+    kind: Mapped[ArtifactKind] = mapped_column(_str_enum(ArtifactKind, "artifact_kind"))
+    sha256: Mapped[str] = mapped_column(String(64))  # of the plaintext
+    size_bytes: Mapped[int] = mapped_column(BigInteger)  # plaintext bytes
+    storage_key: Mapped[str] = mapped_column(String(100))  # "{org_id}/{artifact_id}", server-built
+    key_envelope: Mapped[bytes | None] = mapped_column(LargeBinary(61))
+    delete_after: Mapped[datetime]
+    deleted_at: Mapped[datetime | None]
+
+
 class Scan(TenantScoped, Timestamps, Base):
     """One run of a scan profile against a root asset. `created_at` is when it was queued."""
 
@@ -348,3 +383,37 @@ class Evidence(TenantScoped, Base):
     kind: Mapped[EvidenceKind] = mapped_column(_str_enum(EvidenceKind, "evidence_kind"))
     data: Mapped[dict[str, Any]] = mapped_column(JSONB)
     captured_at: Mapped[datetime]
+
+
+class LLMUsage(TenantScoped, Base):
+    """One finished `LLMProvider.complete()` call, successful or not (#23).
+
+    Append-only, like `AuditLog`. Counts and labels only: never the prompt, the reply, the key
+    or the base URL. Failed calls get a row too, since they spent tokens; #24's monthly cap
+    sums the `instance` rows of each org.
+    """
+
+    __tablename__ = "llm_usage"
+    __table_args__ = (
+        CheckConstraint("input_tokens >= 0", name="input_tokens_not_negative"),
+        CheckConstraint("output_tokens >= 0", name="output_tokens_not_negative"),
+        CheckConstraint("estimated_cost_usd >= 0", name="estimated_cost_not_negative"),
+        CheckConstraint("latency_ms >= 0", name="latency_ms_not_negative"),
+        CheckConstraint("success = (error_type IS NULL)", name="error_type_matches"),
+        Index("ix_llm_usage_org_id_created_at", "org_id", "created_at"),  # monthly sums
+    )
+
+    provider: Mapped[ProviderKind] = mapped_column(_str_enum(ProviderKind, "llm_provider"))
+    model: Mapped[str] = mapped_column(String(200))
+    purpose: Mapped[str] = mapped_column(String(50))  # what the call was for, e.g. "triage"
+    key_source: Mapped[KeySource] = mapped_column(_str_enum(KeySource, "llm_key_source"))
+    input_tokens: Mapped[int]
+    output_tokens: Mapped[int]
+    # False when the backend sent no counts: the zeros above are then unknown, not free.
+    usage_reported: Mapped[bool]
+    # Fixed when the call is recorded, so later price changes don't rewrite history.
+    estimated_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
+    latency_ms: Mapped[int | None]  # NULL for failed calls
+    success: Mapped[bool]
+    error_type: Mapped[str | None] = mapped_column(String(50))  # error class name, no message
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

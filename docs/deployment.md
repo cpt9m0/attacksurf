@@ -450,6 +450,25 @@ choose ownership verification:
 
 Only the TXT method avoids cache surprises; prefer it.
 
+## Upload size limits
+
+Three limits apply to `POST /assets/upload` and `POST /assets/upload-binary`, and the smallest
+wins: **Cloudflare** rejects request bodies over 100 MB on Free and Pro plans,
+`deploy/Caddyfile` allows 257 MiB on those paths
+(2 MB elsewhere), and the app allows `ARTIFACT_MAX_BYTES` (default 256 MiB) plus framing. So
+behind the tunnel an archive over 100 MB fails at the edge with Cloudflare's own 413 page.
+Raising `ARTIFACT_MAX_BYTES` also means raising the Caddyfile value. gunicorn's default 30 s
+worker timeout can also end a slow, large upload; tuning it is part of #29.
+
+## Uploaded artifacts
+
+Archive uploads are off until `APP_ENCRYPTION_KEY` is set in `/etc/attacksurf/attacksurf.env`
+(the Assets page then shows "not configured"). With the key set, ciphertext is written to the
+named volume `artifact-store` (`/var/lib/attacksurf/artifact-store` in the app containers), so
+it survives deploys; `docker compose down -v` deletes it. The volume is not backed up yet, and
+with no beat running nothing purges expired artifacts on this host (both #29). Keep the key
+safe: without it stored artifacts cannot be read.
+
 ## Known gaps on this host
 
 The stack covers the web app and its database only. **No Celery workers or beat are running**,

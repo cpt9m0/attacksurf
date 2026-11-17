@@ -1,13 +1,20 @@
 """Test doubles for domain interfaces."""
 
-from collections.abc import Sequence
+import hashlib
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from typing import IO
 from uuid import UUID
 
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from attacksurf.ai.structured import complete_structured
+from attacksurf.domain.artifacts import (
+    ArtifactStorageUnavailable,
+    ArtifactTooLarge,
+    StoredArtifact,
+)
 from attacksurf.domain.llm import Completion, LLMResult, Message, TokenUsage
 
 
@@ -93,3 +100,50 @@ class FakeLLMProvider:
             return reply
 
         return complete_structured(send, messages, schema)
+
+
+class FakeArtifactStore:
+    """In-memory `ArtifactStore`: no disk, no crypto. Records deletes and staging."""
+
+    def __init__(self) -> None:
+        self.blobs: dict[tuple[UUID, UUID], bytes] = {}
+        self.staged: set[UUID] = set()
+        self.deleted: list[tuple[UUID, UUID]] = []
+        self.put_limits: list[int] = []
+        self.swept: list[int] = []
+        self.undeletable: set[UUID] = set()
+
+    def put(
+        self, org_id: UUID, artifact_id: UUID, source: IO[bytes], *, max_bytes: int
+    ) -> StoredArtifact:
+        self.put_limits.append(max_bytes)
+        data = source.read()
+        if len(data) > max_bytes:
+            raise ArtifactTooLarge("The artifact is larger than the allowed size.")
+        self.blobs[org_id, artifact_id] = data
+        return StoredArtifact(
+            storage_key=f"{org_id}/{artifact_id}",
+            sha256=hashlib.sha256(data).hexdigest(),
+            size_bytes=len(data),
+            key_envelope=b"\x01" + b"e" * 60,
+        )
+
+    def open(self, org_id: UUID, artifact_id: UUID, key_envelope: bytes) -> Iterator[bytes]:
+        return iter([self.blobs[org_id, artifact_id]])
+
+    def delete(self, org_id: UUID, artifact_id: UUID) -> None:
+        self.staged.discard(artifact_id)
+        if artifact_id in self.undeletable:
+            raise ArtifactStorageUnavailable("Artifact storage is unavailable.")
+        self.deleted.append((org_id, artifact_id))
+        self.blobs.pop((org_id, artifact_id), None)
+
+    def stage(self, org_id: UUID, artifact_id: UUID, key_envelope: bytes, *, sha256: str) -> None:
+        self.staged.add(artifact_id)
+
+    def unstage(self, artifact_id: UUID) -> None:
+        self.staged.discard(artifact_id)
+
+    def sweep_staged(self, *, older_than_seconds: int) -> int:
+        self.swept.append(older_than_seconds)
+        return 0

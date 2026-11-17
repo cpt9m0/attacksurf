@@ -123,6 +123,7 @@ class AssetDetail:
     discovered: int  # assets found under it (roots only)
     dns: DnsDetails | None = None
     ip: IpDetails | None = None
+    uploaded_as: str | None = None  # the uploader's file name: display only, always escaped
 
 
 @dataclass(frozen=True)
@@ -217,6 +218,7 @@ def get_asset_detail(session: Session, org_id: UUID, asset_id: UUID) -> AssetDet
         discovered=discovered,
         dns=_dns_details(details, asset.value),
         ip=_ip_details(details),
+        uploaded_as=_uploaded_as(details),
     )
 
 
@@ -381,6 +383,13 @@ def _dns_details(details: Any, asset_value: str) -> DnsDetails | None:
         chain = (asset_value, *chain)
     display = tuple(dict.fromkeys((*chain, *addresses)))
     return DnsDetails(chain=display, records=tuple(records), private_ips=private)
+
+
+def _uploaded_as(details: Any) -> str | None:
+    """The file name a repo archive or binary was last uploaded under (#87, #101)."""
+    upload = details.get("upload") if isinstance(details, dict) else None
+    name = upload.get("filename") if isinstance(upload, dict) else None
+    return name if isinstance(name, str) and name else None
 
 
 def _ip_details(details: Any) -> IpDetails | None:

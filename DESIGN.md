@@ -98,6 +98,7 @@ Built in #6: `button`, `severity_badge` + `status_pill` (`badges.html`), `data_t
 `select_field` and `form_field(autofocus=)` (`form.html`), `confirm_dialog` (`confirm.html`),
 `relative_time` (`time.html`) and call-block cells for `data_table`. #14 added
 `ownership_badge` + `ownership_card` (`verification.html`) and `Alpine.data("copyField")`.
+#87 added `file_field` (`form.html`); #101 reuses it for the binary upload form.
 Specs (visuals) stay TBD.
 
 | Component | Notes | Spec |
@@ -108,6 +109,7 @@ Specs (visuals) stay TBD.
 | Data table | sortable headers, filters bar, pagination, row selection for bulk actions, empty state. Rich cells (links, badges, `<code>`): `{% call(row, key) data_table(...) %}`, still autoescaped. Wide tables scroll inside `.table-wrap` (`.content` has `min-width: 0`) | TBD |
 | Card / stat tile | dashboard counts by severity | TBD |
 | Form field | label, hint, inline error (HTMX validation) | TBD |
+| File field | `file_field(name, label, accept=, error=, hint=)`: a native file input with the form field's label, hint and inline error; never a `value`. The hint states accepted formats and the size limit | TBD |
 | Flash / toast | success / error / info | TBD |
 | Progress | scan stage progress, polled via HTMX | TBD |
 | Code / evidence block | monospace, escaped, copy button, size-capped with "show more" | TBD |
@@ -139,6 +141,17 @@ Specs (visuals) stay TBD.
   swapped region so its state updates with the content.
 - Inline-validated forms swap themselves (`hx-target="this"`, 422 with the field error) and set
   `autofocus` on the invalid field; success responds with `HX-Redirect` (and a flash).
+- Upload forms are inline-validated forms with `enctype="multipart/form-data"` **and**
+  `hx-encoding="multipart/form-data"` (HTMX otherwise sends no file), `csrf_field()` and
+  `hx-disabled-elt="find button"`. A rejected upload re-renders the form with the error (413 /
+  415 / 422 / 429 / 503), including a 413 or 429 raised before the view runs
+  (`web.uploads.upload_form`); when storage isn't configured the form is replaced by one muted
+  line saying so. Each upload form is its own card and partial on the Assets page (codebase,
+  then binary), with its own file field name so ids and errors don't collide: an HTMX swap
+  passes `upload_error`, a full-page render scopes `<field>_error` to its form. Leave `accept`
+  off when the format has no dependable extension (executables); the hint lists the formats.
+- An uploaded file's name is shown as "Uploaded file" in the asset's meta list, in monospace,
+  escaped and wrapping (`overflow-wrap: anywhere`); a binary's title is its `sha256:` value.
 - Dates: `relative_time(dt)` renders "3 days ago" with the exact UTC time on hover (§7).
 
 ## 7. Content and tone

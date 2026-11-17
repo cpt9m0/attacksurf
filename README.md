@@ -45,6 +45,8 @@ own key) **triages, prioritizes, and explains** them in plain language with fix 
 - **Email security**: SPF, DMARC, DKIM, MTA-STS checks (is your domain spoofable?)
 - **DNS hygiene**: DNSSEC, nameserver and MX configuration, CAA, zone transfer (AXFR) exposure
 - **Domain expiry** monitoring via RDAP
+- **Codebase upload** (early): upload a source archive; it is stored encrypted and queued for analysis (analyzers are coming)
+- **Binary and mobile app upload** (early): upload an ELF, PE or Mach-O executable, an APK or an IPA; it is identified by its SHA-256, stored encrypted, never run, and queued for analysis (analyzers are coming)
 - **Asset inventory**: add the domains you own, then browse everything discovered under them
   (filters, search, open findings per asset) and the asset graph: domain → subdomain → CNAME → IP
 

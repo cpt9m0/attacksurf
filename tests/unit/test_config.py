@@ -386,3 +386,128 @@ def test_dns_lifetime_must_not_be_shorter_than_timeout() -> None:
 
 def test_empty_ip_asn_path_is_unset() -> None:
     assert make_settings(ip_asn_db_path="  ").ip_asn_db_path is None
+
+
+APP_KEY = "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s"  # urlsafe base64 of b"k" * 32, unpadded
+
+
+def test_artifact_settings_defaults() -> None:
+    settings = make_settings()
+
+    assert settings.app_encryption_key is None
+    assert settings.app_encryption_key_bytes is None
+    assert settings.artifact_max_bytes == 256 * 1024**2
+    assert settings.artifact_retention_hours == 0
+    assert settings.artifact_org_quota_bytes == 2 * 1024**3
+    assert settings.artifact_store_root == "/var/lib/attacksurf/artifact-store"
+    assert settings.sandbox_artifact_root == "/var/lib/attacksurf/artifacts"
+
+
+def test_prod_starts_without_an_app_encryption_key() -> None:
+    # Storage fails closed at use instead (ADR 0028), so existing deployments keep booting.
+    settings = make_settings(env="prod", secret_key=SecretStr(PROD_SECRET_KEY))
+
+    assert settings.app_encryption_key is None
+
+
+def test_artifact_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("APP_ENCRYPTION_KEY", APP_KEY)
+    clean_env.setenv("ARTIFACT_MAX_BYTES", "1048576")
+    clean_env.setenv("ARTIFACT_RETENTION_HOURS", "48")
+    clean_env.setenv("ARTIFACT_ORG_QUOTA_BYTES", "2097152")
+    clean_env.setenv("ARTIFACT_STORE_ROOT", "/srv/store")
+    clean_env.setenv("SANDBOX_ARTIFACT_ROOT", "/srv/artifacts")
+
+    settings = settings_from_env()
+
+    assert settings.app_encryption_key_bytes == b"k" * 32
+    assert APP_KEY not in repr(settings)
+    assert (settings.artifact_max_bytes, settings.artifact_org_quota_bytes) == (1048576, 2097152)
+    assert settings.artifact_retention_hours == 48
+    assert (settings.artifact_store_root, settings.sandbox_artifact_root) == (
+        "/srv/store",
+        "/srv/artifacts",
+    )
+
+
+def test_app_encryption_key_accepts_padded_base64() -> None:
+    settings = make_settings(app_encryption_key=SecretStr(APP_KEY + "="))
+
+    assert settings.app_encryption_key_bytes == b"k" * 32
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "too-short-sentinel",
+        "not base64 at all !! sentinel",
+        "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tr",  # 36 bytes
+    ],
+)
+def test_malformed_app_encryption_key_is_rejected_without_echoing_it(
+    value: str, clean_env: pytest.MonkeyPatch
+) -> None:
+    clean_env.setenv("APP_ENCRYPTION_KEY", value)
+
+    with pytest.raises(ValidationError, match="APP_ENCRYPTION_KEY") as error:
+        settings_from_env()
+
+    assert value not in str(error.value)
+    assert "sentinel" not in str(error.value)
+    assert "a2tra2" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("artifact_max_bytes", 0),
+        ("artifact_max_bytes", 512 * 1024**2 + 1),
+        ("artifact_retention_hours", -1),
+        ("artifact_retention_hours", 721),
+        ("artifact_org_quota_bytes", 0),
+        ("artifact_org_quota_bytes", 1024**4 + 1),
+    ],
+)
+def test_artifact_limits_reject_out_of_range(field: str, value: int) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(**{field: value})
+
+
+def test_artifact_quota_below_the_per_artifact_limit_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="ARTIFACT_ORG_QUOTA_BYTES"):
+        make_settings(artifact_max_bytes=2048, artifact_org_quota_bytes=1024)
+
+
+@pytest.mark.parametrize("field", ["artifact_store_root", "sandbox_artifact_root"])
+@pytest.mark.parametrize("root", ["relative/path", "/", "/srv/../etc"])
+def test_unsafe_artifact_roots_are_rejected(field: str, root: str) -> None:
+    with pytest.raises(ValidationError, match="absolute paths below /"):
+        make_settings(**{field: root})
+
+
+@pytest.mark.parametrize(
+    ("store", "run"),
+    [
+        ("/srv/artifacts", "/srv/artifacts"),
+        ("/srv/artifacts/", "/srv//artifacts"),
+        ("/srv/artifacts/store", "/srv/artifacts"),  # ciphertext inside the sandbox mount
+        ("/srv/data", "/srv/data/runs"),
+    ],
+)
+def test_overlapping_artifact_roots_are_rejected(store: str, run: str) -> None:
+    with pytest.raises(ValidationError, match="must not contain each other"):
+        make_settings(artifact_store_root=store, sandbox_artifact_root=run)
+
+
+def test_sibling_artifact_roots_with_a_shared_prefix_are_accepted() -> None:
+    settings = make_settings(
+        artifact_store_root="/srv/artifacts-store", sandbox_artifact_root="/srv/artifacts"
+    )
+
+    assert settings.artifact_store_root == "/srv/artifacts-store"
+
+
+def test_sandbox_services_never_receive_the_app_encryption_key() -> None:
+    for settings in (SandboxProxySettings(), SandboxLauncherSettings()):
+        assert not hasattr(settings, "app_encryption_key")
+        assert not hasattr(settings, "artifact_store_root")

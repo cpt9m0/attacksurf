@@ -41,8 +41,15 @@
 		-Server
 	}
 
-	# Uploads are not accepted yet; bound the body early so garbage never reaches the app.
-	request_body {
+	# Bound bodies early so garbage never reaches the app. Only the two upload routes get
+	# the large limit: ARTIFACT_MAX_BYTES (default 256 MiB) plus multipart framing; raise both
+	# together. The app enforces the same two ceilings itself (web/uploads.py).
+	@upload path /assets/upload /assets/upload-binary
+	request_body @upload {
+		max_size 257MiB
+	}
+	@not_upload not path /assets/upload /assets/upload-binary
+	request_body @not_upload {
 		max_size 2MB
 	}
 
