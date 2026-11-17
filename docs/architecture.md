@@ -22,8 +22,8 @@ Browser ─► web    ├────────────►│ Redis  ├�
             └──────────────────► PostgreSQL ◄───────────────┘
 ```
 
-Analysis path (ADR 0016; `sandbox-proxy` and the launcher's building blocks exist, the launcher
-service and the analysis worker do not yet): only `sandbox-proxy` holds the Docker socket, and the
+Analysis path (ADR 0016; `sandbox-proxy` and `sandbox-launcher` exist, the worker-side client
+and the analysis worker do not yet): only `sandbox-proxy` holds the Docker socket, and the
 sandbox that reads the artifact has no network and no credentials.
 
 ```
@@ -36,10 +36,10 @@ worker-analysis ─ run(artifact ID, analyzer) ─► sandbox-launcher ─► sa
                                                           tmpfs /scratch · CPU/mem/pids/time caps
 ```
 
-### Sandbox launcher building blocks
+### Sandbox launcher
 
-`sandbox_launcher/` holds the pure parts of `sandbox-launcher`; nothing runs them yet. Each one
-refuses rather than guesses:
+`sandbox_launcher/` is `sandbox-launcher` (`python -m attacksurf.sandbox_launcher`). It has no
+DB, Redis or Docker credentials. Each part refuses rather than guesses:
 
 - `config.SandboxLauncherSettings`: process env only (no `.env`, no app secrets); the proxy URL
   may embed credentials, so it is a `SecretStr` unwrapped only where connecting, and must be
@@ -58,8 +58,23 @@ refuses rather than guesses:
 
 The package imports nothing from the app or `sandbox_proxy` (import-linter). The values it
 shares with them (proxy limit ceilings, the digest pattern, create-body constants,
-`MAX_STDOUT_BYTES`) are copies that unit tests keep equal. PR 3c of #84 adds the service around
-them: `runner.py` (create, attach, start, kill), `server.py` (`POST /runs`) and `__main__.py`.
+`MAX_STDOUT_BYTES`) are copies that unit tests keep equal. The service around them:
+
+- `proxy.py`: `ProxyClient`, the launcher's only way to Docker. One connection per call; replies
+  are parsed strictly and errors carry the stage and status only. Attach is a raw socket because
+  the proxy relays a hijacked stream.
+- `runner.py`: `run_sandbox` creates the container, arms the removed-wait on a thread (before
+  start, since `AutoRemove` deletes the container at exit), attaches, starts, and reads stdout
+  against a wall-time deadline. It returns `RunOutcome(exit_code, stdout, timed_out,
+  output_exceeded)`; anything unexplained raises `SandboxRunFailed`.
+- `server.py`: `ThreadingHTTPServer` with `GET /healthz` and `POST /runs`. The body is exactly
+  `{"analyzer", "artifact_id"}` (canonical lowercase UUID, 1 KiB cap); the reply is
+  `{exit_code, stdout_b64, timed_out, output_exceeded}`. Unknown analyzer or artifact is 404, a
+  busy launcher (`SANDBOX_MAX_CONCURRENT_RUNS` slots) or a failed run is 503, with fixed messages.
+- `__main__.py`: asks the proxy's `GET /info` for runtime names (ADR 0023) and picks the runtime
+  once (`select_runtime`): `runsc`, or `runc` only outside prod with `SANDBOX_ALLOW_RUNC=true`.
+  Otherwise it exits non-zero. The empty catalog is allowed, so every run is a 404 until the
+  first analyzer ships.
 
 ### Sandbox tools
 
@@ -383,7 +398,7 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 | `ai` | LLM calls | rate-limited per org |
 | `fetch` *(later)* | git smart-HTTP fetches | egress to allowlisted forges through ScopeGuard; no access to `sandbox-launcher`; never parses repository content (ADR 0017) |
 | `active` *(later)* | port/web probes on verified targets | separate network, egress rules |
-| `analysis` *(later)* | code/binary analysis (`sandbox_proxy/`, the `sandbox_launcher/` building blocks and the `sandbox_tools/` archive extractor and binary format detector are implemented; the launcher service, the images and the worker are not yet) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
+| `analysis` *(later)* | code/binary analysis (`sandbox_proxy/`, `sandbox_launcher/` and the `sandbox_tools/` archive extractor and binary format detector are implemented; the worker-side client, the images and the worker are not yet) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
 
 - `infra/queue.py`: `create_celery(settings)` (Redis broker + result backend from `REDIS_URL`,
   JSON only, `acks_late` + `reject_on_worker_lost`, prefetch 1, results ignored unless a

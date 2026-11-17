@@ -177,6 +177,24 @@ LLM_PROVIDER=anthropic LLM_BASE_URL=https://api.meta.ai RUN_LLM_TESTS=1 \
     uv run pytest tests/e2e/test_anthropic_live.py -m llm_live --no-cov
 ```
 
+### Running the sandbox services locally
+
+Both read the process environment only (no `.env`). On a host without gVisor, allow `runc` for
+dev:
+
+```bash
+echo '{}' > /tmp/sandbox-images.lock           # no analyzer images exist yet
+export SANDBOX_ALLOW_RUNC=true SANDBOX_ARTIFACT_ROOT=/tmp/artifacts SANDBOX_IMAGES_LOCK=/tmp/sandbox-images.lock
+uv run python -m attacksurf.sandbox_proxy &    # needs the Docker socket; port 8790
+SANDBOX_PROXY_URL=http://127.0.0.1:8790 SANDBOX_LAUNCHER_HOST=127.0.0.1 \
+  uv run python -m attacksurf.sandbox_launcher # port 8791
+curl -i 127.0.0.1:8791/healthz                 # 200
+```
+
+The catalog is empty until the first analyzer ships, so a `POST /runs` for any analyzer is a 404.
+Without a reachable proxy, or without `runsc` (and no `runc` fallback), the launcher exits
+non-zero. Compose wiring comes with the analysis worker (#84).
+
 ## Everyday commands
 
 | Task | Command |

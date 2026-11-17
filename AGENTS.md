@@ -36,8 +36,9 @@ src/attacksurf/   application code (src layout, import name `attacksurf`)
                   dns, public_suffix, safe http client, crypto
   workers/        Celery task entrypoints (thin, call services)
   sandbox_proxy/  Docker socket guard (ADR 0016); isolated from the app by import-linter
-  sandbox_launcher/  sandbox run building blocks (ADR 0016): analyzer catalog, artifact
-                  resolver, create-body builder, capped stdout reader; isolated by import-linter
+  sandbox_launcher/  sandbox launcher service (ADR 0016): API (`server.py`), run supervision
+                  (`runner.py`), proxy client, analyzer catalog, artifact resolver, create-body
+                  builder, capped stdout reader; isolated by import-linter
   sandbox_tools/  code that runs inside analyzer images (ADR 0017): the archive extractor and
                   the binary format detector;
                   standard library only (a test; import-linter keeps the app and its

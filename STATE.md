@@ -2,47 +2,55 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-17 · **Branch:** `101-binary-upload` · **Issue:** #101 (Upload binaries and mobile apps as binary assets)
+**Updated:** 2026-11-17 · **Branch:** `84-sandbox-launcher-service` · **Issue:** #84 (analysis sandbox)
 
 ## Status
-Implemented, local checks pass; rebased onto `origin/main` after #87 (#170) merged,
-conflicts resolved (STATE.md + `test_repo_upload.py` refactor vs `.lock` filter). PR open (#171).
+PR 3c (sandbox launcher service, PR #172) merged `origin/main` locally and conflicts are
+resolved (`AGENTS.md`, `CHANGELOG.md`, `STATE.md`, `docs/architecture.md`). Other merged
+PRs now in this branch: #23 (llm usage), #85 (artifact storage), #86 (archive extractor),
+#87 (repo upload), #101 (binary upload). Not yet committed/pushed.
 
 ## Last task
-- `domain`: binary values are `sha256:<64 hex>`; `sniff_binary` is the leading-bytes upload gate.
-- `sandbox_tools/detect.py`: stdlib-only detector (elf, pe, macho, macho_fat, apk, ipa), CLI
-  exit 0 / 3 / 4; inconsistent, over-cap and APK-and-IPA zips are rejected.
-- `services.binaries.upload_binary`: hash, asset, `Artifact`, `Scan` (profile `binary_static`),
-  job `analysis.binary_static`, audit `binary.uploaded`; quota checked before the asset
-  exists (`check_quota`). `services/uploads.py` holds what it shares with `services.repos`.
-- Web: `POST /assets/upload-binary` in `UPLOAD_ENDPOINTS` (one shared 20/hour bucket for all
-  upload routes), second upload card, "Binary" filter, "Uploaded file" on the asset page.
-  Fixtures: `tests/binary_fixtures.py` builds `tests/fixtures/binaries/` (header stubs).
+- Commits 1-4: shared `FakeDocker` (`tests/docker_fakes.py`), `runner.py` (run supervision),
+  `server.py` (`GET /healthz`, `POST /runs`), `__main__.py` (`select_runtime`: `runsc` required
+  in prod, `runc` only outside prod with `SANDBOX_ALLOW_RUNC=true`, otherwise exit non-zero).
+- Commit 5: docs in `AGENTS.md`, `docs/architecture.md`, `docs/security.md`,
+  `docs/development.md` and `CHANGELOG.md`. No ADR: ADR 0016 and ADR 0023 are implemented as
+  written.
+- Merge resolution: kept the launcher-service entries and main's `sandbox_tools/`,
+  artifact/upload and llm-usage entries in `AGENTS.md` / `CHANGELOG.md` /
+  `docs/architecture.md`; rewrote this file as the launcher handoff (main's `STATE.md` was
+  the #101 handoff, now stale).
 
 ## Next step
-Push the rebased branch to update PR #171 (`Closes #101`), wait for checks/review. Then #102
-(native parsing with LIEF), which needs #84's launcher and analysis worker first.
+1. Verify (`ruff`, `pyright`, `lint-imports`, `pytest`), commit the merge, push the branch to
+   update PR #172; tick 3a-3c in #84 once merged.
+2. PR 3d (`84-sandbox-runner-client`): `infra/sandbox.py` `LauncherSandboxRunner`, then wire it
+   into `workers/runtime.scanner_gate()`; docs must add the tenant-safety note (the worker
+   confirms the artifact belongs to the org before calling the launcher).
 
 ## Open threads
-- #85 (`6729177`), #86 (`e013000`) and #87 (`56fbaa7`) are merged; this branch now contains
-  only the #101 commit. #23 (#166, llm usage) is also on `main`.
+- #23, #85, #86, #87, #101 are merged on `main` and now merged into this branch.
 - #21 (Scans UI) is not merged: the scan shows only in the asset's "Scan history" tab. No JSON API.
-- The `code` and `binary_static` scans stay `queued` until #84 adds `worker-analysis` and
-  `analysis.code_scan`; artifacts are still purged after `ARTIFACT_RETENTION_HOURS` (24 h if 0).
-- The upload gate lets through any zip, Java class file or DOS program (only the detector
-  rejects them); identical bytes are stored twice; a storage failure after the quota check
-  leaves an asset without an artifact. Caddyfile change unvalidated; no JSON API for uploads.
-- Nothing runs the extractor or detector yet: #84 still lacks the launcher service, runner
-  client, images and `worker-analysis`.
+- Propose a follow-up issue after 3d: sweep leftover `attacksurf-*` containers after a launcher
+  or proxy crash (before #92).
+- `docs/plans/` is untracked; issue #84 is the source of truth for the PR split.
 
 ## Notes for the next agent
-- DB tests: `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@127.0.0.1:5432/attacksurf_test
-  uv run pytest -p no:cacheprovider --basetemp=/tmp/aspt` (short basetemp: macOS AF_UNIX limit).
-- `uv sync` after switching branches: this branch needs `cryptography`.
-- `tests/unit/sandbox_proxy/test_server.py` has timing-flaky tests; rerun the file if one fails.
-- Artifact use cases call `session.rollback()` between steps: service tests must commit their
-  fixtures, and `tests/integration/services/test_artifacts.py` expires loaded rows after each
-  test so a stale instance can't hide what a use case wrote.
-- `tests.helpers.make_settings(...)` ignores `.env` and OS env; artifact tests build settings
-  through it.
-- Changing a corpus builder: rerun the generator, then delete any file it no longer produces.
+- The launcher copies proxy constants and `domain.scanners.MAX_OUTPUT_BYTES` on purpose (it may
+  not import them); a parity test guards each copy. Don't "fix" that by importing.
+- PR 3d's ~3 MiB reply cap assumes stdout is at most 2 MiB (base64 about 2.67 MiB).
+- `sandbox-images.lock` does not exist yet (PR 5 adds it with the fixture analyzer); the catalog
+  is empty, so every `POST /runs` is a 404 and local runs need a `{}` lock file.
+- A container that exits before Docker registers the removed-wait fails the run (503) rather
+  than guessing an exit code; the worker may retry.
+- ADR numbers move fast: check `origin/main` and open branches for the next free number right
+  before pushing a new ADR.
+- Production plugins are registered explicitly in `src/attacksurf/app.py` and
+  `src/attacksurf/workers/app.py`; a new plugin needs both imports.
+- Tests that need Redis behavior use `tests.fakes.FakeCache`.
+- The runtime image is Python 3.15; CI tests 3.12, 3.13 and 3.15.
+- DB tests need `TEST_DATABASE_URL`; the dev Compose stack exposes PostgreSQL on
+  `127.0.0.1:5432` with an `attacksurf_test` database (`make test` runs them in `web`).
+- The ruff format hook strips imports that aren't used yet: add imports together with their
+  first use.
