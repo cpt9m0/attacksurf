@@ -98,7 +98,7 @@ Built in #6: `button`, `severity_badge` + `status_pill` (`badges.html`), `data_t
 `select_field` and `form_field(autofocus=)` (`form.html`), `confirm_dialog` (`confirm.html`),
 `relative_time` (`time.html`) and call-block cells for `data_table`. #14 added
 `ownership_badge` + `ownership_card` (`verification.html`) and `Alpine.data("copyField")`.
-#87 added `file_field` (`form.html`).
+#87 added `file_field` (`form.html`); #101 reuses it for the binary upload form.
 Specs (visuals) stay TBD.
 
 | Component | Notes | Spec |
@@ -146,7 +146,12 @@ Specs (visuals) stay TBD.
   `hx-disabled-elt="find button"`. A rejected upload re-renders the form with the error (413 /
   415 / 422 / 429 / 503), including a 413 or 429 raised before the view runs
   (`web.uploads.upload_form`); when storage isn't configured the form is replaced by one muted
-  line saying so.
+  line saying so. Each upload form is its own card and partial on the Assets page (codebase,
+  then binary), with its own file field name so ids and errors don't collide: an HTMX swap
+  passes `upload_error`, a full-page render scopes `<field>_error` to its form. Leave `accept`
+  off when the format has no dependable extension (executables); the hint lists the formats.
+- An uploaded file's name is shown as "Uploaded file" in the asset's meta list, in monospace,
+  escaped and wrapping (`overflow-wrap: anywhere`); a binary's title is its `sha256:` value.
 - Dates: `relative_time(dt)` renders "3 days ago" with the exact UTC time on hover (§7).
 
 ## 7. Content and tone

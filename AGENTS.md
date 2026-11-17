@@ -38,7 +38,8 @@ src/attacksurf/   application code (src layout, import name `attacksurf`)
   sandbox_proxy/  Docker socket guard (ADR 0016); isolated from the app by import-linter
   sandbox_launcher/  sandbox run building blocks (ADR 0016): analyzer catalog, artifact
                   resolver, create-body builder, capped stdout reader; isolated by import-linter
-  sandbox_tools/  code that runs inside analyzer images (ADR 0017): the archive extractor;
+  sandbox_tools/  code that runs inside analyzer images (ADR 0017): the archive extractor and
+                  the binary format detector;
                   standard library only (a test; import-linter keeps the app and its
                   dependencies out), never imported by the app
 tests/            pytest; mirrors src/attacksurf/ structure (unit/, integration/, e2e/)
@@ -174,7 +175,8 @@ sync" rule below is satisfied**. Do not claim done without running them.
 - Secrets: env vars or encrypted in DB (org API keys). Never commit `.env`, keys, or tokens.
   Never print them in logs, errors, or UI.
 - Uploaded codebases/binaries are never executed, parsed or extracted by the app or a worker
-  (only leading bytes are sniffed); analysis runs sandboxed. A new upload route adds its
+  (only leading bytes are sniffed, and a binary is hashed); analysis runs sandboxed. Upload use
+  cases share `services.uploads.store_and_queue_analysis`. A new upload route adds its
   endpoint and form partial to `web.uploads.UPLOAD_ENDPOINTS` (body ceiling before CSRF, rate
   limit, in-place form errors).
 - New dependency? Check it's maintained and widely used; prefer stdlib. Pin via `uv.lock`.

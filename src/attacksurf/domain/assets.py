@@ -26,6 +26,9 @@ _REPO_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 UPLOAD_PREFIX = "upload/"
 MAX_UPLOAD_NAME_LENGTH = 64
 _UPLOAD_NAME = re.compile(rf"[a-z0-9][a-z0-9._-]{{0,{MAX_UPLOAD_NAME_LENGTH - 1}}}")
+# A binary has no name of its own: it is identified by the SHA-256 of its bytes (#101).
+BINARY_PREFIX = "sha256:"
+_BINARY_VALUE = re.compile(BINARY_PREFIX + r"[0-9a-f]{64}")
 _ARCHIVE_SUFFIX = re.compile(r"\.(zip|tgz|tbz2|txz|tar(\.(gz|bz2|xz))?)$")
 
 
@@ -58,10 +61,6 @@ class InvalidAssetValue(AssetError):
     pass
 
 
-class UnsupportedAssetType(AssetError):
-    """The type exists in the model but has no normalization yet (binary)."""
-
-
 class AssetNotFound(AssetError):
     """The asset doesn't exist or belongs to another org (never says which)."""
 
@@ -82,7 +81,7 @@ def normalize_asset_value(asset_type: AssetType, raw: str) -> str:
         case AssetType.REPO:
             return normalize_repo(raw)
         case AssetType.BINARY:
-            raise UnsupportedAssetType(f"{asset_type} assets are not supported yet")
+            return normalize_binary(raw)
 
 
 def normalize_hostname(raw: str) -> str:
@@ -191,6 +190,14 @@ def normalize_repo(raw: str) -> str:
     if len(repo) > MAX_URL_LENGTH:
         raise InvalidAssetValue(f"Repository paths can be at most {MAX_URL_LENGTH} characters.")
     return repo
+
+
+def normalize_binary(raw: str) -> str:
+    """`sha256:<64 lowercase hex>`: the digest of the binary's bytes, never its file name."""
+    value = raw.strip().lower()
+    if not _BINARY_VALUE.fullmatch(value):
+        raise InvalidAssetValue("A binary is identified as sha256:<64 hex digits>.")
+    return value
 
 
 def upload_repo_value(filename: str) -> str:

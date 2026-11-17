@@ -122,6 +122,15 @@ def store_artifact(
     return artifact
 
 
+def check_quota(session: Session, policy: ArtifactPolicy, org_id: UUID, size_bytes: int) -> None:
+    """Raise `ArtifactQuotaExceeded` if `size_bytes` more would not fit in the org's quota.
+
+    An early answer for callers that create rows before storing; `store_artifact` decides.
+    """
+    if _stored_bytes(session, org_id) + size_bytes > policy.org_quota_bytes:
+        raise ArtifactQuotaExceeded("The organization's artifact storage is full.")
+
+
 def open_artifact(
     session: Session, store: ArtifactStore, org_id: UUID, artifact_id: UUID
 ) -> Iterator[bytes]:

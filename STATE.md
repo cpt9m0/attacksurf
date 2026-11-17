@@ -2,38 +2,38 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-17 · **Branch:** `87-repo-archive-upload` · **Issue:** #87 (Upload a codebase archive as a repo asset)
+**Updated:** 2026-11-17 · **Branch:** `101-binary-upload` · **Issue:** #101 (Upload binaries and mobile apps as binary assets)
 
 ## Status
-Implemented, review findings fixed, local checks pass; rebased onto `origin/main` after #85
-(#168) and #86 (#169) merged, conflicts resolved (STATE.md only). PR open (#170).
+Implemented, local checks pass; rebased onto `origin/main` after #87 (#170) merged,
+conflicts resolved (STATE.md + `test_repo_upload.py` refactor vs `.lock` filter). PR open (#171).
 
 ## Last task
-- `domain.assets`: repo values are `host/owner/name` (ADR 0017) or `upload/<slug>`;
-  `domain.artifacts.sniff_archive` checks magic bytes only.
-- `services.repos.upload_repo_archive`: repo asset + `Artifact` + `Scan` (profile `code`,
-  `stats.revision` = archive SHA-256, `stats.artifact_id`) + job `analysis.code_scan`, audited
-  as `repo.archive_uploaded`. A failed store keeps the (maybe empty) asset on purpose (deleting
-  it raced with concurrent uploads of the same name); a failed enqueue raises `ScanNotQueued`.
-- `web/uploads.py` (built for reuse by #101): 2 MiB default body ceiling; one hook ahead of CSRF
-  spends the per-user rate limit and raises the ceiling for `UPLOAD_ENDPOINTS` (endpoint ->
-  form partial); `upload_form` re-renders the form in place, also for an HTMX 413 / 429.
-- Caddyfile: 257 MiB on `/assets/upload` only. `compose.prod.yaml` has an `artifact-store`
-  volume; prod uploads stay off until `APP_ENCRYPTION_KEY` is set.
+- `domain`: binary values are `sha256:<64 hex>`; `sniff_binary` is the leading-bytes upload gate.
+- `sandbox_tools/detect.py`: stdlib-only detector (elf, pe, macho, macho_fat, apk, ipa), CLI
+  exit 0 / 3 / 4; inconsistent, over-cap and APK-and-IPA zips are rejected.
+- `services.binaries.upload_binary`: hash, asset, `Artifact`, `Scan` (profile `binary_static`),
+  job `analysis.binary_static`, audit `binary.uploaded`; quota checked before the asset
+  exists (`check_quota`). `services/uploads.py` holds what it shares with `services.repos`.
+- Web: `POST /assets/upload-binary` in `UPLOAD_ENDPOINTS` (one shared 20/hour bucket for all
+  upload routes), second upload card, "Binary" filter, "Uploaded file" on the asset page.
+  Fixtures: `tests/binary_fixtures.py` builds `tests/fixtures/binaries/` (header stubs).
 
 ## Next step
-Push the rebased branch to update PR #170 (`Closes #87`), wait for checks/review. Then #101
-(binary upload, stacked on this branch).
+Push the rebased branch to update PR #171 (`Closes #101`), wait for checks/review. Then #102
+(native parsing with LIEF), which needs #84's launcher and analysis worker first.
 
 ## Open threads
-- #85 (`6729177`) and #86 (`e013000`) are merged; this branch now contains only the #87 commit.
+- #85 (`6729177`), #86 (`e013000`) and #87 (`56fbaa7`) are merged; this branch now contains
+  only the #101 commit. #23 (#166, llm usage) is also on `main`.
 - #21 (Scans UI) is not merged: the scan shows only in the asset's "Scan history" tab. No JSON API.
-- The `code` scan stays `queued` until #84 adds `worker-analysis` and `analysis.code_scan`;
-  its artifact is still purged after `ARTIFACT_RETENTION_HOURS` (24 h if 0).
-- Caddyfile and `compose.prod.yaml` changes are unvalidated (no `caddy validate` or deploy).
-  Cloudflare caps bodies at 100 MB. The prod artifact volume has no backup (#29).
-- Nothing runs the extractor yet: #84 still lacks the launcher service, runner client, images
-  and `worker-analysis`.
+- The `code` and `binary_static` scans stay `queued` until #84 adds `worker-analysis` and
+  `analysis.code_scan`; artifacts are still purged after `ARTIFACT_RETENTION_HOURS` (24 h if 0).
+- The upload gate lets through any zip, Java class file or DOS program (only the detector
+  rejects them); identical bytes are stored twice; a storage failure after the quota check
+  leaves an asset without an artifact. Caddyfile change unvalidated; no JSON API for uploads.
+- Nothing runs the extractor or detector yet: #84 still lacks the launcher service, runner
+  client, images and `worker-analysis`.
 
 ## Notes for the next agent
 - DB tests: `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@127.0.0.1:5432/attacksurf_test

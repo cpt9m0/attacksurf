@@ -23,6 +23,19 @@ _ARCHIVE_MAGIC = (
     (0, b"\xfd7zXZ\x00", "xz"),
     (257, b"ustar", "tar"),
 )
+# Leading bytes of what the binary analyzers take. Universal Mach-O shares 0xCAFEBABE with Java
+# class files and a zip may be an APK, an IPA or neither: the sandbox detector tells them apart.
+_BINARY_MAGIC = (
+    (b"\x7fELF", "elf"),
+    (b"MZ", "pe"),
+    (b"\xfe\xed\xfa\xce", "macho"),
+    (b"\xce\xfa\xed\xfe", "macho"),
+    (b"\xfe\xed\xfa\xcf", "macho"),
+    (b"\xcf\xfa\xed\xfe", "macho"),
+    (b"\xca\xfe\xba\xbe", "macho_fat"),
+    (b"\xca\xfe\xba\xbf", "macho_fat"),
+    (b"PK\x03\x04", "zip"),
+)
 
 
 class ArtifactKind(StrEnum):
@@ -68,6 +81,15 @@ def sniff_archive(head: bytes) -> str | None:
         if head[offset : offset + len(magic)] == magic:
             return name
     return None
+
+
+def sniff_binary(head: bytes) -> str | None:
+    """What an uploaded binary's leading bytes look like (a hint, stored as such), or None.
+
+    The same kind of gate as `sniff_archive`: the authoritative detection is
+    `sandbox_tools.detect`, run on the artifact inside the sandbox (#101).
+    """
+    return next((name for magic, name in _BINARY_MAGIC if head.startswith(magic)), None)
 
 
 @dataclass(frozen=True)
