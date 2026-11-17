@@ -52,6 +52,11 @@ Constraints:
   stager cannot wedge a delete, and the lock file is never unlinked (unlinking it would let two
   processes "hold" the same lock). The lock lives in the ciphertext root, never in the
   sandbox-visible one.
+- **A delete that cannot clear the staged plaintext fails instead of reporting success.**
+  `unstage` ignores a missing directory but turns any other removal failure into
+  `ArtifactStorageUnavailable`, so `delete_artifact` keeps the key, leaves the row live, and
+  retries it later. Marking the row deleted while plaintext is still mounted would hide the
+  artifact from every later purge and the stale-directory sweep.
 - **Limits while reading.** `put` counts and hashes the plaintext as it streams and stops at
   `ARTIFACT_MAX_BYTES` (default 256 MiB, ceiling 512 MiB from ADR 0017) or the org's remaining
   `ARTIFACT_ORG_QUOTA_BYTES`, removing the partial file. The quota is re-checked under a lock on

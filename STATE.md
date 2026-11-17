@@ -1,8 +1,10 @@
 **Updated:** 2026-11-17 · **Branch:** `85-artifact-storage` · **Issue:** #85 (Store uploaded and fetched artifacts encrypted, with retention limits)
 
 ## Status
-PR open (#168), merged with `origin/main` and both Codex review findings fixed; checks pass
-locally (pytest 2084 passed, coverage 95.53%). Part of the stacked #85 → #86 → #87 → #101 chain.
+PR open (#168), merged with `origin/main` and all three Codex review findings fixed; checks pass
+locally (pytest 2087 passed, coverage 95.53%). Part of the
+stacked #85 → #86 → #87 → #101 chain. User asked to merge the PR once the new finding is
+addressed.
 
 ## Last task
 - `Artifact` model + migration `0010_add_artifacts` (renumbered: `main` took `0009` for #23).
@@ -14,6 +16,8 @@ locally (pytest 2084 passed, coverage 95.53%). Part of the stacked #85 → #86 �
   `{ARTIFACT_STORE_ROOT}/{artifact_id}.lock` (staging re-checks the ciphertext under the lock), and
   a failed purge defers its artifact behind everything still waiting instead of starving the
   queue (ADR 0028, Consequences).
+- Third review fix: `unstage` no longer swallows removal failures (missing dir stays quiet);
+  `delete` fails so the key is kept, the row stays live, and the purge retries it (ADR 0028).
 
 ## Next step
 Get the owner's OK on the PR size (below), then merge #85 once checks pass; then #86 (archive

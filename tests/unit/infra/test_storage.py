@@ -481,3 +481,50 @@ def test_delete_takes_the_lock_before_it_removes_anything(
 
     assert held == [str(artifact_id)]
     assert not roots.blob(artifact_id).exists()
+
+
+def _refuse_removal_of(roots: Roots, artifact_id: UUID, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the OS refuse to remove one staged directory, whatever rmtree is told.
+
+    Behaves like the real `shutil.rmtree` under a permission failure: swallows the error
+    when `ignore_errors=True`, raises it otherwise.
+    """
+    real_rmtree = shutil.rmtree
+
+    def flaky_rmtree(path: Path, ignore_errors: bool = False, **_kwargs: object) -> None:
+        if str(path) == str(roots.staged(artifact_id)):
+            if ignore_errors:
+                return  # swallowed, like the real thing: the directory stays
+            raise PermissionError(13, "Permission denied")
+        real_rmtree(path, ignore_errors=ignore_errors)
+
+    monkeypatch.setattr(storage.shutil, "rmtree", flaky_rmtree)
+
+
+def test_delete_fails_when_staged_plaintext_cannot_be_removed(
+    store: LocalArtifactStore, roots: Roots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_id, stored = _put(store, b"payload")
+    store.stage(ORG, artifact_id, stored.key_envelope, sha256=stored.sha256)
+    _refuse_removal_of(roots, artifact_id, monkeypatch)
+
+    with pytest.raises(ArtifactStorageUnavailable) as error:
+        store.delete(ORG, artifact_id)
+
+    assert str(error.value) == "Artifact storage is unavailable."
+    assert roots.staged(artifact_id).exists()  # still mountable: the delete must be retried
+
+
+def test_unstage_ignores_a_missing_directory_but_reports_other_failures(
+    store: LocalArtifactStore, roots: Roots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.unstage(uuid4())  # idempotent: nothing staged
+
+    artifact_id, stored = _put(store, b"payload")
+    store.stage(ORG, artifact_id, stored.key_envelope, sha256=stored.sha256)
+    _refuse_removal_of(roots, artifact_id, monkeypatch)
+
+    with pytest.raises(ArtifactStorageUnavailable):
+        store.unstage(artifact_id)
+
+    store.unstage(uuid4())  # missing stays quiet even alongside the failure

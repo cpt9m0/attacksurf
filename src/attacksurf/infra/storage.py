@@ -117,7 +117,9 @@ class LocalArtifactStore:
                 with _fixed_errors():
                     (self._store_root / str(org_id) / str(artifact_id)).unlink(missing_ok=True)
             finally:
-                # Whatever happens to the ciphertext, the plaintext never outlives a delete.
+                # Staged-plaintext removal still runs when the ciphertext is already gone, but
+                # its failure fails the delete: the caller keeps the key and retries it, so the
+                # plaintext never outlives a delete that reported success.
                 self.unstage(artifact_id)
 
     def stage(self, org_id: UUID, artifact_id: UUID, key_envelope: bytes, *, sha256: str) -> None:
@@ -148,7 +150,14 @@ class LocalArtifactStore:
                 raise
 
     def unstage(self, artifact_id: UUID) -> None:
-        shutil.rmtree(self._run_root / str(artifact_id), ignore_errors=True)
+        try:
+            shutil.rmtree(self._run_root / str(artifact_id))
+        except FileNotFoundError:
+            pass  # idempotent: already unstaged
+        except OSError:
+            # Anything else leaves mountable plaintext behind, so it must fail the delete
+            # rather than report success; the error carries no path.
+            raise ArtifactStorageUnavailable("Artifact storage is unavailable.") from None
 
     def sweep_staged(self, *, older_than_seconds: int) -> int:
         cutoff = time.time() - older_than_seconds

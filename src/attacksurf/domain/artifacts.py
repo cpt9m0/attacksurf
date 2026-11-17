@@ -76,8 +76,9 @@ class ArtifactStore(Protocol):
     def delete(self, org_id: UUID, artifact_id: UUID) -> None:
         """Remove the ciphertext and any staged plaintext. Idempotent; needs no key.
 
-        Raises `ArtifactStorageUnavailable` if the ciphertext can't be removed; the staged
-        plaintext is removed either way.
+        Raises `ArtifactStorageUnavailable` if the ciphertext or the staged plaintext can't be
+        removed; a failure to remove the staged plaintext fails the delete (nothing is marked
+        deleted) so it is retried instead of leaving mountable plaintext behind.
         """
         ...
 
@@ -86,7 +87,11 @@ class ArtifactStore(Protocol):
         ...
 
     def unstage(self, artifact_id: UUID) -> None:
-        """Remove the staged plaintext. Idempotent."""
+        """Remove the staged plaintext. Idempotent; a missing directory is not an error.
+
+        Raises `ArtifactStorageUnavailable` if removal fails, so callers never treat leftover
+        plaintext as gone.
+        """
         ...
 
     def sweep_staged(self, *, older_than_seconds: int) -> int:

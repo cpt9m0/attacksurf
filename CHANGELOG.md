@@ -85,6 +85,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   longer mark an artifact deleted mid-staging and leave its plaintext mounted until the sweep,
   and a failed purge pushes its artifact behind the rest of the queue instead of starving it
   on every run (#85).
+- Artifact deletion now fails instead of reporting success when the staged plaintext cannot be
+  removed: the key is kept and the row stays live, so the purge retries it instead of leaving
+  mountable plaintext for a deleted artifact (#85).
 - The content area fills the main column on every viewport instead of stopping at a 72rem cap,
   so wide screens no longer leave empty space to the right of the dashboard (#149).
 - Pyright and pytest pass on Windows again: pyright checks as Linux (where the app runs), and

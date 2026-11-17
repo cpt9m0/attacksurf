@@ -3,6 +3,7 @@
 import hashlib
 import io
 import secrets
+import shutil
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -25,6 +26,7 @@ from attacksurf.domain.artifacts import (
     ArtifactTooLarge,
 )
 from attacksurf.domain.assets import AssetNotFound, AssetSource, AssetType
+from attacksurf.infra import storage as storage_module
 from attacksurf.infra.crypto import CHUNK_BYTES, EnvelopeCipher
 from attacksurf.infra.db.models import Artifact, Asset, AuditLog, Org, User
 from attacksurf.infra.storage import LocalArtifactStore
@@ -507,6 +509,46 @@ def test_delete_changes_nothing_and_releases_the_lock_when_the_file_cannot_be_re
     row = db_session.get_one(Artifact, artifact.id)
     assert (row.deleted_at is None, row.key_envelope is None) == (True, False)
     assert [action for action, _ in _actions(db_session, acme.org_id)] == ["artifact.stored"]
+
+
+def test_delete_keeps_the_key_when_staged_plaintext_cannot_be_removed(
+    db_session: Session,
+    store: LocalArtifactStore,
+    acme: Tenant,
+    roots: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A delete that cannot clear the staged plaintext must not be recorded as complete: the key
+    # stays, the row stays live, and the retry removes everything.
+    artifact = _store(db_session, store, acme)
+    artifacts.stage_artifact(db_session, store, acme.org_id, artifact.id)
+    staged = roots[1] / str(artifact.id)
+    real_rmtree = shutil.rmtree
+
+    def staged_is_stuck(path: Path, ignore_errors: bool = False, **_kwargs: object) -> None:
+        if str(path) == str(staged):
+            if ignore_errors:
+                return
+            raise PermissionError(13, "Permission denied")
+        real_rmtree(path, ignore_errors=ignore_errors)
+
+    monkeypatch.setattr(storage_module.shutil, "rmtree", staged_is_stuck)
+
+    with pytest.raises(ArtifactStorageUnavailable):
+        artifacts.delete_artifact(db_session, store, acme.org_id, artifact.id, actor_id=None)
+
+    assert not db_session.in_transaction()
+    row = db_session.get_one(Artifact, artifact.id)
+    assert row.deleted_at is None
+    assert row.key_envelope is not None  # the file may still be there, so the key must stay
+    assert [action for action, _ in _actions(db_session, acme.org_id)] == ["artifact.stored"]
+    assert staged.exists()
+
+    monkeypatch.undo()
+    artifacts.delete_artifact(db_session, store, acme.org_id, artifact.id, actor_id=None)
+
+    assert db_session.get_one(Artifact, artifact.id).deleted_at is not None
+    assert list(roots[1].iterdir()) == []
 
 
 def test_purge_deletes_the_file_and_marks_the_row_once_retention_passes(
