@@ -62,6 +62,8 @@ def test_fake_scanner_pipeline_completes_with_assets_findings_and_isolated_error
     pipeline_env: InProcessDispatcher,
 ) -> None:
     root_scan = make_scan(db_session)
+    # The fixture scan is only tenant context; the scan under test must be the active one.
+    root_scan.status = ScanStatus.COMPLETED
     scan = scans.start_scan(
         db_session,
         FakeQueue(db_session),
@@ -283,6 +285,7 @@ def test_empty_profile_is_rejected_without_creating_a_scan(db_session: Session) 
 
 def test_broker_failure_fails_the_scan_and_its_kickoff_job(db_session: Session) -> None:
     parent = make_scan(db_session)
+    parent.status = ScanStatus.COMPLETED  # the scan under test must be the active one
     with pytest.raises(ConnectionError):
         scans.start_scan(
             db_session,
@@ -449,6 +452,7 @@ def test_failure_callback_is_idempotent_and_cancels_queued_work(
 
 def _started_scan(session: Session, name: str) -> tuple[Scan, Job]:
     root = make_scan(session, name)
+    root.status = ScanStatus.COMPLETED  # the fixture scan is only tenant context
     scan = scans.start_scan(
         session,
         FakeQueue(session),

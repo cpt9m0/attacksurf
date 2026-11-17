@@ -23,12 +23,12 @@ from attacksurf.domain.assets import (
     normalize_hostname,
 )
 from attacksurf.domain.ids import uuid7
-from attacksurf.domain.scans import JobStatus, ScanStatus
 from attacksurf.domain.scope import ScopeError, check_public_hostname
 from attacksurf.infra import public_suffix
-from attacksurf.infra.db.models import Asset, AssetRelation, Job, Scan
+from attacksurf.infra.db.models import Asset, AssetRelation
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services.audit import audit
+from attacksurf.services.scans import cancel_root_scans
 
 
 def add_root_domain(session: Session, org_id: UUID, raw: str, *, actor_id: UUID | None) -> Asset:
@@ -140,44 +140,11 @@ def _lock_root(session: Session, org_id: UUID, root_id: UUID) -> Asset:
 def _cancel_scans(session: Session, org_id: UUID, root_id: UUID) -> Sequence[UUID]:
     """Cancel the root's queued/running scans and their unfinished jobs, without committing.
 
-    Returned IDs are the scans cancelled by this call. Rows are locked scan-then-job, the order
-    `run_check` and `TrackedTask` use, so an archive and a worker finishing a job can't deadlock.
-    `clock_timestamp()` is the real time of each update: `now()` is when this transaction began,
-    which can precede a worker's `started_at` committed in between, and the schema requires
-    `finished_at >= started_at`.
+    Returned IDs are the scans cancelled by this call. Shares its statement with user
+    cancellation (`services.scans.cancel_root_scans`); the lock order stays scan-then-job
+    and the root lock is taken once, afterwards (ADR 0021).
     """
-    cancelled = session.scalars(
-        update(Scan)
-        .where(
-            Scan.org_id == org_id,
-            Scan.root_asset_id == root_id,
-            Scan.status.in_((ScanStatus.QUEUED, ScanStatus.RUNNING)),
-        )
-        .values(
-            status=ScanStatus.CANCELLED,
-            started_at=func.coalesce(Scan.started_at, func.clock_timestamp()),
-            finished_at=func.clock_timestamp(),
-        )
-        .returning(Scan.id),
-        execution_options={"synchronize_session": "fetch"},
-    ).all()
-    if not cancelled:
-        return []
-    session.execute(
-        update(Job)
-        .where(
-            Job.org_id == org_id,
-            Job.scan_id.in_(cancelled),
-            Job.status.in_((JobStatus.QUEUED, JobStatus.RUNNING)),
-        )
-        .values(
-            status=JobStatus.CANCELLED,
-            error="Root domain was archived.",
-            finished_at=func.greatest(Job.started_at, func.clock_timestamp()),
-        ),
-        execution_options={"synchronize_session": "fetch"},
-    )
-    return cancelled
+    return cancel_root_scans(session, org_id, root_id, job_error="Root domain was archived.")
 
 
 def _scannable_hostname(raw: str) -> str:
