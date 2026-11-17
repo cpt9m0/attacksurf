@@ -1,6 +1,5 @@
 {% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
-{% from "components/badges.html" import status_pill %}
-{% from "components/time.html" import relative_time %}
+{%- import "pages/_scan_parts.html" as parts -%}
 {% block title %}Scan of {{ scan.root_value }}{% endblock %}
 {% block content %}
 <nav class="breadcrumb" aria-label="Breadcrumb">
@@ -10,16 +9,11 @@
 
 <div class="page-header">
   <h1>Scan of <span class="mono">{{ scan.root_value }}</span></h1>
-  {{ status_pill(scan.status) }}
+  <span id="scan-status">{{ parts.scan_status(scan) }}</span>
 </div>
 
-<dl class="meta card card-body">
-  <div><dt>Profile</dt><dd><code>{{ scan.profile }}</code></dd></div>
-  <div><dt>Trigger</dt><dd>{{ scan.triggered_by }}</dd></div>
-  <div><dt>Queued</dt><dd>{{ relative_time(scan.created_at) }}</dd></div>
-  <div><dt>Started</dt><dd>{{ relative_time(scan.started_at) }}</dd></div>
-  <div><dt>Finished</dt><dd>{{ relative_time(scan.finished_at) }}</dd></div>
-</dl>
+<div id="scan-meta">{{ parts.scan_meta(scan) }}</div>
+<div id="scan-actions">{{ parts.scan_actions(scan, detail.can_cancel) }}</div>
 
 {% include "pages/_scan_progress.html" %}
 {% endblock %}

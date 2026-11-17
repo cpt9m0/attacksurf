@@ -1,0 +1,33 @@
+{#- One source for the scan header/meta/actions markup: the detail page renders it for
+    first paint, and the progress fragment repeats it out-of-band while polling, so the
+    two can never drift apart. -#}
+{%- from "components/badges.html" import status_pill -%}
+{%- from "components/confirm.html" import confirm_dialog -%}
+{%- from "components/time.html" import relative_time -%}
+
+{% macro scan_status(scan) -%}
+{{ status_pill(scan.status) }}
+{%- endmacro %}
+
+{% macro scan_meta(scan) -%}
+<dl class="meta card card-body">
+  <div><dt>Profile</dt><dd><code>{{ scan.profile }}</code></dd></div>
+  <div><dt>Trigger</dt><dd>{{ scan.triggered_by }}</dd></div>
+  <div><dt>Queued</dt><dd>{{ relative_time(scan.created_at) }}</dd></div>
+  <div><dt>Started</dt><dd>{{ relative_time(scan.started_at) }}</dd></div>
+  <div><dt>Finished</dt><dd>{{ relative_time(scan.finished_at) }}</dd></div>
+</dl>
+{%- endmacro %}
+
+{#- The cancel action lives OUTSIDE the polled `#scan-progress` subtree: re-rendering the
+    section every 2 s must never close the dialog mid-read. -#}
+{% macro scan_actions(scan, can_cancel) -%}
+{%- if can_cancel %}
+<div class="page-actions">
+  {{ confirm_dialog("cancel-scan", "Cancel this scan?", "Cancel this scan?",
+      "Queued and running jobs stop; finished work and history are kept.",
+      url_for('ui.cancel_scan', scan_id=scan.id), "Cancel scan",
+      trigger_variant="secondary", confirm_variant="secondary") }}
+</div>
+{%- endif %}
+{%- endmacro %}

@@ -301,7 +301,7 @@ def scan_progress(scan_id: UUID) -> Response:
         detail = scan_views.get_scan_detail(get_session(), _org_id(), scan_id)
     except ScanNotFound:
         abort(404)
-    return render_page("pages/_scan_progress.html", detail=detail, scan=detail.scan)
+    return render_page("pages/_scan_progress.html", detail=detail, scan=detail.scan, oob=True)
 
 
 @bp.post("/scans/<uuid:scan_id>/cancel")

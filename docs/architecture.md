@@ -288,7 +288,9 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   the scan/kickoff job, then enqueues `passive.discover`. The root row is locked, so two
   concurrent starts for the same root serialize and the second gets `ScanAlreadyActive`;
   a queued/running scan of the root and a per-org hourly quota per profile
-  (`SCAN_MAX_STARTS_PER_HOUR`, all statuses count) refuse the rest. Two waves use Celery chords:
+  (`SCAN_MAX_STARTS_PER_HOUR`, all statuses count) refuse the rest. The quota count and the
+  insert are serialised on the org row, so concurrent starts for different roots cannot both
+  read a below-limit count. Two waves use Celery chords:
   discovery on the root, then checks on the active root and its known direct children, filtered
   by each plugin's supported asset types. Continuations use immutable signatures and tracked
   jobs: `checks`, then `persist → diff → triage → finalize`. Batch rows commit before messages.
@@ -483,7 +485,10 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
   flashes; a duplicate start redirects to the running scan); `GET /scans/<id>` shows the scan
   meta and includes `_scan_progress.html`, which polls `GET /scans/<id>/progress` every 2 s
   while the scan is active — the attributes are gone once it is terminal, so the final swap
-  reveals the #20 diff without a reload; `POST /scans/<id>/cancel` cancels (idempotent). A
+  reveals the #20 diff without a reload. The poll response also carries out-of-band swaps for
+  the status pill, the meta block and the cancel action, so those refresh without a reload
+  too; the cancel dialog lives outside the polled subtree, so a poll never closes it mid-read
+  (only the completion swap clears it). `POST /scans/<id>/cancel` cancels (idempotent). A
   root domain's page offers the same "Scan now" post (or a link to the running scan). Reads
   go through `services/scan_views.py` (frozen dataclasses; the JSONB `stats` parse
   defensively, so anything unexpected means "no diff yet"); filters are parsed by

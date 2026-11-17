@@ -5,7 +5,8 @@ verification need an admin), so the main client here is demoted to MEMBER.
 """
 
 import re
-from uuid import UUID
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
 
 import pytest
 from flask import Flask
@@ -244,9 +245,30 @@ def test_progress_stops_polling_and_shows_the_diff_once_finished(
     location = _start(member, root_id)
     scan_id = UUID(location.rsplit("/", 1)[1])
 
+    detail = _html(member, location)
+    assert detail.index('id="scan-actions"') < detail.index(
+        'id="scan-progress"'
+    )  # the dialog lives outside the polled subtree
+    assert detail.count('id="scan-progress"') == 1
+    assert "/cancel" in detail  # the action is on the page, not in the fragment
+    assert ">queued<" in detail
+
     running = _html(member, f"{location}/progress", headers=HTMX)
     assert 'hx-trigger="every 2s"' in running
-    assert "/cancel" in running
+    assert 'hx-swap-oob="outerHTML:#scan-status"' in running
+    assert 'hx-swap-oob="outerHTML:#scan-meta"' in running
+    assert "scan-actions" not in running  # the action is untouched while active
+    assert "/cancel" not in running
+
+    db_session.execute(
+        update(Scan)
+        .where(Scan.id == scan_id)
+        .values(status=ScanStatus.RUNNING, started_at=datetime.now(UTC))
+    )
+    db_session.commit()
+    mid = _html(member, f"{location}/progress", headers=HTMX)
+    assert ">running<" in mid  # status and timestamps refresh without a reload
+    assert 'hx-swap-oob="outerHTML:#scan-actions"' not in mid
 
     db_session.execute(
         update(Scan).where(Scan.id == scan_id).values(status=ScanStatus.COMPLETED, stats=_STATS)
@@ -256,10 +278,47 @@ def test_progress_stops_polling_and_shows_the_diff_once_finished(
 
     finished = _html(member, f"{location}/progress", headers=HTMX)
     assert "every 2s" not in finished
+    assert ">completed<" in finished
+    assert 'hx-swap-oob="outerHTML:#scan-actions"' in finished  # the action is cleared
     assert "Changes since the last scan" in finished
     assert "new.example.com" in finished
-    assert "Cancel scan" not in finished
-    assert "1 of 1 job finished" in _html(member, location)
+
+    final = _html(member, location)
+    assert "Cancel scan" not in final
+    assert ">completed<" in final
+    assert "1 of 1 job finished" in final
+
+
+def test_diff_shows_disappeared_truncation_notice(member: FlaskClient, db_session: Session) -> None:
+    root_id = _add_domain(member, "example.com")
+    location = _start(member, root_id)
+    scan_id = UUID(location.rsplit("/", 1)[1])
+    stats = {
+        "findings": {},
+        "assets": {
+            "new": {"total": 0, "assets": []},
+            "disappeared": {
+                "total": scan_views.MAX_DIFF_ASSETS + 1,
+                "assets": [
+                    {
+                        "id": str(uuid4()),
+                        "type": "subdomain",
+                        "value": f"gone-{index}.example.com",
+                    }
+                    for index in range(scan_views.MAX_DIFF_ASSETS + 1)
+                ],
+            },
+        },
+    }
+    db_session.execute(
+        update(Scan).where(Scan.id == scan_id).values(status=ScanStatus.COMPLETED, stats=stats)
+    )
+    db_session.commit()
+
+    finished = _html(member, f"{location}/progress", headers=HTMX)
+
+    assert f"of {scan_views.MAX_DIFF_ASSETS + 1} disappeared assets." in finished
+    assert "new assets." not in finished  # only the disappeared half truncates
 
 
 def test_cancel_scan_cancels_scan_and_jobs(member: FlaskClient, db_session: Session) -> None:
