@@ -5,15 +5,17 @@
 **Updated:** 2026-11-17 · **Branch:** `21-scans-ui` · **Issue:** #21 (Scans UI)
 
 ## Status
-Done: draft PR #173 (`feat(web): add scans UI with live progress and diff view`) is pushed,
-pre-push hooks (pyright + pytest) green. CI run still to check; then address review.
+Done: draft PR #173 pushed with Codex's 4 review comments addressed (2 fix commits),
+threads replied and resolved. CI run still to check; then address review.
 
 ## Last task
-- #21 on a branch off `origin/main` (5 commits): start-scan guards (root-row lock,
-  `ScanAlreadyActive`, `SCAN_MAX_STARTS_PER_HOUR` quota, `cancel_scan`), `scan_views`
-  read side, `/api/v1/scans`, scans pages with 2 s HTMX progress polling + diff, docs.
-- Verified: full `pytest` 2659 passed / 95.33% coverage, `pre-commit run --all-files`,
-  `pyright`, `lint-imports`, `RUN_WEB_E2E=1 pytest tests/e2e/web` (14 passed, real Chromium).
+- #21 on branch `21-scans-ui` (9 commits): scans UI + `/api/v1/scans`, then review fixes:
+  org-row lock serialising the quota count-and-insert (threaded regression test that
+  fails without the lock), cancel dialog moved out of the polled subtree with OOB swaps
+  for status/meta/actions via shared `_scan_parts.html` macros, disappeared-bucket
+  truncation notice.
+- Verified after the fixes: full `pytest` 2661 passed / 96.02%, `pre-commit`,
+  `pyright`, `lint-imports`, `RUN_WEB_E2E=1` Chromium suite (14 passed).
 
 ## Next step
 1. Check CI on PR #173; fix anything red, then mark ready for review.
