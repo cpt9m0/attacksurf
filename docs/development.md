@@ -138,6 +138,10 @@ limits key on the visitor address Cloudflare forwards (`CF-Connecting-IP`, else 
 http://127.0.0.1:5000, sign up; the first account owns a new org. Production setup:
 [deployment.md](deployment.md).
 
+Scans (#21): `SCAN_MAX_STARTS_PER_HOUR` caps scan starts per organization per profile in a
+trailing hour (default 10); failed starts count too. Upload scans (`code`, `binary_static`)
+have their own profiles and limiter.
+
 ### DNS resolution (#16)
 
 `DNS_RESOLVERS` is a comma-separated list of public recursive resolvers (default

@@ -250,6 +250,11 @@ def _settings() -> Settings:
     return current_app.extensions[_SETTINGS_KEY]
 
 
+def get_settings() -> Settings:
+    """The app's settings, stored by `init_auth`. Other web modules read quotas here."""
+    return _settings()
+
+
 def _signup_open() -> bool:
     # The first user may always sign up, so a private instance can create its admin.
     # (Display check only; register_user re-checks atomically.)

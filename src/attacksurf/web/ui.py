@@ -6,8 +6,10 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+import structlog
 from flask import Blueprint, Response, abort, flash, redirect, request, url_for
 from flask_login import current_user
+from werkzeug.exceptions import HTTPException
 from werkzeug.wrappers.response import Response as BaseResponse
 
 from attacksurf.domain.accounts import Role, has_role
@@ -18,20 +20,34 @@ from attacksurf.domain.assets import (
     AssetType,
     InvalidAssetValue,
 )
-from attacksurf.domain.scans import ScanNotQueued
-from attacksurf.services import asset_views, binaries, repos, verifications
+from attacksurf.domain.scans import (
+    ScanAlreadyActive,
+    ScanError,
+    ScanNotFound,
+    ScanNotQueued,
+    ScanRateLimited,
+    ScanStatus,
+)
+from attacksurf.scanners.profiles import PROFILES
+from attacksurf.scanners.registry import registry
+from attacksurf.services import asset_views, binaries, repos, scan_views, verifications
 from attacksurf.services import assets as assets_service
+from attacksurf.services import scans as scans_service
 from attacksurf.services.asset_views import AssetFilter, AssetStatus
+from attacksurf.services.scan_views import ScanFilter
 from attacksurf.services.uploads import AssetUpload
 from attacksurf.web import uploads
 from attacksurf.web.asset_params import parse_asset_filter
-from attacksurf.web.auth import require_role
+from attacksurf.web.auth import get_settings, require_role
 from attacksurf.web.db import get_session
 from attacksurf.web.formatting import exact_time, humanize_delta
 from attacksurf.web.queue import get_task_queue
 from attacksurf.web.rendering import is_htmx_request, render_page
+from attacksurf.web.scan_params import parse_scan_filter
 
 bp = Blueprint("ui", __name__)
+
+log = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -138,6 +154,7 @@ def asset_detail(asset_id: UUID) -> Response:
     except AssetNotFound:
         abort(404)
     asset = detail.asset
+    can_scan = asset.is_active and asset.type == AssetType.DOMAIN and asset.root_id is None
     return render_page(
         "pages/asset_detail.html",
         detail=detail,
@@ -146,6 +163,12 @@ def asset_detail(asset_id: UUID) -> Response:
         tabs=ASSET_TABS,
         findings=findings,
         scans=scans,
+        can_scan=can_scan,
+        active_scan=(
+            scan_views.active_scan_for_root(get_session(), _org_id(), asset.id)
+            if can_scan
+            else None
+        ),
         can_archive=asset.is_active
         and asset.type == AssetType.DOMAIN
         and asset.root_id is None
@@ -209,7 +232,89 @@ def ownership_card(asset_id: UUID) -> Response:
 
 @bp.get("/scans")
 def scans() -> Response:
-    return render_page("pages/scans.html")
+    flt, page = parse_scan_filter(request.args)
+    return _scans_page(flt, page)
+
+
+@bp.post("/scans")
+def create_scan() -> BaseResponse:
+    """Queue a `dns_passive` scan of a root domain, then show its progress.
+
+    Any org member may start a scan; the service refuses unknown profiles, inactive or
+    foreign roots, a second concurrent scan of the same root, and starts over the
+    hourly quota. A broker failure is already recorded as a failed scan; the user gets
+    a flash and a redirect, never a traceback.
+    """
+    raw_root = request.form.get("root_asset_id", "")
+    profile = request.form.get("profile", "") or "dns_passive"
+    try:
+        root_id = UUID(raw_root)
+    except (ValueError, AttributeError, TypeError):
+        flash("Choose a domain to scan.", "error")
+        return _navigate(url_for("ui.scans"))
+    session = get_session()
+    try:
+        scan = scans_service.start_scan(
+            session,
+            get_task_queue(),
+            org_id=_org_id(),
+            root_asset_id=root_id,
+            profile=profile,
+            registry=registry,
+            profiles=PROFILES,
+            max_starts_per_hour=get_settings().scan_max_starts_per_hour,
+            actor_id=current_user.session_user.user_id,
+        )
+    except ScanAlreadyActive as exc:
+        flash("A scan of this domain is already running.", "info")
+        return _navigate(url_for("ui.scan_detail", scan_id=exc.scan_id))
+    except (ScanRateLimited, ScanError) as exc:
+        flash(str(exc), "error")
+        return _navigate(_scan_start_fallback(root_id))
+    except AssetNotFound:
+        abort(404)
+    except HTTPException:
+        raise
+    except Exception as exc:  # broker down: the scan row is already marked failed
+        log.warning("scan not queued", error=type(exc).__name__)
+        flash("The scan could not be queued. Try again in a moment.", "error")
+        return _navigate(_scan_start_fallback(root_id))
+    flash(
+        f"Scan started for {asset_views.get_asset(session, _org_id(), root_id).value}.", "success"
+    )
+    return _navigate(url_for("ui.scan_detail", scan_id=scan.id))
+
+
+@bp.get("/scans/<uuid:scan_id>")
+def scan_detail(scan_id: UUID) -> Response:
+    try:
+        detail = scan_views.get_scan_detail(get_session(), _org_id(), scan_id)
+    except ScanNotFound:
+        abort(404)
+    return render_page("pages/scan_detail.html", detail=detail, scan=detail.scan)
+
+
+@bp.get("/scans/<uuid:scan_id>/progress")
+def scan_progress(scan_id: UUID) -> Response:
+    """The progress fragment alone, so polling re-renders it without the whole page."""
+    try:
+        detail = scan_views.get_scan_detail(get_session(), _org_id(), scan_id)
+    except ScanNotFound:
+        abort(404)
+    return render_page("pages/_scan_progress.html", detail=detail, scan=detail.scan, oob=True)
+
+
+@bp.post("/scans/<uuid:scan_id>/cancel")
+def cancel_scan(scan_id: UUID) -> BaseResponse:
+    """Cancel a running scan (ADR 0021: database-only, no Celery revoke). Idempotent."""
+    try:
+        scan = scans_service.cancel_scan(
+            get_session(), _org_id(), scan_id, actor_id=current_user.session_user.user_id
+        )
+    except ScanNotFound:
+        abort(404)
+    flash("Scan cancelled.", "success")
+    return _navigate(url_for("ui.scan_detail", scan_id=scan.id))
 
 
 @bp.get("/findings")
@@ -285,6 +390,35 @@ def _ownership_context(asset_id: UUID) -> dict[str, Any]:
         and asset.is_active
         and has_role(current_user.role, Role.ADMIN),
     }
+
+
+def _scan_start_fallback(root_id: UUID) -> str:
+    """Back to the domain the scan was started from, or the scan list without it."""
+    try:
+        asset_views.get_asset(get_session(), _org_id(), root_id)
+    except AssetNotFound:
+        return url_for("ui.scans")
+    return url_for("ui.asset_detail", asset_id=root_id)
+
+
+def _scans_page(flt: ScanFilter, page: int, status: int = 200) -> Response:
+    session = get_session()
+    roots = asset_views.list_root_domains(session, _org_id())
+    filter_args = {"root": flt.root_id, "status": flt.status}
+    return render_page(
+        "pages/scans.html",
+        status=status,
+        result=scan_views.list_scans(session, _org_id(), flt, page),
+        flt=flt,
+        filtered=flt != ScanFilter(),
+        # Non-default filters only, so pagination links stay short and shareable.
+        filter_args={key: value for key, value in filter_args.items() if value},
+        root_options=[("", "All roots")]
+        + [(r.id, r.value if r.is_active else f"{r.value} (archived)") for r in roots],
+        status_options=[("", "All statuses")]
+        + [(s.value, s.value.replace("_", " ").capitalize()) for s in ScanStatus],
+        scan_root_options=[(r.id, r.value) for r in roots if r.is_active],
+    )
 
 
 def _assets_page(flt: AssetFilter, page: int, status: int = 200, **form: str) -> Response:

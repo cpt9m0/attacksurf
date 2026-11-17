@@ -285,7 +285,12 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   record count as evidence. The zone-level checks run only when the asset is itself a zone apex;
   all six accept `DOMAIN` assets only, so they run once per scan root.
 - `services.scans.start_scan` validates a tenant-owned, active domain root, audits and commits
-  the scan/kickoff job, then enqueues `passive.discover`. Two waves use Celery chords:
+  the scan/kickoff job, then enqueues `passive.discover`. The root row is locked, so two
+  concurrent starts for the same root serialize and the second gets `ScanAlreadyActive`;
+  a queued/running scan of the root and a per-org hourly quota per profile
+  (`SCAN_MAX_STARTS_PER_HOUR`, all statuses count) refuse the rest. The quota count and the
+  insert are serialised on the org row, so concurrent starts for different roots cannot both
+  read a below-limit count. Two waves use Celery chords:
   discovery on the root, then checks on the active root and its known direct children, filtered
   by each plugin's supported asset types. Continuations use immutable signatures and tracked
   jobs: `checks`, then `persist → diff → triage → finalize`. Batch rows commit before messages.
@@ -305,7 +310,10 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   cancel queued work. Terminal scan status and an inactive root are checked again before
   persistence: a cancelled scan or an archived root writes nothing (ADR 0021).
 - Archiving a root domain cancels its queued/running scans and their unfinished jobs in the same
-  transaction (audited `scan.cancelled`), and is the only cancellation path for now. Archive and
+  transaction (audited `scan.cancelled`), sharing one statement with user cancellation:
+  `services.scans.cancel_scan` marks a scan `cancelled` (idempotent, audited
+  `scan.cancelled` with `reason: user_requested`) and is offered on the scan page by any org
+  member. Archive and
   persistence lock the scan rows and then the root, in the same order, and take the root lock
   once (never upgrading it), so overlapping runs never deadlock; cancellation timestamps come
   from `clock_timestamp()`, and a stage that finds its
@@ -472,9 +480,27 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
   `analysis.binary_static`, audited as `binary.uploaded`. The hint is only a guess: the real
   format is decided in the sandbox by `sandbox_tools.detect`. Like the `code` scan it stays
   `queued` until #84.
+- Scans UI (#21): `GET /scans` lists scans with `root`/`status` filters and a start form over
+  the org's active roots; `POST /scans` queues `dns_passive` for any org member (PRG with
+  flashes; a duplicate start redirects to the running scan); `GET /scans/<id>` shows the scan
+  meta and includes `_scan_progress.html`, which polls `GET /scans/<id>/progress` every 2 s
+  while the scan is active — the attributes are gone once it is terminal, so the final swap
+  reveals the #20 diff without a reload. The poll response also carries out-of-band swaps for
+  the status pill, the meta block and the cancel action, so those refresh without a reload
+  too; the cancel dialog lives outside the polled subtree, so a poll never closes it mid-read
+  (only the completion swap clears it). `POST /scans/<id>/cancel` cancels (idempotent). A
+  root domain's page offers the same "Scan now" post (or a link to the running scan). Reads
+  go through `services/scan_views.py` (frozen dataclasses; the JSONB `stats` parse
+  defensively, so anything unexpected means "no diff yet"); filters are parsed by
+  `web/scan_params.py` (400 on bad values), shared with the API.
 - `/api/v1/assets` (session auth, writes need `X-CSRFToken`): `GET` list, `POST {"value"}` adds a
   root domain (201 / 422 / 409), `GET /<id>` detail with relations, `GET /<id>/findings`,
   `GET /<id>/scans`, `POST /<id>/archive` (admin). Errors are `{"error", "message"}`.
+- `/api/v1/scans` (same auth): `POST {"root_asset_id", "profile"?}` (`dns_passive` default)
+  queues a scan (201 with `Location`, 404 for a foreign root, 409 with the running scan's id,
+  429 past the hourly quota, 422 for an unknown profile, 503 when the broker is down),
+  `GET` lists with the page's `root`/`status` filters, `GET /<id>` shows the scan with its
+  jobs and diff (404 `Scan not found.` across orgs, indistinguishable from missing).
 
 ## Authentication (ADR 0009)
 

@@ -49,6 +49,8 @@ own key) **triages, prioritizes, and explains** them in plain language with fix 
 - **Binary and mobile app upload** (early): upload an ELF, PE or Mach-O executable, an APK or an IPA; it is identified by its SHA-256, stored encrypted, never run, and queued for analysis (analyzers are coming)
 - **Asset inventory**: add the domains you own, then browse everything discovered under them
   (filters, search, open findings per asset) and the asset graph: domain → subdomain → CNAME → IP
+- **Scan control**: start a scan from the UI or the API, watch its progress live, cancel it,
+  and review what changed (new / fixed / regressed findings, new and disappeared assets)
 
 ### Platform
 - **AI triage**: severity adjustment, false-positive likelihood, remediation steps, exposure summaries

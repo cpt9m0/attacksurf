@@ -1,6 +1,7 @@
 {% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
 {% from "components/badges.html" import severity_badge, status_pill %}
 {% from "components/confirm.html" import confirm_dialog %}
+{% from "components/form.html" import csrf_field %}
 {% from "components/table.html" import data_table %}
 {% from "components/time.html" import relative_time %}
 {% from "components/verification.html" import ownership_badge, ownership_card %}
@@ -18,6 +19,20 @@
   <h1 class="mono">{{ asset.value }}</h1>
   {%- if not asset.is_active %} {{ status_pill("archived") }}{% endif %}
   {%- if asset.verification == "verified" %} {{ ownership_badge("verified") }}{% endif %}
+  {%- if can_scan %}
+  <div class="page-actions">
+    {%- if active_scan %}
+    <a class="btn btn-secondary" href="{{ url_for('ui.scan_detail', scan_id=active_scan.id) }}">View running scan</a>
+    {%- else %}
+    <form method="post" action="{{ url_for('ui.create_scan') }}">
+      {{ csrf_field() }}
+      <input type="hidden" name="root_asset_id" value="{{ asset.id }}">
+      <input type="hidden" name="profile" value="dns_passive">
+      <button type="submit" class="btn btn-primary">Scan now</button>
+    </form>
+    {%- endif %}
+  </div>
+  {%- endif %}
   {%- if can_archive %}
   <div class="page-actions">
     {%- if detail.discovered %}
@@ -137,7 +152,7 @@
     {% call(row, key) data_table([("created_at", "Queued"), ("profile", "Profile"), ("trigger", "Trigger"), ("status", "Status"), ("finished_at", "Finished")],
         scans, "Scans of this asset's root domain", "No scans yet",
         "Scans run on root domains; their history shows here for the root and everything under it.") %}
-      {%- if key == "created_at" %}{{ relative_time(row.created_at) }}
+      {%- if key == "created_at" %}<a href="{{ url_for('ui.scan_detail', scan_id=row.id) }}">{{ relative_time(row.created_at) }}</a>
       {%- elif key == "profile" %}<code>{{ row.profile }}</code>
       {%- elif key == "trigger" %}{{ row.triggered_by }}
       {%- elif key == "status" %}{{ status_pill(row.status) }}

@@ -7,7 +7,8 @@ from flask import Flask, Response, flash
 from flask.testing import FlaskClient
 
 import attacksurf.web
-from attacksurf.services import asset_views
+from attacksurf.services import asset_views, scan_views
+from attacksurf.services.scan_views import ScanFilter
 from attacksurf.web.rendering import render_page
 
 STATIC = Path(attacksurf.web.__file__).parent / "static"
@@ -93,7 +94,16 @@ def test_htmx_fragment_includes_flash_messages(app: Flask, auth_client: FlaskCli
     @app.get("/_test/flash")
     def flashing() -> Response:
         flash("Saved", "success")
-        return render_page("pages/scans.html")
+        return render_page(
+            "pages/scans.html",
+            result=scan_views.ScanPage(items=(), page=1, pages=1, total=0),
+            flt=ScanFilter(),
+            filtered=False,
+            filter_args={},
+            root_options=[],
+            status_options=[],
+            scan_root_options=[],
+        )
 
     html = auth_client.get("/_test/flash", headers={"HX-Request": "true"}).get_data(as_text=True)
 

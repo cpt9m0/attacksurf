@@ -25,6 +25,7 @@ x-app: &app
     ARTIFACT_MAX_BYTES: ${ARTIFACT_MAX_BYTES:-}
     ARTIFACT_RETENTION_HOURS: ${ARTIFACT_RETENTION_HOURS:-}
     ARTIFACT_ORG_QUOTA_BYTES: ${ARTIFACT_ORG_QUOTA_BYTES:-}
+    SCAN_MAX_STARTS_PER_HOUR: ${SCAN_MAX_STARTS_PER_HOUR:-}
   volumes:
     - ./src:/app/src  # hot reload
     # Encrypted artifacts (ADR 0028). On the anchor, not per service: a merge replaces lists.

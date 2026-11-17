@@ -4,7 +4,7 @@ import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
-from attacksurf.services import asset_views
+from attacksurf.services import asset_views, scan_views
 from tests.conftest import LoginAs, make_session_user
 
 # 40 characters: the email width the issue was reproduced with.
@@ -17,6 +17,9 @@ def _no_assets(monkeypatch: pytest.MonkeyPatch) -> None:
     empty = asset_views.AssetPage(items=(), page=1, pages=1, total=0)
     monkeypatch.setattr(asset_views, "list_assets", lambda *_args, **_kw: empty)
     monkeypatch.setattr(asset_views, "list_root_domains", lambda *_args, **_kw: ())
+    no_scans = scan_views.ScanPage(items=(), page=1, pages=1, total=0)
+    monkeypatch.setattr(scan_views, "list_scans", lambda *_args, **_kw: no_scans)
+    monkeypatch.setattr(scan_views, "active_scan_for_root", lambda *_args, **_kw: None)
 
 
 @pytest.fixture
