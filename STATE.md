@@ -2,29 +2,39 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-17 · **Branch:** `21-scans-ui` · **Issue:** #21 (Scans UI)
+**Updated:** 2026-11-17 · **Branch:** `174-verification-queue` · **Issue:** #174 (ownership verification never completes)
 
 ## Status
-Done: draft PR #173 has Codex's green light ("Didn't find any major issues",
-reviewed commit `21b1e8d`). Next: check CI, then mark ready for review.
+Done: `worker-passive` + `beat` added to `compose.prod.yaml` with secret-aware healthchecks;
+`scripts/deploy.sh` derives long-running services from the compose file, gates releases on
+`--wait --wait-timeout 300`, and converges stopped workers; ownership card renders `Stalled`
+with a queue explanation and stops polling past `QUEUE_STALL_AFTER` (5 min); regression tests
+cover the stuck-queued, running-old, and requeued cases. All checks green, ready to commit/PR.
 
 ## Last task
-- #21 on branch `21-scans-ui` (9 commits): scans UI + `/api/v1/scans`, then review fixes:
-  org-row lock serialising the quota count-and-insert (threaded regression test that
-  fails without the lock), cancel dialog moved out of the polled subtree with OOB swaps
-  for status/meta/actions via shared `_scan_parts.html` macros, disappeared-bucket
-  truncation notice.
-- Verified after the fixes: full `pytest` 2661 passed / 96.02%, `pre-commit`,
-  `pyright`, `lint-imports`, `RUN_WEB_E2E=1` Chromium suite (14 passed).
+- #174 on branch `174-verification-queue` off `origin/main` (16 files, +326/-55):
+  prod compose (`worker-passive -Q passive -c 2`, `beat`, `env_file` moved to `x-app` anchor),
+  deploy script (service list derived, orphan cleanup on rollback, all-services running check),
+  `services/verifications.py` (`CheckState`/`InFlightCheck`, `QUEUE_STALL_AFTER`, newest-job /
+  `updated_at` based stall), `web/ui.py` + `verification.html` + `_ownership.html` +
+  `asset_detail.html` (stalled pill + `form-error role=alert`, no polling), unit + service +
+  web integration tests, docs (`deployment.md` workers section + known gaps, `architecture.md`,
+  `security.md`, ADR 0028, `DESIGN.md`), `CHANGELOG.md` Added + Fixed.
+- Verified: `ruff check`, `ruff format`, `pyright` (0 errors), `lint-imports` (8 kept),
+  `pytest` 2671 passed / 96.01%, `pre-commit run --all-files`, `RUN_WEB_E2E=1` Chromium (14 passed),
+  `compose.prod.yaml config --quiet` with temp env (services resolve).
 
 ## Next step
-1. Check CI on PR #173; fix anything red, then mark ready for review.
-2. If merged: next unblocked issue in epic #31 (dependencies closed).
+1. Commit as `Ali Ayati <seyyedaliayati@gmail.com>` (2 commits: infra + web), push branch,
+   open draft PR `fix(workers): run production workers and stop a stalled ownership card`,
+   `Closes #174`.
+2. After merge: CD timer deploys; verify `docker compose ps` (worker-passive + beat healthy),
+   `nuxsystems.com` verifies on first `Verify now`. `worker-ai`, backups, monitoring stay #29.
 
 ## Open threads
-- PR is ~1050 non-test added lines over the ~400 guideline (flagged in the PR description
-  with justification); reviewer may ask to split.
-- No live Compose-stack check was run (polling/cancel/diff covered by integration tests).
+- `worker-ai` intentionally out of scope (#29); AI jobs still queue.
+- Newest-job-wins: repeated "Verify now" restarts the 5-min grace (pre-existing pile-up, harmless).
+- Stalled card is static until reload; copy says so.
 
 ## Notes for the next agent
 - Shell env needed here: `UV_CACHE_DIR=/tmp/uv-cache-ubuntu`,
@@ -33,5 +43,7 @@ reviewed commit `21b1e8d`). Next: check CI, then mark ready for review.
   Chromium: `PLAYWRIGHT_BROWSERS_PATH=/tmp/ms-playwright` (installed there).
 - Hooks are authoritative: bare `ruff check` once looked green while the commit hook
   flagged PT018 — split compound `and` assertions in tests, always run the hooks.
-- Quota counting uses DB-clock `func.now() - timedelta(hours=1)`; `ScanAlreadyActive.scan_id`
-  is the running scan's UUID for the redirect/409 body.
+- `compose.prod.yaml config` needs a temp `deploy/attacksurf.env` (copy from `.example`,
+  delete after); `docker exec` healthchecks don't inherit entrypoint exports, hence the
+  inline `REDIS_URL` substitution. `docker compose config` output re-escapes `$` as `$$`.
+- Branch is off `origin/main` (includes #173); `21-scans-ui` work is merged, do not touch it.
