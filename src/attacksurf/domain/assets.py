@@ -19,6 +19,14 @@ _PERCENT_ENCODED = re.compile(r"%([0-9A-Fa-f]{2})")
 # doesn't start an escape); they get UTF-8 percent-encoded, as browsers do.
 _NOT_URI_CHAR = re.compile(r"%(?![0-9A-Fa-f]{2})|[^A-Za-z0-9\-._~!$&'()*+,;=:@/?%]")
 _UNRESERVED = frozenset(string.ascii_letters + string.digits + "-._~")
+# ADR 0017: a fetch URL is rebuilt from these segments, so they carry nothing a URL could
+# reinterpret (no "%", "@", ":" or "?") and can't be "." or ".." (they start alphanumeric).
+_REPO_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
+# "upload" has no dot, so it can never be mistaken for (or collide with) a remote host.
+UPLOAD_PREFIX = "upload/"
+MAX_UPLOAD_NAME_LENGTH = 64
+_UPLOAD_NAME = re.compile(rf"[a-z0-9][a-z0-9._-]{{0,{MAX_UPLOAD_NAME_LENGTH - 1}}}")
+_ARCHIVE_SUFFIX = re.compile(r"\.(zip|tgz|tbz2|txz|tar(\.(gz|bz2|xz))?)$")
 
 
 class AssetType(StrEnum):
@@ -51,7 +59,7 @@ class InvalidAssetValue(AssetError):
 
 
 class UnsupportedAssetType(AssetError):
-    """The type exists in the model but has no normalization yet (repo, binary)."""
+    """The type exists in the model but has no normalization yet (binary)."""
 
 
 class AssetNotFound(AssetError):
@@ -71,7 +79,9 @@ def normalize_asset_value(asset_type: AssetType, raw: str) -> str:
             return normalize_ip(raw)
         case AssetType.URL:
             return normalize_url(raw)
-        case AssetType.REPO | AssetType.BINARY:
+        case AssetType.REPO:
+            return normalize_repo(raw)
+        case AssetType.BINARY:
             raise UnsupportedAssetType(f"{asset_type} assets are not supported yet")
 
 
@@ -154,6 +164,45 @@ def normalize_url(raw: str) -> str:
     if len(url) > MAX_URL_LENGTH:
         raise InvalidAssetValue(f"URLs can be at most {MAX_URL_LENGTH} characters.")
     return url
+
+
+def normalize_repo(raw: str) -> str:
+    """`host/owner/name` for a remote repository, `upload/<name>` for an uploaded archive.
+
+    Never a URL (ADR 0017): no scheme, credentials, port, query, fragment or `.git` is stored.
+    """
+    value = raw.strip()
+    if value.startswith(UPLOAD_PREFIX):
+        if not _UPLOAD_NAME.fullmatch(value.removeprefix(UPLOAD_PREFIX)):
+            raise InvalidAssetValue("That is not a valid upload name.")
+        return value
+    host, _, path = value.removeprefix("https://").partition("/")
+    segments = path.removesuffix("/").removesuffix(".git").split("/")
+    # A name still ending in ".git" ("b.git.git", "b.GIT") would normalize to another value on
+    # the next pass, and the fetcher appends ".git" itself.
+    if (
+        len(segments) < 2  # noqa: PLR2004
+        or not all(_REPO_SEGMENT.fullmatch(s) for s in segments)
+        or segments[-1].lower().endswith(".git")
+    ):
+        raise InvalidAssetValue("Enter a repository as host/owner/name, like github.com/acme/app.")
+    # Rejects ports, "user@host", other schemes ("ssh:") and single-label hosts.
+    repo = f"{normalize_hostname(host)}/{'/'.join(segments)}"
+    if len(repo) > MAX_URL_LENGTH:
+        raise InvalidAssetValue(f"Repository paths can be at most {MAX_URL_LENGTH} characters.")
+    return repo
+
+
+def upload_repo_value(filename: str) -> str:
+    """The repo asset value for an uploaded archive: a bounded slug of its file name.
+
+    The file name is attacker-chosen, so only its last path component survives, lowercased,
+    without the archive extension, and anything outside `[a-z0-9._-]` becomes "-".
+    """
+    base = re.split(r"[/\\]", filename.strip())[-1].lower()
+    slug = re.sub(r"[^a-z0-9._-]+", "-", _ARCHIVE_SUFFIX.sub("", base))
+    slug = slug.lstrip("-._")[:MAX_UPLOAD_NAME_LENGTH].rstrip("-._")
+    return UPLOAD_PREFIX + (slug or "archive")
 
 
 def _normalize_url_host(netloc: str, hostname: str) -> str:

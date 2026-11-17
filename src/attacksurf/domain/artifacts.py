@@ -14,6 +14,15 @@ from uuid import UUID
 STAGED_NAME = "artifact"
 # Above the launcher's longest run (840 s) plus time queued, so a sweep never hits a live run.
 STAGE_MAX_AGE_SECONDS = 3600
+# Enough leading bytes to tell the formats apart: tar's magic sits at offset 257.
+SNIFF_BYTES = 262
+_ARCHIVE_MAGIC = (
+    (0, b"PK\x03\x04", "zip"),
+    (0, b"\x1f\x8b", "gzip"),
+    (0, b"BZh", "bzip2"),
+    (0, b"\xfd7zXZ\x00", "xz"),
+    (257, b"ustar", "tar"),
+)
 
 
 class ArtifactKind(StrEnum):
@@ -43,6 +52,22 @@ class ArtifactCorrupt(ArtifactError):
 
 class ArtifactStorageUnavailable(ArtifactError):
     """No encryption key is configured, or the storage directory can't be used."""
+
+
+class UnsupportedArtifactFormat(ArtifactError):
+    """The upload's leading bytes are not a format we analyse."""
+
+
+def sniff_archive(head: bytes) -> str | None:
+    """The archive format the first `SNIFF_BYTES` announce, or None.
+
+    A cheap gate on uploads, never a parse: the archive is only opened inside the sandbox
+    (ADR 0017), which decides for itself whether it is valid.
+    """
+    for offset, magic, name in _ARCHIVE_MAGIC:
+        if head[offset : offset + len(magic)] == magic:
+            return name
+    return None
 
 
 @dataclass(frozen=True)

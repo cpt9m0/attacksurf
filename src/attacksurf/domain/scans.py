@@ -11,6 +11,10 @@ class ScanCancelled(ScanError):
     """Output arrived for a scan that was cancelled: it is dropped, never written."""
 
 
+class ScanNotQueued(ScanError):
+    """The scan's task could not be sent to the queue; the scan was marked failed."""
+
+
 class ScanStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"

@@ -10,10 +10,18 @@ from flask_login import current_user
 from werkzeug.wrappers.response import Response as BaseResponse
 
 from attacksurf.domain.accounts import Role, has_role
-from attacksurf.domain.assets import AssetError, AssetNotFound, AssetType
-from attacksurf.services import asset_views, verifications
+from attacksurf.domain.artifacts import ArtifactError, ArtifactStorageUnavailable
+from attacksurf.domain.assets import (
+    AssetError,
+    AssetNotFound,
+    AssetType,
+    InvalidAssetValue,
+)
+from attacksurf.domain.scans import ScanNotQueued
+from attacksurf.services import asset_views, repos, verifications
 from attacksurf.services import assets as assets_service
 from attacksurf.services.asset_views import AssetFilter, AssetStatus
+from attacksurf.web import uploads
 from attacksurf.web.asset_params import parse_asset_filter
 from attacksurf.web.auth import require_role
 from attacksurf.web.db import get_session
@@ -39,12 +47,13 @@ NAV_ITEMS = (
     NavItem("ui.findings", "Findings", "bug"),
     NavItem("ui.settings", "Settings", "settings"),
 )
-# Repo and binary assets don't exist yet (post-MVP modules), so they aren't offered as filters.
+# Binary assets don't exist yet (#101), so they aren't offered as a filter.
 _TYPE_LABELS = {
     AssetType.DOMAIN: "Domain",
     AssetType.SUBDOMAIN: "Subdomain",
     AssetType.IP: "IP address",
     AssetType.URL: "URL",
+    AssetType.REPO: "Code repository",
 }
 ASSET_TABS = (("overview", "Overview"), ("findings", "Findings"), ("scans", "Scan history"))
 
@@ -89,11 +98,40 @@ def add_domain() -> BaseResponse:
             )
         return _assets_page(AssetFilter(), 1, status=422, add_value=value, add_error=str(exc))
     flash(f"Added {asset.value}. Run a scan to discover what's under it.", "success")
-    target = url_for("ui.asset_detail", asset_id=asset.id)
-    if is_htmx_request():
-        # A redirect would be followed and swapped into the form; this makes HTMX navigate.
-        return Response(status=200, headers={"HX-Redirect": target})
-    return redirect(target, 303)
+    return _navigate(url_for("ui.asset_detail", asset_id=asset.id))
+
+
+@bp.post("/assets/upload")
+def upload_repo() -> BaseResponse:
+    """Store an uploaded archive as a repo asset and queue its scan (#87)."""
+    archive = request.files.get("archive")
+    store = uploads.get_artifact_store()
+    try:
+        if store is None:
+            raise ArtifactStorageUnavailable(uploads.NOT_CONFIGURED)
+        if archive is None or not archive.filename:
+            raise InvalidAssetValue("Choose an archive to upload.")
+        upload = repos.upload_repo_archive(
+            get_session(),
+            store,
+            uploads.get_artifact_policy(),
+            get_task_queue(),
+            org_id=_org_id(),
+            filename=archive.filename,
+            source=archive.stream,
+            actor_id=current_user.session_user.user_id,
+        )
+    except (AssetError, ArtifactError, ScanNotQueued) as exc:
+        status = uploads.upload_error_status(exc)
+        if is_htmx_request():
+            return uploads.upload_form(str(exc), status)
+        return _assets_page(AssetFilter(), 1, status=status, upload_error=str(exc))
+    flash(
+        f"Uploaded {upload.asset_value}. Its scan is queued until the analysis worker is "
+        "available.",
+        "success",
+    )
+    return _navigate(url_for("ui.asset_detail", asset_id=upload.asset_id))
 
 
 @bp.get("/assets/<uuid:asset_id>")
@@ -206,6 +244,14 @@ def _org_id() -> UUID:
     return current_user.session_user.org_id
 
 
+def _navigate(target: str) -> BaseResponse:
+    """Go to `target` after a form succeeded, for HTMX and plain posts alike."""
+    if is_htmx_request():
+        # A redirect would be followed and swapped into the form; this makes HTMX navigate.
+        return Response(status=200, headers={"HX-Redirect": target})
+    return redirect(target, 303)
+
+
 def _ownership_card(asset_id: UUID) -> Response:
     """The ownership card of one asset; on a subdomain, its root's proof, read-only."""
     return render_page("pages/_ownership.html", **_ownership_context(asset_id))
@@ -252,4 +298,6 @@ def _assets_page(flt: AssetFilter, page: int, status: int = 200, **form: str) ->
         status_options=[(s.value, s.value.capitalize()) for s in AssetStatus],
         add_value=form.get("add_value", ""),
         add_error=form.get("add_error"),
+        upload_error=form.get("upload_error"),
+        **uploads.upload_context(),
     )

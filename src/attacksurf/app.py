@@ -27,6 +27,7 @@ from attacksurf.web.health import bp as health_bp
 from attacksurf.web.queue import init_queue
 from attacksurf.web.security import init_security_headers
 from attacksurf.web.ui import bp as ui_bp
+from attacksurf.web.uploads import init_uploads
 
 
 def create_app(settings: Settings | None = None) -> Flask:
@@ -45,6 +46,7 @@ def create_app(settings: Settings | None = None) -> Flask:
     init_queue(app, settings)
     init_security_headers(app, settings)
     init_error_handlers(app)
+    init_uploads(app, settings)  # before init_auth: the body ceiling must precede CSRF
     init_auth(app, settings)
     app.register_blueprint(ui_bp)
     app.register_blueprint(health_bp)
