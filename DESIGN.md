@@ -111,7 +111,7 @@ Specs (visuals) stay TBD.
 | Form field | label, hint, inline error (HTMX validation) | TBD |
 | File field | `file_field(name, label, accept=, error=, hint=)`: a native file input with the form field's label, hint and inline error; never a `value`. The hint states accepted formats and the size limit | TBD |
 | Flash / toast | success / error / info | TBD |
-| Progress | scan stage progress, polled via HTMX | TBD |
+| Progress | scan stage progress (`pages/_scan_progress.html`, polled via HTMX): a "N of M jobs finished" line with `role="status"`, a native `<progress>` element, a per-job table (stage, scanner, asset, status pill, sanitized error, finished time), the new/fixed/regressed/observed finding counts by severity with new/disappeared asset links, and a cancel action (behind `confirm_dialog`, secondary variant) while active. The section polls itself (`hx-get` to `ui.scan_progress`, `hx-trigger="every 2s"`, `hx-target="this"`, `hx-swap="outerHTML"`, `hx-sync="this:replace"`, `aria-busy`); once the scan is terminal the attributes are gone, so polling stops and the final swap reveals the diff. The scan detail page includes the same fragment | Implemented in #21 (visual spec TBD) |
 | Code / evidence block | monospace, escaped, copy button, size-capped with "show more" | TBD |
 | AI panel | AI triage output, clearly labeled as AI-generated, shows model + prompt version | TBD |
 | Empty state | illustration/icon + one-line explanation + primary action | TBD |
@@ -175,5 +175,6 @@ Specs (visuals) stay TBD.
 - [ ] Color palette + severity scale (light/dark), contrast-verified
 - [ ] Typography and spacing scales
 - [ ] Component specs for the table above
-- [ ] Key screens: dashboard, asset list/detail, scan progress, findings list/detail, settings
+- [x] Key screens: dashboard, asset list/detail, scan progress, findings list/detail, settings
+  (scan progress, like the rest, has structure only; visual values are still placeholders)
 - [x] Decide CSS approach (#6): plain CSS + tokens

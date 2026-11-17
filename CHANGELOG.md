@@ -6,6 +6,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Scans UI: start a `dns_passive` scan from the Scans page or an active root domain's page,
+  watch stage/job progress polling every 2 s, cancel a running scan, and review the new /
+  fixed / regressed finding diff with new and disappeared assets when it finishes. Same over
+  `/api/v1/scans`: `POST` creates from a `root_asset_id` (201, `Location`), `GET` lists and
+  shows one scan with its jobs and diff. Starting and cancelling is open to every org
+  member; a second concurrent scan of the same root is refused (409 with the running scan's
+  id) and each org may start `SCAN_MAX_STARTS_PER_HOUR` scans per profile per hour (default
+  10, 429 beyond it). Cancellation is database-only like archiving (ADR 0021): queued work
+  drains without writing, nothing is revoked in Celery (#21).
 - `sandbox-launcher` service (`python -m attacksurf.sandbox_launcher`): `POST /runs` takes an
   analyzer name and artifact ID and runs the analyzer in one proxy-approved sandbox, killing it
   at the wall time or past 2 MiB of stdout and always removing the container. It refuses to

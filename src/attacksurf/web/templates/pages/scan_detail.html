@@ -1,0 +1,25 @@
+{% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
+{% from "components/badges.html" import status_pill %}
+{% from "components/time.html" import relative_time %}
+{% block title %}Scan of {{ scan.root_value }}{% endblock %}
+{% block content %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+  <a href="{{ url_for('ui.scans') }}">Scans</a>
+  / <a class="mono" href="{{ url_for('ui.asset_detail', asset_id=scan.root_asset_id) }}">{{ scan.root_value }}</a>
+</nav>
+
+<div class="page-header">
+  <h1>Scan of <span class="mono">{{ scan.root_value }}</span></h1>
+  {{ status_pill(scan.status) }}
+</div>
+
+<dl class="meta card card-body">
+  <div><dt>Profile</dt><dd><code>{{ scan.profile }}</code></dd></div>
+  <div><dt>Trigger</dt><dd>{{ scan.triggered_by }}</dd></div>
+  <div><dt>Queued</dt><dd>{{ relative_time(scan.created_at) }}</dd></div>
+  <div><dt>Started</dt><dd>{{ relative_time(scan.started_at) }}</dd></div>
+  <div><dt>Finished</dt><dd>{{ relative_time(scan.finished_at) }}</dd></div>
+</dl>
+
+{% include "pages/_scan_progress.html" %}
+{% endblock %}
