@@ -140,6 +140,10 @@ Only normalized findings (rule, severity, asset name, trimmed evidence) and aggr
 Never: credentials, API keys, raw uploads. Each AI feature documents its payload here as it is
 added. Orgs can disable AI or bring their own provider key.
 
+What is stored about each call (`llm_usage`): provider, model, purpose, whose key paid, token
+counts, estimated cost, latency, and on failure the error's class name. Never the prompt, the
+reply, the error message, the API key or the base URL (which can embed credentials).
+
 ## Reporting a vulnerability
 
 Open a private security advisory on GitHub rather than a public issue.

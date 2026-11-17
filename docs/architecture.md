@@ -124,7 +124,8 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 | `Verification` | proof of ownership of a root domain (`_attacksurf-verify.<root>` TXT, `pending`/`verified`/`revoked`, `verified_at`, `last_checked_at`, `recheck_at`, `expires_at`; unique per `(org_id, asset_id)`). Renewals are due after 20 hours; authorization expires after 24 hours. Subdomains inherit their root's proof; a `verified` row counts only while `expires_at` is in the future. Written by `services.verifications` / `services.ownership`, read by `DbOwnershipChecker` (ADRs 0014, 0015) |
 | `Scan`, `Job` | one run of a profile (`dns_passive`, …) against a root asset (`queued/running/completed/failed/cancelled`, triggered by `user`/`schedule`; `stats` holds the #20 diff: new/fixed/regressed findings by severity and new/disappeared assets, ADR 0027), and its jobs: a pipeline stage, or one scanner on one asset (`skipped` = not run, e.g. denied by ScopeGuard). `scan_id` is NULL for work that isn't part of a scan (ownership verification). Deleting the root asset deletes its scans (their jobs are kept with `scan_id` NULL); deleting another asset keeps the job with `asset_id` NULL |
 | `Finding`, `Evidence` | normalized result, one row per issue across scans: unique `(org_id, fingerprint)`, with `fingerprint = domain.findings.finding_fingerprint(org_id, asset_id, rule_id, location)` (SHA-256 of a versioned JSON array; `location` tells apart several issues of one rule on one asset). `rule_id` points into the rule catalog (`domain.rules`: title, default severity, remediation template, references). `scanner` is the `Job.scanner` that last observed it (`NULL` before #20: never auto-fixed), and `evidence_digest` is the SHA-256 of the last observed evidence set (empty included) for material-change checks. Status `open → fixed → regressed → fixed` (the diff stage `services.scan_diff` owns those transitions, ADR 0027), plus the user's `accepted_risk`/`false_positive`, which reopen to `open` only on a material change; `fixed_at` is set exactly when `fixed`. `FindingObservation` records one row per `(scan, finding)` with the severity at observation time: it is what a scan's own stats and fix/regress decisions use, so they never depend on the mutable `last_seen_scan_id`; rows cascade with their scan and finding. Deleting a scan keeps its findings (scan references become NULL); evidence (`dns_record`/`http_response`/`raw`) goes with its finding |
-| `OrgSettings`, `LLMUsage` | LLM provider config (encrypted keys) and token/cost tracking |
+| `LLMUsage` | one row per finished LLM call, successful or not: provider, model, `purpose`, `key_source` (`org`/`instance`), input/output tokens, `usage_reported`, `estimated_cost_usd` (snapshotted from `ai/pricing.py` list prices; NULL for an unpriced model or unreported usage), latency (NULL on failure), `success` + `error_type` (class name only). Append-only; indexed by `(org_id, created_at)` for #24's monthly instance-key cap. Written by `services.llm_usage.record_llm_usage` |
+| `OrgSettings` *(#24)* | per-org LLM provider config (encrypted keys) |
 | `ScanSchedule`, `AuditLog` | continuous monitoring and an append-only audit trail (`services.audit.audit()`, written in the same transaction as the change) |
 
 ## Scan pipeline
@@ -317,7 +318,12 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   `TrackedTask.soft_time_limit`); Celery alone retries `LLMUnavailable`, at task level, so AI
   tasks make one call each or cache per finding.
 - Every call: versioned prompt, pydantic output schema, usage recorded, budget enforced, results
-  cached by `(prompt_version, model, input hash)`.
+  cached by `(prompt_version, model, input hash)`. Usage is recorded for failed calls too (the
+  tokens their earlier attempts spent, `LLMError.usage`); the caller commits that row before
+  re-raising, or it rolls back with the task. Cost is an estimate from list prices in code, not
+  a bill.
+- Without an instance key and model, `create_app` logs once that AI is off for orgs without
+  their own key.
 - AI consumes **normalized findings only**; scan-derived text is treated as untrusted data.
 - AI output is advisory: adjusted severity is shown next to the scanner's severity and never
   auto-closes findings.
