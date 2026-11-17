@@ -13,7 +13,7 @@ from structlog.testing import capture_logs
 
 from attacksurf.config import SANDBOX_MAX_WALL_TIME_SECONDS
 from attacksurf.sandbox_launcher.catalog import Analyzer
-from attacksurf.sandbox_launcher.proxy import ProxyClient, ProxyError
+from attacksurf.sandbox_launcher.proxy import CONTROL_TIMEOUT_SECONDS, ProxyClient, ProxyError
 from attacksurf.sandbox_launcher.runner import (
     KILL_GRACE_SECONDS,
     RunOutcome,
@@ -21,7 +21,7 @@ from attacksurf.sandbox_launcher.runner import (
     run_sandbox,
 )
 from attacksurf.sandbox_launcher.stream import MAX_STDOUT_BYTES
-from attacksurf.sandbox_proxy.server import RUN_TIMEOUT_SECONDS
+from attacksurf.sandbox_proxy.server import RUN_TIMEOUT_SECONDS, ProxyServer
 from tests.docker_fakes import CREATED, FakeDocker, FakeRun
 from tests.unit.sandbox_launcher.test_container import analyzer
 
@@ -290,6 +290,56 @@ def test_cleanup_failure_is_logged(
     failed = [event for event in events if event["event"] == "sandbox_cleanup_failed"]
     assert len(failed) == 1
     assert failed[0]["container_id"] == CREATED
+
+
+class _ForgetsAfterStart(ProxyClient):
+    """Stands in for a proxy restart mid-run: once start is answered the proxy no longer knows
+    the container, so it refuses kill and remove (403) without asking Docker."""
+
+    def __init__(self, port: int, server: ProxyServer) -> None:
+        super().__init__("127.0.0.1", port)
+        self._server = server
+
+    def start(self, container_id: str, timeout: float = CONTROL_TIMEOUT_SECONDS) -> None:
+        super().start(container_id, timeout)
+        self._server.containers.discard(container_id)
+
+
+def test_cleanup_the_proxy_refuses_is_logged_not_assumed_done(
+    proxy_server: ProxyServer, docker: FakeDocker, artifact_dir: Path
+) -> None:
+    docker.run = FakeRun(chunks=[frame(1, b"x")], hold_open=True)
+    forgetful = _ForgetsAfterStart(proxy_server.server_address[1], proxy_server)
+
+    with capture_logs() as events:
+        outcome = run(forgetful, artifact_dir, wall_time=0.2)
+
+    failed = [event for event in events if event["event"] == "sandbox_cleanup_failed"]
+    assert outcome.timed_out
+    assert [event["container_id"] for event in failed] == [CREATED]
+    assert not saw(docker, "POST", "/kill")
+    assert not saw(docker, "DELETE", f"/containers/{CREATED}")
+
+
+def test_refused_cleanup_is_not_an_alert_when_the_exit_was_confirmed(
+    proxy_server: ProxyServer, docker: FakeDocker, artifact_dir: Path
+) -> None:
+    class ExitsBeforeKill(ProxyClient):
+        """The container exits and is removed just after the runner decided to kill it."""
+
+        def kill(self, container_id: str) -> None:
+            docker.run.end(0)  # pyright: ignore[reportOptionalMemberAccess]
+            time.sleep(0.3)  # let the removed-wait return, after which the proxy forgets it
+            super().kill(container_id)
+
+    docker.run = FakeRun(chunks=[frame(1, b"x")], hold_open=True)
+    client = ExitsBeforeKill("127.0.0.1", proxy_server.server_address[1])
+
+    with capture_logs() as events:
+        outcome = run(client, artifact_dir, wall_time=0.2)
+
+    assert outcome.timed_out
+    assert not [event for event in events if event["event"] == "sandbox_cleanup_failed"]
 
 
 # --- D. Logging and leakage guards --------------------------------------------------------------

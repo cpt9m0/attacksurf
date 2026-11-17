@@ -8,7 +8,7 @@ import pytest
 
 from attacksurf.sandbox_launcher.proxy import ProxyClient
 from attacksurf.sandbox_proxy.policy import SandboxPolicy
-from attacksurf.sandbox_proxy.server import make_server
+from attacksurf.sandbox_proxy.server import ProxyServer, make_server
 from tests.docker_fakes import FakeDocker, serving
 from tests.unit.sandbox_launcher.test_container import IMAGE
 
@@ -31,7 +31,7 @@ def artifact_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def proxy_port(docker: FakeDocker, tmp_path: Path) -> Iterator[int]:
+def proxy_server(docker: FakeDocker, tmp_path: Path) -> Iterator[ProxyServer]:
     policy = SandboxPolicy(
         images=frozenset({IMAGE}),
         runtimes=frozenset({"runsc"}),
@@ -39,7 +39,12 @@ def proxy_port(docker: FakeDocker, tmp_path: Path) -> Iterator[int]:
         osv_image=None,
     )
     with serving(make_server("127.0.0.1", 0, policy, str(docker.server_address))) as server:
-        yield server.server_address[1]
+        yield server
+
+
+@pytest.fixture
+def proxy_port(proxy_server: ProxyServer) -> int:
+    return proxy_server.server_address[1]
 
 
 @pytest.fixture

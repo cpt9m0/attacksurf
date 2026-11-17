@@ -24,7 +24,9 @@ _MAX_REPLY_BYTES = 64 * 1024
 _MAX_HEAD_BYTES = 4096
 _CONTAINER_ID = re.compile(r"[0-9a-f]{64}")
 _HEAD_END = b"\r\n\r\n"
-_GONE = (HTTPStatus.NOT_FOUND, HTTPStatus.FORBIDDEN)
+# Only Docker's own answers prove anything. The proxy's 403 (it doesn't know the ID, e.g. after a
+# restart) is never forwarded to Docker, so it says nothing about whether the container is gone.
+_GONE = (HTTPStatus.NOT_FOUND,)
 _KILL_DONE = (HTTPStatus.NO_CONTENT, HTTPStatus.CONFLICT, *_GONE)
 _REMOVE_DONE = (HTTPStatus.NO_CONTENT, *_GONE)
 
@@ -134,8 +136,8 @@ class ProxyClient:
             raise ProxyError("start", status)
 
     def kill(self, container_id: str) -> None:
-        """SIGKILL. 404, 409 and 403 all mean it is not running any more: the proxy answers 403
-        for a container it has forgotten, which it does once removal is confirmed."""
+        """SIGKILL. 404 and 409 mean it is not running any more. A 403 (the proxy has forgotten
+        the container) raises: nothing reached Docker, so the container may still be running."""
         status, _ = self._call(
             "POST", f"/containers/{container_id}/kill?signal=SIGKILL", stage="kill"
         )
@@ -143,8 +145,8 @@ class ProxyClient:
             raise ProxyError("kill", status)
 
     def remove(self, container_id: str) -> bool:
-        """Force-remove; True when the container is gone (204, 404, or 403 from a proxy that
-        has already forgotten it)."""
+        """Force-remove; True when Docker says the container is gone (204 or 404). A 403 from a
+        proxy that has forgotten it is False: nothing reached Docker, so removal is unconfirmed."""
         status, _ = self._call("DELETE", f"/containers/{container_id}?force=1", stage="remove")
         return status in _REMOVE_DONE
 

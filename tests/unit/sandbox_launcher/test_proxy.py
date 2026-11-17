@@ -190,6 +190,7 @@ def test_from_url_refuses_extras_without_echoing_them(url: str) -> None:
         (http_reply(500, b"{}"), lambda c: c.runtimes()),
         (http_reply(500, b"{}"), lambda c: c.start(CREATED)),
         (http_reply(500, b"{}"), lambda c: c.kill(CREATED)),
+        (http_reply(403, b"{}"), lambda c: c.kill(CREATED)),
         (b"HTTP/1.1 403 X\r\nContent-Length: 0\r\n\r\n", lambda c: c.attach(CREATED)),
         (b"garbage\r\n\r\n", lambda c: c.attach(CREATED)),
         (b"HTTP/1.1 101 X\r\n" + b"a: b\r\n" * 2000, lambda c: c.attach(CREATED)),
@@ -213,7 +214,7 @@ def test_proxy_error_carries_stage_and_status_not_reply_bytes(stub_client: Proxy
     assert MARKER not in repr(error.value) + str(error.value.args)
 
 
-@pytest.mark.parametrize(("status", "gone"), [(204, True), (404, True), (403, True), (500, False)])
+@pytest.mark.parametrize(("status", "gone"), [(204, True), (404, True), (403, False), (500, False)])
 def test_remove_reports_whether_the_container_is_gone(status: int, gone: bool) -> None:
     with serving(_Stub(http_reply(status, b""))) as server:
         client = ProxyClient("127.0.0.1", server.server_address[1])
@@ -221,10 +222,25 @@ def test_remove_reports_whether_the_container_is_gone(status: int, gone: bool) -
         assert client.remove(CREATED) is gone
 
 
-@pytest.mark.parametrize("status", [204, 403, 404, 409])
+@pytest.mark.parametrize("status", [204, 404, 409])
 def test_kill_accepts_a_container_that_is_not_running(status: int) -> None:
     with serving(_Stub(http_reply(status, b""))) as server:
         ProxyClient("127.0.0.1", server.server_address[1]).kill(CREATED)
+
+
+def test_an_ownership_denial_leaves_cleanup_unconfirmed(
+    client: ProxyClient, docker: FakeDocker
+) -> None:
+    # A proxy that restarted has forgotten a container that may still be running: it answers 403
+    # without asking Docker, so neither call proves anything.
+    docker.run = FakeRun()
+
+    assert client.remove(CREATED) is False
+    with pytest.raises(ProxyError) as error:
+        client.kill(CREATED)
+
+    assert (error.value.stage, error.value.status) == ("kill", 403)
+    assert methods_and_paths(docker) == []
 
 
 def test_unreachable_proxy_raises_proxy_error() -> None:

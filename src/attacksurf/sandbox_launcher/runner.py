@@ -191,7 +191,9 @@ def _stop(proxy: ProxyClient, container_id: str, waiter: _Waiter) -> None:
         gone = proxy.remove(container_id)
     except ProxyError:
         gone = False
-    if not gone:
+    # The proxy refuses (403) a container it has already seen removed, so a refusal after an exit
+    # that landed meanwhile is no failure: the confirmed exit code is the proof, not the 403.
+    if not gone and not waiter.confirmed(0):
         log.error("sandbox_cleanup_failed", container_id=container_id, stage="remove")
 
 
