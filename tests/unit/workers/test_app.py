@@ -1,17 +1,22 @@
+import io
 import logging
 import os
 import subprocess
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from celery.signals import setup_logging, worker_process_init
+from pydantic import SecretStr
 
+from attacksurf.domain.artifacts import ArtifactPolicy, ArtifactStorageUnavailable
 from attacksurf.infra.cache import RedisScanCache
 from attacksurf.infra.scope_guard import ScopeGuard
 from attacksurf.services.ownership import DbOwnershipChecker
 from attacksurf.workers import app as worker_app
 from attacksurf.workers import runtime
+from tests.helpers import make_settings
 
 
 def test_session_factory_is_cached_per_process() -> None:
@@ -97,3 +102,62 @@ def test_module_level_tasks_do_not_load_real_settings_during_collection(tmp_path
     )
 
     assert result.returncode == 0, result.stdout.decode()
+
+
+def _runtime_with(monkeypatch: pytest.MonkeyPatch, **overrides: object) -> None:
+    current = make_settings(env="test", secret_key=SecretStr("test-secret-key"), **overrides)
+    monkeypatch.setattr(runtime, "settings", lambda: current)
+    runtime.artifact_store.cache_clear()
+    runtime.artifact_policy.cache_clear()
+
+
+def test_artifact_store_uses_both_roots_and_the_app_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "run").mkdir()
+    _runtime_with(
+        monkeypatch,
+        app_encryption_key=SecretStr("a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s"),
+        artifact_store_root=str(tmp_path / "store"),
+        sandbox_artifact_root=str(tmp_path / "run"),
+    )
+    org_id, artifact_id = uuid4(), uuid4()
+
+    store = runtime.artifact_store()
+    stored = store.put(org_id, artifact_id, io.BytesIO(b"payload"), max_bytes=100)
+    store.stage(org_id, artifact_id, stored.key_envelope, sha256=stored.sha256)
+
+    assert store is runtime.artifact_store()
+    assert (tmp_path / "store" / str(org_id) / str(artifact_id)).is_file()
+    assert (tmp_path / "run" / str(artifact_id) / "artifact").read_bytes() == b"payload"
+    runtime.artifact_store.cache_clear()
+
+
+def test_artifact_store_without_a_key_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _runtime_with(
+        monkeypatch,
+        artifact_store_root=str(tmp_path / "store"),
+        sandbox_artifact_root=str(tmp_path / "run"),
+    )
+
+    with pytest.raises(ArtifactStorageUnavailable):
+        runtime.artifact_store().put(uuid4(), uuid4(), io.BytesIO(b"x"), max_bytes=100)
+
+    runtime.artifact_store().delete(uuid4(), uuid4())  # deleting needs no key
+    runtime.artifact_store.cache_clear()
+
+
+def test_artifact_policy_comes_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    _runtime_with(
+        monkeypatch,
+        artifact_max_bytes=1000,
+        artifact_org_quota_bytes=5000,
+        artifact_retention_hours=48,
+    )
+
+    assert runtime.artifact_policy() == ArtifactPolicy(
+        max_bytes=1000, org_quota_bytes=5000, retention_hours=48
+    )
+    runtime.artifact_policy.cache_clear()

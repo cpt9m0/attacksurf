@@ -40,6 +40,7 @@ dependencies = [
     "anthropic>=2.3.0",
     "argon2-cffi>=25.1.0",
     "celery[redis]>=5.6.3",
+    "cryptography>=50.0.2",
     "dnspython>=2.9.0",
     "flask>=3.1.3",
     "flask-limiter[redis]>=3.8",
@@ -234,3 +235,13 @@ forbidden_modules = ["anthropic"]
 ignore_imports = ["attacksurf.ai.providers.** -> anthropic"]
 # Everything reaches a provider through ai.providers; only direct SDK imports are restricted.
 allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "ai never touches artifacts: LLMs see normalized findings only (ADR 0028)"
+type = "forbidden"
+source_modules = ["attacksurf.ai"]
+forbidden_modules = [
+    "attacksurf.domain.artifacts",
+    "attacksurf.services.artifacts",
+    "attacksurf.infra.storage",
+]

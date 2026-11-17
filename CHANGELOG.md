@@ -6,6 +6,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Encrypted artifact storage for uploaded and fetched repositories and binaries: an `Artifact`
+  model (migration 0010), streaming AES-256-GCM envelope encryption with a per-artifact key
+  wrapped by the new `APP_ENCRYPTION_KEY`, a per-artifact size limit enforced while reading
+  (`ARTIFACT_MAX_BYTES`), a per-organization quota (`ARTIFACT_ORG_QUOTA_BYTES`), plaintext
+  staged only for one sandbox run, and a retention task (`passive.purge_expired_artifacts`,
+  every 10 minutes) that deletes expired files and erases their keys
+  (`ARTIFACT_RETENTION_HOURS`; 0 = delete once analysis completes). Storage only: no upload
+  route yet. Adds the `cryptography` dependency (ADR 0028, #85).
 - LLM usage tracking: an `llm_usage` row per finished LLM call, failed ones included, with the
   model, purpose, whose key paid, token counts, latency and a cost estimated from list prices
   in `ai/pricing.py`. Prompts, replies, error messages and keys are never stored. The app warns
@@ -73,6 +81,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   redirecting to the apex, and a deploy runbook in `docs/deployment.md` (ADR 0020, #132).
 
 ### Fixed
+- Artifact staging and deletion are serialised per artifact with a `flock`, so a purge can no
+  longer mark an artifact deleted mid-staging and leave its plaintext mounted until the sweep,
+  and a failed purge pushes its artifact behind the rest of the queue instead of starving it
+  on every run (#85).
+- Artifact deletion now fails instead of reporting success when the staged plaintext cannot be
+  removed: the key is kept and the row stays live, so the purge retries it instead of leaving
+  mountable plaintext for a deleted artifact (#85).
 - The content area fills the main column on every viewport instead of stopping at a 72rem cap,
   so wide screens no longer leave empty space to the right of the dashboard (#149).
 - Pyright and pytest pass on Windows again: pyright checks as Linux (where the app runs), and
