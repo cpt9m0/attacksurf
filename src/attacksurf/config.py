@@ -97,6 +97,9 @@ class Settings(BaseSettings):
     # from and where the plaintext for one run is staged.
     artifact_store_root: str = "/var/lib/attacksurf/artifact-store"
     sandbox_artifact_root: str = "/var/lib/attacksurf/artifacts"
+    # Sandboxed analysis (ADR 0016, #84): the launcher workers ask to run analyzers. Unset means
+    # every sandbox request is refused. May embed credentials, so it is a secret.
+    sandbox_launcher_url: SecretStr | None = None
 
     _secret_key_generated: bool = PrivateAttr(default=False)
 
@@ -146,6 +149,33 @@ class Settings(BaseSettings):
                 "ARTIFACT_STORE_ROOT and SANDBOX_ARTIFACT_ROOT must not contain each other"
             )
         return self
+
+    @field_validator("sandbox_launcher_url")
+    @classmethod
+    def _require_plain_launcher_url(cls, value: SecretStr | None) -> SecretStr | None:
+        # The same rule as `infra.sandbox.LauncherSandboxRunner`, checked at startup so a typo
+        # stops the worker instead of failing the first scan. The message never repeats the
+        # value, which may embed credentials.
+        if value is None:
+            return value
+        message = "SANDBOX_LAUNCHER_URL must be http://host[:port] only"
+        try:
+            parts = urlsplit(value.get_secret_value())
+            parts.port  # noqa: B018 - raises ValueError for a bad port; the value isn't needed
+        except ValueError:
+            raise ValueError(message) from None
+        plain = (
+            parts.scheme == "http"
+            and parts.hostname
+            and parts.username is None
+            and parts.password is None
+            and parts.path in ("", "/")
+            and not parts.query
+            and not parts.fragment
+        )
+        if not plain:
+            raise ValueError(message)
+        return value
 
     @model_validator(mode="after")
     def _validate_dns(self) -> Self:

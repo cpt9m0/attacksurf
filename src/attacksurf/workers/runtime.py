@@ -10,6 +10,7 @@ from attacksurf.config import Settings, get_settings
 from attacksurf.domain.artifacts import ArtifactPolicy, ArtifactStore
 from attacksurf.domain.cache import ScanCache
 from attacksurf.domain.net import IpIntel, TxtLookup
+from attacksurf.domain.sandbox import SandboxRunner, UnconfiguredSandboxRunner
 from attacksurf.domain.scanners import ScannerGate
 from attacksurf.infra.authoritative_dns import AuthoritativeTxtLookup
 from attacksurf.infra.cache import RedisScanCache
@@ -18,6 +19,7 @@ from attacksurf.infra.db.session import create_db_engine, create_session_factory
 from attacksurf.infra.dns import DnsPythonResolver
 from attacksurf.infra.http import SafeHttpClient
 from attacksurf.infra.ip_intel import Ip2AsnLookup
+from attacksurf.infra.sandbox import LauncherSandboxRunner
 from attacksurf.infra.scope_guard import ScopeGuard
 from attacksurf.infra.storage import LocalArtifactStore
 from attacksurf.services.ownership import DbOwnershipChecker
@@ -99,6 +101,15 @@ def artifact_policy() -> ArtifactPolicy:
     )
 
 
+@lru_cache(maxsize=1)
+def sandbox_runner() -> SandboxRunner:
+    """Off unless SANDBOX_LAUNCHER_URL is set; one client and pool per process."""
+    url = settings().sandbox_launcher_url
+    if url is None:
+        return UnconfiguredSandboxRunner()
+    return LauncherSandboxRunner(url.get_secret_value())
+
+
 def scanner_gate() -> ScannerGate:
     """The production gate: active checks run only on assets whose root proved ownership (#14)."""
     return ScopeGuard(
@@ -107,6 +118,7 @@ def scanner_gate() -> ScannerGate:
         ownership=DbOwnershipChecker(session_factory()),
         cache=scan_cache(),
         ip_intel=ip_intel(),
+        sandbox=sandbox_runner(),
     )
 
 

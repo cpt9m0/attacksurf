@@ -26,6 +26,9 @@ x-app: &app
     ARTIFACT_RETENTION_HOURS: ${ARTIFACT_RETENTION_HOURS:-}
     ARTIFACT_ORG_QUOTA_BYTES: ${ARTIFACT_ORG_QUOTA_BYTES:-}
     SCAN_MAX_STARTS_PER_HOUR: ${SCAN_MAX_STARTS_PER_HOUR:-}
+    # Unset (the default here): the workers refuse every sandbox request. This stack has no
+    # sandbox launcher yet, so point it at one you run yourself (http://host[:port] only).
+    SANDBOX_LAUNCHER_URL: ${SANDBOX_LAUNCHER_URL:-}
   volumes:
     - ./src:/app/src  # hot reload
     # Encrypted artifacts (ADR 0028). On the anchor, not per service: a merge replaces lists.
