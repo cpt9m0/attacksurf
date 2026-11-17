@@ -43,6 +43,15 @@ Constraints:
   Settings refuse equal or nested roots: ciphertext inside the mounted root would hand a
   sandbox other tenants' files, and a store root containing the run root would put plaintext
   inside the "ciphertext only" tree.
+- **Staging and deletion of one artifact are serialised across processes.** `stage` and
+  `delete` take an exclusive `flock` on `{ARTIFACT_STORE_ROOT}/{artifact_id}.lock`, so a purge
+  can't remove the row and the ciphertext while a staging is still reading it and then let that
+  staging publish mounted plaintext for a row already marked deleted. `stage` re-checks the
+  ciphertext under the lock and fails with `ArtifactNotFound` instead of renaming such a
+  directory into place. `flock` is released by the kernel when a process dies, so a killed
+  stager cannot wedge a delete, and the lock file is never unlinked (unlinking it would let two
+  processes "hold" the same lock). The lock lives in the ciphertext root, never in the
+  sandbox-visible one.
 - **Limits while reading.** `put` counts and hashes the plaintext as it streams and stops at
   `ARTIFACT_MAX_BYTES` (default 256 MiB, ceiling 512 MiB from ADR 0017) or the org's remaining
   `ARTIFACT_ORG_QUOTA_BYTES`, removing the partial file. The quota is re-checked under a lock on
@@ -52,7 +61,10 @@ Constraints:
   for artifacts that are never analysed, `delete_after` is set 24 hours after upload; a value
   above 0 keeps the artifact that many hours. `passive.purge_expired_artifacts` (beat, every
   10 minutes) deletes what is past `delete_after` and sweeps staged plaintext older than one
-  hour, which is above the launcher's longest run.
+  hour, which is above the launcher's longest run. A deletion that fails keeps the key and the
+  file and pushes `delete_after` behind everything still waiting (plus a 60 s floor), so a batch
+  of undeletable artifacts cannot starve the artifacts behind it, other orgs' included; it is
+  retried once its new deadline passes. A deadline a request moved after the attempt is kept.
 - **Staging ships as primitives only.** `stage`, `unstage` and `sweep_staged` on the store and
   the thin `stage_artifact` service exist and are tested, but nothing calls them. ADR 0016 says
   the credentialed worker never opens artifact bytes while ADR 0017 needs someone to decrypt
@@ -73,5 +85,7 @@ Constraints:
   yet.
 - Staging the same artifact twice fails until it is unstaged; concurrent runs of one artifact
   need #84 to decide how they share a staged copy.
+- The per-artifact lock files are never removed, so one small file per artifact stays in the
+  store root after its artifact is gone. They carry nothing but a name.
 - An import-linter contract keeps `attacksurf.ai` away from artifact code: LLMs only ever see
   normalized findings.
