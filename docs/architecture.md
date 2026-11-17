@@ -22,8 +22,8 @@ Browser ─► web    ├────────────►│ Redis  ├�
             └──────────────────► PostgreSQL ◄───────────────┘
 ```
 
-Analysis path (ADR 0016; `sandbox-proxy` and `sandbox-launcher` exist, the worker-side client
-and the analysis worker do not yet): only `sandbox-proxy` holds the Docker socket, and the
+Analysis path (ADR 0016; `sandbox-proxy`, `sandbox-launcher` and the worker-side client exist,
+the analysis worker does not yet): only `sandbox-proxy` holds the Docker socket, and the
 sandbox that reads the artifact has no network and no credentials.
 
 ```
@@ -75,6 +75,21 @@ shares with them (proxy limit ceilings, the digest pattern, create-body constant
   once (`select_runtime`): `runsc`, or `runc` only outside prod with `SANDBOX_ALLOW_RUNC=true`.
   Otherwise it exits non-zero. The empty catalog is allowed, so every run is a 404 until the
   first analyzer ships.
+
+### Sandbox client
+
+`infra/sandbox.py` is the worker's side of the launcher: `LauncherSandboxRunner` implements
+`domain.sandbox.SandboxRunner` over `POST /runs`. `workers.runtime.sandbox_runner()` builds it from
+`SANDBOX_LAUNCHER_URL` (cached, reset in each forked worker) and `scanner_gate()` hands it to the
+scope guard, which still limits each scanner to its granted analyzers. With the URL unset the
+gate gets `UnconfiguredSandboxRunner`, so every sandbox request is refused.
+
+- Plain `httpx.Client`, not the SSRF-guarded one: the launcher is on the internal network and its
+  URL is operator config (validated as `http://host[:port]` only), never scanner or user input.
+- The reply is capped at 3 MiB (base64 of a full 2 MiB stdout plus the JSON wrapper), never
+  inflated, and must have exactly the four expected keys with the right types.
+- 503 and network failures raise `TransientJobError` (retried); 404, 500 and an invalid reply raise
+  `SandboxError`. Messages are fixed text.
 
 ### Sandbox tools
 
@@ -416,7 +431,7 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 | `ai` | LLM calls | rate-limited per org |
 | `fetch` *(later)* | git smart-HTTP fetches | egress to allowlisted forges through ScopeGuard; no access to `sandbox-launcher`; never parses repository content (ADR 0017) |
 | `active` *(later)* | port/web probes on verified targets | separate network, egress rules |
-| `analysis` *(later)* | code/binary analysis (`sandbox_proxy/`, `sandbox_launcher/` and the `sandbox_tools/` archive extractor and binary format detector are implemented; the worker-side client, the images and the worker are not yet) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
+| `analysis` *(later)* | code/binary analysis (`sandbox_proxy/`, `sandbox_launcher/` and the `sandbox_tools/` archive extractor and binary format detector are implemented, as is the worker-side client `infra/sandbox.py`; the images and the worker are not yet) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
 
 - `infra/queue.py`: `create_celery(settings)` (Redis broker + result backend from `REDIS_URL`,
   JSON only, `acks_late` + `reject_on_worker_lost`, prefetch 1, results ignored unless a

@@ -200,6 +200,11 @@ The catalog is empty until the first analyzer ships, so a `POST /runs` for any a
 Without a reachable proxy, or without `runsc` (and no `runc` fallback), the launcher exits
 non-zero. Compose wiring comes with the analysis worker (#84).
 
+To let the Celery workers use a launcher you run yourself, set `SANDBOX_LAUNCHER_URL` in `.env`
+to an `http://host[:port]` the worker containers can reach (not `127.0.0.1`, which inside a
+container is the container itself). Unset, which is the default, they refuse every sandbox
+request.
+
 ## Everyday commands
 
 | Task | Command |
