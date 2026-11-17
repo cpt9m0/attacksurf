@@ -69,7 +69,11 @@ class Settings(BaseSettings):
     # Auth (#7). With signup off, only the very first user can still sign up (instance admin).
     allow_signup: bool = True
     session_lifetime_hours: int = Field(default=12, ge=1, le=720)
-    # Reverse proxies in front of the app. Count trusted hops, not components: Caddy alone = 1;
+    # Scans UI (#21): per-org hourly quota for starting scans of one profile. Upload scans
+    # (#87, #101) use their own profiles and their own limiter, so they don't consume this.
+    scan_max_starts_per_hour: int = Field(
+        default=10, ge=1, le=1000
+    )  # Reverse proxies in front of the app. Count trusted hops, not components: Caddy alone = 1;
     # Cloudflare Tunnel -> Caddy = 1 (cloudflared is not a proxy hop, Cloudflare is); Cloudflare
     # proxying to Caddy directly = 2. Decides which X-Forwarded-For entry is the client IP for
     # rate limiting; leave 0 when the app is reached directly.

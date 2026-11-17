@@ -32,6 +32,22 @@ def test_settings_have_no_default_llm_model() -> None:
     assert make_settings().llm_model is None
 
 
+def test_scan_quota_defaults_to_ten_starts_per_hour() -> None:
+    assert make_settings().scan_max_starts_per_hour == 10
+
+
+def test_scan_quota_reads_from_environment(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("SCAN_MAX_STARTS_PER_HOUR", "3")
+
+    assert settings_from_env().scan_max_starts_per_hour == 3
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1001", "many"])
+def test_scan_quota_rejects_out_of_range(value: str) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(scan_max_starts_per_hour=value)  # type: ignore[arg-type]
+
+
 def test_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
     clean_env.setenv("ENV", "prod")
     clean_env.setenv("SECRET_KEY", PROD_SECRET_KEY)
