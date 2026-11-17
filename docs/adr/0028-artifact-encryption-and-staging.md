@@ -83,8 +83,8 @@ Constraints:
 ## Consequences
 - Losing `APP_ENCRYPTION_KEY` loses every stored artifact; there is no rotation yet (the
   envelope's version byte leaves room for it).
-- Production runs no beat or workers until #29, so nothing is purged there. No upload route
-  may ship to production before that.
+- Production runs `beat` and `worker-passive` since #174, so the purge runs there; `worker-ai`
+  is still missing (#29). No upload route may ship to production before that.
 - After a cascade, and after a crash between writing a file and committing its row, ciphertext
   files stay on disk. They cannot be decrypted but they occupy space; no sweep removes them
   yet.
