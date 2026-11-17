@@ -12,10 +12,13 @@
 {%- from "components/badges.html" import status_pill -%}
 {%- from "components/time.html" import relative_time -%}
 {%- if oob and is_htmx %}
-<span hx-swap-oob="outerHTML:#scan-status">{{ parts.scan_status(scan) }}</span>
-<div hx-swap-oob="outerHTML:#scan-meta">{{ parts.scan_meta(scan) }}</div>
+{#- The replacements carry the targets' own IDs: an `outerHTML` swap removes the old
+    element, so without them the first poll would delete the targets and every later
+    poll would have nothing to swap into. -#}
+<span id="scan-status" hx-swap-oob="true">{{ parts.scan_status(scan) }}</span>
+<div id="scan-meta" hx-swap-oob="true">{{ parts.scan_meta(scan) }}</div>
 {%- if not detail.can_cancel %}
-<div hx-swap-oob="outerHTML:#scan-actions"></div>
+<div id="scan-actions" hx-swap-oob="true"></div>
 {%- endif %}
 {%- endif %}
 <section class="card" id="scan-progress" aria-label="Scan progress"

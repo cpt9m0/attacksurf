@@ -250,13 +250,19 @@ def test_progress_stops_polling_and_shows_the_diff_once_finished(
         'id="scan-progress"'
     )  # the dialog lives outside the polled subtree
     assert detail.count('id="scan-progress"') == 1
+    for target in ("scan-status", "scan-meta", "scan-actions"):
+        assert detail.count(f'id="{target}"') == 1  # OOB targets exist exactly once
+    assert "hx-swap-oob" not in detail  # first paint carries no out-of-band swaps
     assert "/cancel" in detail  # the action is on the page, not in the fragment
     assert ">queued<" in detail
 
     running = _html(member, f"{location}/progress", headers=HTMX)
     assert 'hx-trigger="every 2s"' in running
-    assert 'hx-swap-oob="outerHTML:#scan-status"' in running
-    assert 'hx-swap-oob="outerHTML:#scan-meta"' in running
+    # Every replacement carries its target's id: the swap removes the old element, so a
+    # later poll must still find its target.
+    assert running.count('hx-swap-oob="true"') == 2
+    assert '<span id="scan-status" hx-swap-oob="true">' in running
+    assert '<div id="scan-meta" hx-swap-oob="true">' in running
     assert "scan-actions" not in running  # the action is untouched while active
     assert "/cancel" not in running
 
@@ -268,7 +274,7 @@ def test_progress_stops_polling_and_shows_the_diff_once_finished(
     db_session.commit()
     mid = _html(member, f"{location}/progress", headers=HTMX)
     assert ">running<" in mid  # status and timestamps refresh without a reload
-    assert 'hx-swap-oob="outerHTML:#scan-actions"' not in mid
+    assert '<div id="scan-actions" hx-swap-oob="true">' not in mid
 
     db_session.execute(
         update(Scan).where(Scan.id == scan_id).values(status=ScanStatus.COMPLETED, stats=_STATS)
@@ -279,7 +285,8 @@ def test_progress_stops_polling_and_shows_the_diff_once_finished(
     finished = _html(member, f"{location}/progress", headers=HTMX)
     assert "every 2s" not in finished
     assert ">completed<" in finished
-    assert 'hx-swap-oob="outerHTML:#scan-actions"' in finished  # the action is cleared
+    assert finished.count('hx-swap-oob="true"') == 3
+    assert '<div id="scan-actions" hx-swap-oob="true"></div>' in finished
     assert "Changes since the last scan" in finished
     assert "new.example.com" in finished
 
