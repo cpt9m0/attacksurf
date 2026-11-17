@@ -7,7 +7,10 @@ import secrets
 import shutil
 import stat
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import IO
 from uuid import UUID, uuid4
 
 import pytest
@@ -43,7 +46,14 @@ class Roots:
         return self.run / str(artifact_id)
 
     def files(self) -> list[Path]:
-        return [path for path in self.store.rglob("*") if path.is_file()]
+        return [path for path in self.store.rglob("*") if path.is_file() and path.suffix != ".lock"]
+
+    def locks(self) -> list[Path]:
+        """Per-artifact lock files, kept in the store root and never removed by the store."""
+        return sorted(self.store.glob("*.lock"))
+
+    def run_entries(self) -> list[str]:
+        return sorted(path.name for path in self.run.iterdir())
 
 
 @pytest.fixture
@@ -242,7 +252,7 @@ def test_stage_writes_sandbox_readable_plaintext_the_launcher_can_resolve(
     assert (staged / STAGED_NAME).read_bytes() == payload
     assert _mode(staged) == 0o755  # the sandbox runs as another uid
     assert _mode(staged / STAGED_NAME) == 0o644
-    assert [entry.name for entry in roots.run.iterdir()] == [str(artifact_id)]
+    assert roots.run_entries() == [str(artifact_id)]
 
 
 def test_stage_refuses_content_that_does_not_match_the_recorded_digest(
@@ -288,7 +298,7 @@ def test_unstage_removes_the_plaintext_and_is_idempotent(
     store.unstage(artifact_id)
     store.unstage(artifact_id)
 
-    assert list(roots.run.iterdir()) == []
+    assert roots.run_entries() == []
     assert roots.blob(artifact_id).exists()
 
 
@@ -392,3 +402,82 @@ def test_another_app_key_cannot_open_the_artifact(store: LocalArtifactStore, roo
 
     with pytest.raises(ArtifactCorrupt):
         other.open(ORG, artifact_id, stored.key_envelope)
+
+
+def test_stage_does_not_abort_when_the_ciphertext_vanishes_mid_stream(
+    store: LocalArtifactStore, roots: Roots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Only an out-of-lock deletion can do this (a cascade, or an operator); staging refuses to
+    # publish the plaintext, and the stale-directory sweep removes the build directory.
+    artifact_id, stored = _put(store, b"payload")
+
+    def vanished(_dek: bytes, _blob: IO[bytes]) -> Iterator[bytes]:
+        roots.blob(artifact_id).unlink()
+        return iter([b"payload"])  # read from the already-open descriptor, as Linux allows
+
+    monkeypatch.setattr(storage, "decrypt_stream", vanished)
+
+    with pytest.raises(ArtifactNotFound):
+        store.stage(ORG, artifact_id, stored.key_envelope, sha256=stored.sha256)
+
+    assert roots.run_entries() == []
+
+
+def test_stage_leaves_no_build_directory_behind_when_the_run_root_is_unwritable(
+    store: LocalArtifactStore, roots: Roots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_id, stored = _put(store, b"payload")
+
+    def no_space(*_args: object, **_kwargs: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(storage.Path, "chmod", no_space)
+
+    with pytest.raises(ArtifactStorageUnavailable) as error:
+        store.stage(ORG, artifact_id, stored.key_envelope, sha256=stored.sha256)
+
+    assert str(error.value) == "Artifact storage is unavailable."
+    assert roots.run_entries() == []
+    assert roots.blob(artifact_id).exists()
+
+
+def test_stage_waits_for_the_delete_lock_before_it_starts(
+    store: LocalArtifactStore, roots: Roots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_id, stored = _put(store, b"payload")
+    acquired: list[str] = []
+    real_lock = storage._artifact_lock
+
+    @contextmanager
+    def recording_lock(run_root: Path, artifact_id: UUID) -> Iterator[None]:
+        acquired.append(str(artifact_id))
+        with real_lock(run_root, artifact_id):
+            yield
+
+    monkeypatch.setattr(storage, "_artifact_lock", recording_lock, raising=False)
+
+    store.stage(ORG, artifact_id, stored.key_envelope, sha256=stored.sha256)
+    store.delete(ORG, artifact_id)
+
+    assert acquired == [str(artifact_id), str(artifact_id)]
+
+
+def test_delete_takes_the_lock_before_it_removes_anything(
+    store: LocalArtifactStore, roots: Roots, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_id, _stored = _put(store, b"payload")
+    held: list[str] = []
+    real_lock = storage._artifact_lock
+
+    @contextmanager
+    def checked_lock(run_root: Path, artifact_id: UUID) -> Iterator[None]:
+        with real_lock(run_root, artifact_id):
+            held.append(str(artifact_id))
+            yield
+
+    monkeypatch.setattr(storage, "_artifact_lock", checked_lock, raising=False)
+
+    store.delete(ORG, artifact_id)
+
+    assert held == [str(artifact_id)]
+    assert not roots.blob(artifact_id).exists()

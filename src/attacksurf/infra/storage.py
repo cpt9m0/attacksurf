@@ -5,6 +5,7 @@ the sandbox launcher mounts from (`SANDBOX_ARTIFACT_ROOT`), and holds plaintext 
 artifact is staged for a run. Every path is built from UUIDs, never from caller text.
 """
 
+import fcntl
 import hashlib
 import hmac
 import os
@@ -36,7 +37,9 @@ from attacksurf.infra.crypto import (
 
 _KEY_AAD = b"attacksurf.artifact.dek.v1"
 _BUILD_PREFIX = ".stage-"  # not a UUID, so the launcher can never resolve a half-written dir
+_LOCK_SUFFIX = ".lock"  # `<artifact_id>.lock` in the store root; never a UUID
 _NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+_LOCK_FILE = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW  # reused across processes: no O_EXCL
 
 
 @contextmanager
@@ -109,34 +112,40 @@ class LocalArtifactStore:
         return self._decrypt(org_id, artifact_id, self._unwrap(org_id, artifact_id, key_envelope))
 
     def delete(self, org_id: UUID, artifact_id: UUID) -> None:
-        try:
-            with _fixed_errors():
-                (self._store_root / str(org_id) / str(artifact_id)).unlink(missing_ok=True)
-        finally:
-            # Whatever happens to the ciphertext, the plaintext never outlives a delete.
-            self.unstage(artifact_id)
+        with _artifact_lock(self._store_root, artifact_id):
+            try:
+                with _fixed_errors():
+                    (self._store_root / str(org_id) / str(artifact_id)).unlink(missing_ok=True)
+            finally:
+                # Whatever happens to the ciphertext, the plaintext never outlives a delete.
+                self.unstage(artifact_id)
 
     def stage(self, org_id: UUID, artifact_id: UUID, key_envelope: bytes, *, sha256: str) -> None:
         dek = self._unwrap(org_id, artifact_id, key_envelope)
-        build = self._run_root / f"{_BUILD_PREFIX}{secrets.token_hex(8)}"
-        digest = hashlib.sha256()
-        try:
-            with _fixed_errors():
-                build.mkdir()
-                # Explicit modes (umask-proof): the sandbox reads this as another uid.
-                build.chmod(0o755)
-                with os.fdopen(os.open(build / STAGED_NAME, _NEW_FILE, 0o644), "wb") as out:
-                    os.fchmod(out.fileno(), 0o644)
-                    for chunk in self._decrypt(org_id, artifact_id, dek):
-                        digest.update(chunk)
-                        out.write(chunk)
-                if not hmac.compare_digest(digest.hexdigest(), sha256):
-                    raise DecryptionError
-                # Atomic: the launcher sees either nothing or the complete directory.
-                os.rename(build, self._run_root / str(artifact_id))
-        except BaseException:
-            shutil.rmtree(build, ignore_errors=True)
-            raise
+        with _artifact_lock(self._store_root, artifact_id):
+            build = self._run_root / f"{_BUILD_PREFIX}{secrets.token_hex(8)}"
+            digest = hashlib.sha256()
+            try:
+                with _fixed_errors():
+                    build.mkdir()
+                    # Explicit modes (umask-proof): the sandbox reads this as another uid.
+                    build.chmod(0o755)
+                    with os.fdopen(os.open(build / STAGED_NAME, _NEW_FILE, 0o644), "wb") as out:
+                        os.fchmod(out.fileno(), 0o644)
+                        for chunk in self._decrypt(org_id, artifact_id, dek):
+                            digest.update(chunk)
+                            out.write(chunk)
+                    if not hmac.compare_digest(digest.hexdigest(), sha256):
+                        raise DecryptionError
+                    # Taken under the lock, so a delete either unlinked the ciphertext before
+                    # the first chunk was read or waits until this directory is in place.
+                    if not (self._store_root / str(org_id) / str(artifact_id)).exists():
+                        raise ArtifactNotFound("Artifact not found.")
+                    # Atomic: the launcher sees either nothing or the complete directory.
+                    os.rename(build, self._run_root / str(artifact_id))
+            except BaseException:
+                shutil.rmtree(build, ignore_errors=True)
+                raise
 
     def unstage(self, artifact_id: UUID) -> None:
         shutil.rmtree(self._run_root / str(artifact_id), ignore_errors=True)
@@ -180,6 +189,26 @@ class LocalArtifactStore:
                 raise ArtifactNotFound("Artifact not found.") from None
             with blob:
                 yield from decrypt_stream(dek, blob)
+
+
+@contextmanager
+def _artifact_lock(lock_root: Path, artifact_id: UUID) -> Iterator[None]:
+    """Serialise staging and deletion of one artifact across processes.
+
+    `flock` releases on process death, so a killed stager can't wedge a delete, and the lock file
+    is never removed: unlinking it would hand "the" lock to two processes at once. The lock lives
+    in the ciphertext root, which `put` already creates, never in the sandbox-visible run root.
+    """
+    with _fixed_errors():
+        lock_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with os.fdopen(
+            os.open(lock_root / f"{artifact_id}{_LOCK_SUFFIX}", _LOCK_FILE, 0o600), "w"
+        ) as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def _key_aad(org_id: UUID, artifact_id: UUID) -> bytes:
