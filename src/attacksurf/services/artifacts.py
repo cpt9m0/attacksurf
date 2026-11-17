@@ -12,7 +12,7 @@ from typing import IO
 from uuid import UUID
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from attacksurf.domain.artifacts import (
@@ -38,6 +38,9 @@ log = structlog.get_logger(__name__)
 UNANALYZED_TTL_HOURS = 24
 # One purge run never deletes more than this, so a mass expiry can't hold the worker.
 MAX_PURGE_PER_RUN = 200
+# Floor for how long a failed purge waits before retrying, so a batch that cannot be deleted
+# can never starve the artifacts behind it (other orgs' included).
+PURGE_RETRY_SECONDS = 60
 
 
 def store_artifact(
@@ -146,19 +149,16 @@ def delete_artifact(
     actor_id: UUID | None,
     reason: str = "requested",
     now: datetime | None = None,
+    retry_at: datetime | None = None,
 ) -> None:
     """Remove the file and erase the key; the row stays as the record. Idempotent.
 
     Raises `ArtifactNotFound` for a missing or another org's artifact, and
-    `ArtifactStorageUnavailable` (nothing changed) if the file can't be removed.
+    `ArtifactStorageUnavailable` (the key is kept) if the file can't be removed. Pass `retry_at`
+    to control when a failed deletion is attempted again; the row is only moved while its
+    deadline still matches the one this attempt saw.
     """
-    artifact = session.scalars(
-        scoped(Artifact, org_id)
-        .where(Artifact.id == artifact_id)
-        .with_for_update()
-        # A row this session already holds would otherwise keep its stale `deleted_at`.
-        .execution_options(populate_existing=True)
-    ).one_or_none()
+    artifact = _locked(session, org_id, artifact_id)
     if artifact is None:
         raise ArtifactNotFound("Artifact not found.")
     if artifact.deleted_at is not None:
@@ -166,6 +166,17 @@ def delete_artifact(
         return
     try:
         store.delete(org_id, artifact_id)
+    except ArtifactStorageUnavailable:
+        # The file stays, so the row must keep its key. Move the attempt marker on, in a
+        # separate transaction, so the purge retries this later instead of first every time.
+        _defer_retry(
+            session,
+            org_id,
+            artifact_id,
+            retry_at=retry_at,
+            attempted_deadline=artifact.delete_after,
+        )
+        raise
     except BaseException:
         session.rollback()  # release the row lock
         raise
@@ -198,13 +209,31 @@ def purge_expired(
         .order_by(Artifact.delete_after)
         .limit(limit)
     ).all()
+    oldest_pending = session.scalar(
+        select(func.min(Artifact.delete_after)).where(
+            Artifact.deleted_at.is_(None), Artifact.delete_after > now
+        )
+    )
     session.rollback()
+    # A row whose deletion fails goes behind everything still waiting (or the retry delay,
+    # whichever is later), so a permanently undeletable batch cannot crowd out the rest.
+    retry_at = max(
+        now + timedelta(seconds=PURGE_RETRY_SECONDS),
+        (oldest_pending or now) + timedelta(seconds=PURGE_RETRY_SECONDS),
+    )
     purged = 0
     try:
         for org_id, artifact_id in due:
             try:
                 delete_artifact(
-                    session, store, org_id, artifact_id, actor_id=None, reason="expired", now=now
+                    session,
+                    store,
+                    org_id,
+                    artifact_id,
+                    actor_id=None,
+                    reason="expired",
+                    now=now,
+                    retry_at=retry_at,
                 )
                 purged += 1
             except ArtifactNotFound:
@@ -213,8 +242,8 @@ def purge_expired(
                 with suppress(ArtifactStorageUnavailable):
                     store.delete(org_id, artifact_id)
             except ArtifactStorageUnavailable:
-                # One undeletable file must not keep the rest of the batch (and every later
-                # run, since it sorts first) from being purged. It is retried next run.
+                # Its `delete_after` now sorts it after the rest, so one undeletable file cannot
+                # keep the batch, or every later run (it sorts first), from purging the others.
                 log.warning(
                     "artifact purge failed", org_id=str(org_id), artifact_id=str(artifact_id)
                 )
@@ -224,6 +253,48 @@ def purge_expired(
     if purged or swept:
         log.info("artifacts purged", artifacts=purged, staged_swept=swept)
     return purged
+
+
+def _locked(session: Session, org_id: UUID, artifact_id: UUID) -> Artifact | None:
+    """The org's artifact row, locked for update; None for missing or another org's."""
+    return session.scalars(
+        scoped(Artifact, org_id)
+        .where(Artifact.id == artifact_id)
+        .with_for_update()
+        # A row this session already holds would otherwise keep its stale `deleted_at`.
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+
+
+def _defer_retry(
+    session: Session,
+    org_id: UUID,
+    artifact_id: UUID,
+    *,
+    retry_at: datetime | None,
+    attempted_deadline: datetime,
+) -> None:
+    """Record a failed deletion attempt: push `delete_after` back by the retry delay.
+
+    Nothing else about the row changes. `attempted_deadline` is the deadline the failed attempt
+    saw: if it has moved since (a request set a newer one), this attempt's rule no longer
+    applies and the row is left alone. A targeted UPDATE carries only `delete_after`, because
+    flushing the ORM instance would also write back whatever state this session loaded,
+    `key_envelope` included.
+    """
+    row = _locked(session, org_id, artifact_id)
+    if row is None or row.deleted_at is not None or row.delete_after != attempted_deadline:
+        # Cascaded away, deleted meanwhile, or given a newer deadline: nothing to defer.
+        session.rollback()
+        return
+    session.execute(
+        update(Artifact)
+        .where(Artifact.id == artifact_id, Artifact.deleted_at.is_(None))
+        .values(
+            delete_after=retry_at or attempted_deadline + timedelta(seconds=PURGE_RETRY_SECONDS)
+        )
+    )
+    session.commit()
 
 
 def _stored_bytes(session: Session, org_id: UUID) -> int:

@@ -3,6 +3,7 @@
 import hashlib
 import io
 import secrets
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -58,6 +59,13 @@ def _tenant(session: Session, name: str) -> Tenant:
     return Tenant(org.id, asset.id)
 
 
+@pytest.fixture(autouse=True)
+def _expire_loaded_rows(db_session: Session) -> Iterator[None]:
+    """Use cases roll back and reload rows; a stale instance here would mask what they wrote."""
+    yield
+    db_session.expire_all()
+
+
 @pytest.fixture
 def acme(db_session: Session) -> Tenant:
     return _tenant(db_session, "acme")
@@ -105,7 +113,8 @@ def _store(
 
 
 def _files(root: Path) -> list[Path]:
-    return [path for path in root.rglob("*") if path.is_file()]
+    """Files under `root`, without the store's per-artifact lock files."""
+    return [path for path in root.rglob("*") if path.is_file() and path.suffix != ".lock"]
 
 
 def _actions(session: Session, org_id: UUID) -> list[tuple[str, dict[str, object]]]:
@@ -622,3 +631,113 @@ def test_purge_sweeps_stale_staged_plaintext(db_session: Session) -> None:
     artifacts.purge_expired(db_session, store, now=NOW)
 
     assert store.swept == [STAGE_MAX_AGE_SECONDS]
+
+
+def _move_deadline(session: Session, artifact: Artifact, deadline: datetime) -> None:
+    """Pin an artifact's retention deadline (storing one leaves 24 h when retention is 0)."""
+    session.execute(
+        update(Artifact).where(Artifact.id == artifact.id).values(delete_after=deadline)
+    )
+    session.commit()
+
+
+def test_purge_retries_an_undeletable_artifact_after_the_retry_delay(
+    db_session: Session, acme: Tenant
+) -> None:
+    # A failed item must not be skipped by the next run, or fixing its cause would never recover
+    # it: it stays due, just later than anything still waiting.
+    store = FakeArtifactStore()
+    blocked = _store(db_session, store, acme)
+    _move_deadline(db_session, blocked, NOW - timedelta(days=3))
+    store.undeletable.add(blocked.id)
+
+    assert artifacts.purge_expired(db_session, store, now=NOW) == 0
+    deferred = db_session.get_one(Artifact, blocked.id)
+    assert deferred.deleted_at is None
+    assert deferred.key_envelope is not None  # the file is still there, so the key must stay
+    assert deferred.delete_after == NOW + timedelta(minutes=1)
+
+    store.undeletable.clear()
+
+    assert artifacts.purge_expired(db_session, store, now=deferred.delete_after + timedelta(0)) == 1
+    assert db_session.get_one(Artifact, blocked.id).deleted_at == deferred.delete_after
+
+
+def test_purge_does_not_defer_a_row_whose_deadline_moved_since_selection(
+    db_session: Session, acme: Tenant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A request that sets a newer deadline between selection and the attempt wins: the failed
+    # attempt's retry rule must not pull it back to the top of the queue.
+    store = FakeArtifactStore()
+    artifact = _store(db_session, store, acme)
+    _move_deadline(db_session, artifact, NOW - timedelta(days=3))
+    store.undeletable.add(artifact.id)
+    moved = NOW + timedelta(days=10)
+    real_locked = artifacts._locked
+    calls = iter([False, True])
+
+    def moved_before_the_retry(
+        session: Session, org_id: UUID, artifact_id: UUID
+    ) -> Artifact | None:
+        if next(calls, False):  # the second lookup is the one `_defer_retry` makes
+            session.execute(
+                update(Artifact).where(Artifact.id == artifact_id).values(delete_after=moved)
+            )
+            session.commit()
+        return real_locked(session, org_id, artifact_id)
+
+    monkeypatch.setattr(artifacts, "_locked", moved_before_the_retry)
+
+    assert artifacts.purge_expired(db_session, store, now=NOW) == 0
+
+    assert db_session.get_one(Artifact, artifact.id).delete_after == moved
+
+
+def test_purge_does_not_starve_newer_artifacts_behind_a_full_failing_batch(
+    db_session: Session, acme: Tenant
+) -> None:
+    # The reported bug: when the batch is full of undeletable rows, the rows behind them (other
+    # orgs' included) were never reached, so they stayed past retention indefinitely.
+    store = FakeArtifactStore()
+    stuck = [_store(db_session, store, acme) for _ in range(3)]
+    for index, artifact in enumerate(stuck):
+        _move_deadline(db_session, artifact, NOW - timedelta(days=5, hours=index))
+    store.undeletable.update(artifact.id for artifact in stuck)
+    later = _store(db_session, store, acme)
+    _move_deadline(db_session, later, NOW - timedelta(days=4))
+
+    # A batch exactly full of failures must still end with the artifacts behind them reached in
+    # a later run, not starved by the same full batch forever.
+    assert artifacts.purge_expired(db_session, store, now=NOW, limit=len(stuck)) == 0
+    assert db_session.get_one(Artifact, later.id).deleted_at is None  # not selected this run
+
+    assert artifacts.purge_expired(db_session, store, now=NOW + timedelta(minutes=1)) == 1
+    assert db_session.get_one(Artifact, later.id).deleted_at == NOW + timedelta(minutes=1)
+    assert all(db_session.get_one(Artifact, artifact.id).deleted_at is None for artifact in stuck)
+
+
+def test_purge_prefers_artifacts_whose_last_attempt_failed_least_recently(
+    db_session: Session, acme: Tenant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Deterministic tie-break: with more failing rows than the batch size, the ones attempted
+    # most recently go last, so every artifact eventually gets its turn.
+    store = FakeArtifactStore()
+    first, second = _store(db_session, store, acme), _store(db_session, store, acme)
+    _move_deadline(db_session, first, NOW - timedelta(days=4))
+    _move_deadline(db_session, second, NOW - timedelta(days=3))
+    store.undeletable.update({first.id, second.id})
+    attempted: list[UUID] = []
+    real_delete = artifacts.delete_artifact
+
+    def record_delete(session: Session, *args: object, **kwargs: object) -> None:
+        attempted.append(args[2])  # type: ignore[arg-type]  # (session, store, org_id, artifact_id)
+        real_delete(session, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(artifacts, "delete_artifact", record_delete)
+
+    retry = NOW
+    for _ in range(3):
+        artifacts.purge_expired(db_session, store, now=retry, limit=1)
+        retry += timedelta(minutes=1)
+
+    assert attempted == [first.id, second.id, first.id]
