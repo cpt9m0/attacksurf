@@ -107,7 +107,8 @@ services:
     healthcheck:
       # `docker exec` does not inherit the entrypoint's exported, password-substituted URL,
       # so substitute it here too; otherwise the probe dials `__REDIS_PASS__` and fails.
-      test: ["CMD-SHELL", "export REDIS_URL=\"$${REDIS_URL//__REDIS_PASS__/$$(cat /run/secrets/redis_password)}\"; celery -A attacksurf.workers.app inspect ping -d passive@$$HOSTNAME --timeout 5"]
+      # Explicit `bash -c`: CMD-SHELL runs `/bin/sh` (dash), which rejects `${var//pat/rep}`.
+      test: ["CMD-SHELL", "bash -c 'export REDIS_URL=\"$${REDIS_URL//__REDIS_PASS__/$$(cat /run/secrets/redis_password)}\"; exec celery -A attacksurf.workers.app inspect ping -d passive@$$HOSTNAME --timeout 5'"]
       interval: 30s
       timeout: 10s
       start_period: 30s
@@ -122,8 +123,9 @@ services:
       ["celery", "-A", "attacksurf.workers.app", "beat", "--loglevel", "INFO",
        "--schedule", "/tmp/celerybeat-schedule"]
     # `up --wait` needs a healthcheck on every service; beat has no ping, so check its broker.
+    # Explicit `bash -c` for the substitution: CMD-SHELL runs `/bin/sh` (dash).
     healthcheck:
-      test: ["CMD-SHELL", "export REDIS_URL=\"$${REDIS_URL//__REDIS_PASS__/$$(cat /run/secrets/redis_password)}\"; python -c \"from attacksurf.workers.app import app; app.connection_for_write().ensure_connection(max_retries=1)\""]
+      test: ["CMD-SHELL", "bash -c 'export REDIS_URL=\"$${REDIS_URL//__REDIS_PASS__/$$(cat /run/secrets/redis_password)}\"; exec python -c \"from attacksurf.workers.app import app; app.connection_for_write().ensure_connection(max_retries=1)\"'"]
       interval: 30s
       timeout: 10s
       start_period: 20s
