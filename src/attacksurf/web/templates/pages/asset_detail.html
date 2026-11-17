@@ -78,7 +78,7 @@
   {%- if tab == "overview" %}
   {#- Only roots hold a proof; on a subdomain this shows the root's proof, read-only. -#}
   {%- if asset.type in ("domain", "subdomain") %}
-  {{ ownership_card(view_id, proof_root_value, ownership, can_manage_ownership, checking) }}
+  {{ ownership_card(view_id, proof_root_value, ownership, can_manage_ownership, checking, stalled_since) }}
   {%- endif %}
   {%- if detail.dns %}
   <section class="card" aria-labelledby="dns-title">

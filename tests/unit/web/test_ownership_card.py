@@ -1,6 +1,7 @@
 """The ownership card without a database: the services are stubbed (#14)."""
 
 import re
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -50,7 +51,11 @@ def stubs(monkeypatch: pytest.MonkeyPatch, asset_id: object) -> dict[str, list[d
         lambda *_a, **_k: asset_views.AssetDetail(row, (), (), 0),
     )
     monkeypatch.setattr(verifications, "read_verification", lambda *_a, **_k: None)
-    monkeypatch.setattr(verifications, "check_in_flight", lambda *_a, **_k: False)
+    monkeypatch.setattr(
+        verifications,
+        "check_in_flight",
+        lambda *_a, **_k: verifications.InFlightCheck(verifications.CheckState.NONE),
+    )
 
     def start(*_args: object, **kw: object) -> None:
         calls["started"].append(kw)
@@ -179,6 +184,29 @@ def test_a_verified_once_counted_proof_is_shown_with_its_record(
 
     assert "Revoked" in page
     assert "Rotate token" in page  # a revoked proof can be re-issued
+
+
+def test_a_stalled_check_names_the_queue_and_stops_polling(
+    auth_client: FlaskClient,
+    asset_id: object,
+    stubs: dict[str, list[dict[str, object]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stalled_at = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(
+        verifications,
+        "check_in_flight",
+        lambda *_a, **_k: verifications.InFlightCheck(
+            verifications.CheckState.STALLED, queued_since=stalled_at
+        ),
+    )
+
+    page = auth_client.get(f"/assets/{asset_id}/ownership").get_data(as_text=True)
+
+    assert "hx-trigger" not in page
+    assert 'aria-busy="false"' in page
+    assert "Stalled" in page
+    assert "no worker has" in page
 
 
 def _csrf(client: FlaskClient, path: str) -> str:

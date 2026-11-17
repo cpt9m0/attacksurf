@@ -128,8 +128,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 - Production stack (`compose.prod.yaml`) published through a Cloudflare Tunnel: `cloudflared`,
   Caddy, gunicorn, PostgreSQL and Redis on a private network with no inbound ports, `www`
   redirecting to the apex, and a deploy runbook in `docs/deployment.md` (ADR 0020, #132).
+- Production `worker-passive` and `beat`: ownership checks, `dns_passive` scans and the
+  artifact purge are consumed on attacksurf.dev instead of staying queued; both are gated by
+  `up -d --wait` healthchecks and the deploy's idempotence check covers every long-running
+  service (#174).
 
 ### Fixed
+- Ownership verification no longer spins forever when no worker consumes the queue: a verify
+  job still queued past five minutes renders `Stalled` with a queue (not record) explanation
+  and stops the 2-second poll until workers are back (#174).
 - Artifact staging and deletion are serialised per artifact with a `flock`, so a purge can no
   longer mark an artifact deleted mid-staging and leave its plaintext mounted until the sweep,
   and a failed purge pushes its artifact behind the rest of the queue instead of starving it

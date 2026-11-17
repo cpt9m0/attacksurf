@@ -381,11 +381,16 @@ def _ownership_context(asset_id: UUID) -> dict[str, Any]:
     asset = asset_views.get_asset(session, _org_id(), asset_id)
     root_id = asset.root_id or asset.id
     root = asset if root_id == asset.id else asset_views.get_asset(session, _org_id(), root_id)
+    check = verifications.check_in_flight(session, _org_id(), root.id)
     return {
         "view_id": asset.id,  # the asset being viewed: polls re-render this, not the root
         "proof_root_value": root.value,
         "ownership": verifications.read_verification(session, _org_id(), root.id),
-        "checking": verifications.check_in_flight(session, _org_id(), root.id),
+        "checking": check.state
+        in (verifications.CheckState.QUEUED, verifications.CheckState.RUNNING),
+        "stalled_since": check.queued_since
+        if check.state is verifications.CheckState.STALLED
+        else None,
         "can_manage_ownership": root.id == asset.id
         and asset.is_active
         and has_role(current_user.role, Role.ADMIN),

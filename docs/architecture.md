@@ -514,8 +514,9 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
 ## Deployment
 
 Single VPS: Cloudflare Tunnel → Caddy → gunicorn (web), plus PostgreSQL and Redis, all in Docker
-Compose (`compose.prod.yaml`); no inbound ports (ADR 0020, `docs/deployment.md`). Celery workers
-and beat are not part of the production stack yet. Nightly `pg_dump` off-box. See issue #29.
+Compose (`compose.prod.yaml`); no inbound ports (ADR 0020, `docs/deployment.md`). Celery
+`worker-passive` (`-Q passive -c 2`) and `beat` run in production (#174); `worker-ai` is not
+part of the stack yet, so AI jobs stay queued. Nightly `pg_dump` off-box. See issue #29.
 
 The `Dockerfile` has two targets: `dev` (dev deps, Flask debug server, source bind-mounted by
 `compose.yaml` for hot reload) and `prod` (no dev deps, gunicorn, non-root uid 10001). Base and

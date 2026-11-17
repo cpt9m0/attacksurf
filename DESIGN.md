@@ -117,7 +117,7 @@ Specs (visuals) stay TBD.
 | Empty state | illustration/icon + one-line explanation + primary action | TBD |
 | Modal / confirm | destructive actions (archive asset, accept risk): `confirm_dialog(id, trigger_label, title, message, action, confirm_label, trigger_variant="danger", confirm_variant="danger")`, a native `<dialog>` opened by `Alpine.data("confirmDialog")`; focus starts on Cancel, Escape closes, confirm POSTs with CSRF. Keep the danger variant for anything that removes data; reversible or recoverable actions (rotate a token) use `secondary` | TBD |
 | DNS chain / records | monospace `asset → CNAME → IP` chain with `overflow-wrap:anywhere`, then a data table of record type → values; non-public addresses called out in muted text. All values are scan data and stay autoescaped | TBD |
-| Ownership card | proof of domain control: status badge, the exact TXT record in a `.copy-field` with a copy button (`Alpine.data("copyField")`, the code block stays selectable without the Clipboard API), and admin-only actions (start / verify now / rotate behind a confirm). Subdomains show their root's record read-only | TBD |
+| Ownership card | proof of domain control: status badge, the exact TXT record in a `.copy-field` with a copy button (`Alpine.data("copyField")`, the code block stays selectable without the Clipboard API), and admin-only actions (start / verify now / rotate behind a confirm). Subdomains show their root's record read-only. A check queued past the grace with no consumer renders `Stalled` with a queue (not record) explanation and stops polling (#174) | TBD |
 
 ## 6. Interaction patterns (HTMX)
 
@@ -128,7 +128,8 @@ Specs (visuals) stay TBD.
   into the whole `<body>`) and normal loads get the full page (`Vary` on all three headers).
 - Long-running work: show job progress via polling (`hx-trigger="every 2s"`), stop when done.
   Ownership cards poll the viewed asset, including subdomains inheriting a root's proof, so
-  refreshing a read-only card preserves its available actions.
+  refreshing a read-only card preserves its available actions. A verify job still queued past
+  the grace stops polling and names the queue, not the record (#174).
 - Forms: inline validation errors; disable the submit button during request.
 - Destructive actions: confirm modal; never one-click delete.
 - Lists: filters update the URL query string (`hx-push-url`) so views are shareable. The

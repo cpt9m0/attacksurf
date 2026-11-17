@@ -14,8 +14,8 @@
 #      checkout that is stale relative to both origin/main and what production runs
 #   3. checkout the target commit and build its images tagged with the short SHA
 #   4. run the one-off `migrate` service, which uses the new code, before `web` is replaced
-#   5. replace `web` (and only `web`: no `down`, no `-v`, so postgres/redis keep running with
-#      their pgdata volume intact)
+#   5. replace the long-running services (`up -d --wait`: no `down`, no `-v`, so postgres/redis
+#      keep running with their pgdata volume intact)
 #   6. smoke-test /healthz through the ingress; on failure roll back to the previously
 #      deployed SHA (rebuild + up -d --wait) and exit non-zero
 #   7. record the deployed SHA in /var/lib/attacksurf/deployed-sha and log it to stdout/journal
@@ -40,9 +40,12 @@ DEPLOYED_SHA_FILE=$STATE_DIR/deployed-sha
 HEALTH_ATTEMPTS=${HEALTH_ATTEMPTS:-15}
 HEALTH_DELAY=${HEALTH_DELAY:-2}
 
-# Long-running services. `migrate` is deliberately absent: it is a one-off that runs before
-# `web` is replaced, and `up -d` must never start it as a background service.
-SERVICES=(web caddy cloudflared postgres redis)
+# Long-running services, derived from the compose file so a new worker needs no script
+# edit. `migrate` is deliberately excluded: it is a one-off that runs before the stack is
+# replaced, and `up -d` must never start it as a background service.
+long_running_services() {
+  compose config --services | grep -vx migrate
+}
 
 case "$COMPOSE_FILE" in
   /*) COMPOSE_PATH=$COMPOSE_FILE ;;
@@ -194,7 +197,10 @@ rollback() {
     return 1
   fi
 
-  if ! compose up -d --wait "${SERVICES[@]}"; then
+  # The list comes from the file just checked out, so a rollback to a commit that predates a
+  # service does not ask for a service that file does not define ("no such service"); orphan
+  # containers from the failed release are removed.
+  if ! compose up -d --wait --wait-timeout 300 --remove-orphans $(long_running_services); then
     log "CRITICAL: rollback to $WEB_IMAGE did not come up; manual intervention required"
     return 1
   fi
@@ -231,7 +237,7 @@ main() {
 
   prepare_repo
 
-  local main_sha target target_short deployed prev_sha prev_image web_container web_image="" web_running=""
+  local main_sha target target_short deployed prev_sha prev_image web_container web_image=""
   main_sha=$(git_ rev-parse --verify "refs/remotes/origin/$BRANCH^{commit}")
   target=$(resolve_target "${1:-}")
   target_short=$(git_ rev-parse --short=12 "$target")
@@ -242,17 +248,10 @@ main() {
   if [ -n "$web_container" ]; then
     prev_image=$(docker inspect --format '{{.Config.Image}}' "$web_container" 2>/dev/null || true)
     web_image=$prev_image
-    web_running=$(docker inspect --format '{{.State.Running}}' "$web_container" 2>/dev/null || true)
   fi
   prev_sha=$deployed
 
   check_checkout "$(git_ rev-parse --verify HEAD 2>/dev/null || true)" "$main_sha" "$deployed"
-
-  # Idempotent: the target is what prod already runs, so there is nothing to build or replace.
-  if [ "$target" = "$deployed" ] && [ "$web_image" = "$WEB_IMAGE" ] && [ "$web_running" = true ]; then
-    log "already deployed: $target ($WEB_IMAGE) is live; nothing to do"
-    exit 0
-  fi
 
   log "deploying $target ($target_short), previously ${prev_sha:-none}"
 
@@ -266,6 +265,19 @@ main() {
   [ -e "$APP_DIR/deploy/attacksurf.env" ] ||
     die "$APP_DIR/deploy/attacksurf.env is missing; it must be a symlink into /etc/attacksurf"
   compose config --quiet || die "$COMPOSE_PATH is not a valid compose file"
+
+  # Idempotent: the target is what prod already runs, so there is nothing to build or replace.
+  # Every long-running service must be up, not just web: a stopped worker would otherwise make
+  # the timer report success forever while jobs stay queued (#174).
+  if [ "$target" = "$deployed" ] && [ "$web_image" = "$WEB_IMAGE" ]; then
+    expected=$(long_running_services | sort)
+    running=$(compose ps --services --status running 2>/dev/null | sort || true)
+    if [ -z "$(comm -23 <(printf '%s\n' "$expected") <(printf '%s\n' "$running"))" ]; then
+      log "already deployed: $target ($WEB_IMAGE) is live; nothing to do"
+      exit 0
+    fi
+    log "target $target is deployed but some services are not running; converging"
+  fi
 
   log "building $WEB_IMAGE"
   compose build web
@@ -286,8 +298,8 @@ main() {
     exit 1
   fi
 
-  log "replacing web"
-  if ! compose up -d --wait "${SERVICES[@]}"; then
+  log "replacing long-running services"
+  if ! compose up -d --wait --wait-timeout 300 $(long_running_services); then
     rollback "compose up -d --wait failed" "$prev_sha" "$prev_image" || true
     exit 1
   fi
