@@ -19,8 +19,9 @@ description: Add or change an LLM-powered feature or prompt (triage, summaries, 
   `max_tokens`, so size it with room to spare.
 - Tests use `tests.fakes.FakeLLMProvider`; a new provider adapter gets a `ProviderKind` and a
   case in `ai/factory.build_provider`, must pass
-  `tests/unit/ai/contract.ProviderContract`, build its SDK client with `ai/limits.py`, and
-  enforce `CALL_DEADLINE_SECONDS` per call (the SDK's per-chunk read timeout doesn't). SDK
+  `tests/unit/ai/contract.ProviderContract`, build its SDK client with `ai/limits.py` on
+  `ai/providers/deadline.deadline_transport()`, and send each request inside `until(deadline)`
+  so `CALL_DEADLINE_SECONDS` ends the request itself (the SDK's per-chunk read timeout doesn't). SDK
   retries stay off (`MAX_RETRIES = 0`) and no sampling settings are sent (ADR 0024): Celery
   retries the task.
 - `LLMUnavailable` makes Celery retry the whole task: one `complete()` call per task, or cache

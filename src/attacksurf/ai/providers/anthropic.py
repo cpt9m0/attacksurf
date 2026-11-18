@@ -1,8 +1,6 @@
 """`LLMProvider` for the Anthropic Messages API, and Meta's endpoint in that format (ADR 0019)."""
 
-import contextvars
-import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from time import monotonic
 
 import anthropic
@@ -14,6 +12,7 @@ from pydantic import BaseModel
 
 from attacksurf.ai.errors import llm_error_for_status
 from attacksurf.ai.limits import CALL_DEADLINE_SECONDS, MAX_RETRIES, REQUEST_TIMEOUT_SECONDS
+from attacksurf.ai.providers.deadline import deadline_transport, until
 from attacksurf.ai.structured import complete_structured
 from attacksurf.domain.llm import (
     Completion,
@@ -36,10 +35,13 @@ DEFAULT_BASE_URL = "https://api.anthropic.com"
 class AnthropicProvider:
     """Sends each attempt as one Messages request asking for JSON in the schema's shape.
 
-    `http_client` is for tests (a stubbed transport); production uses the SDK's own client.
+    `http_client` is for tests (a stubbed transport); production uses the SDK's default client on
+    `deadline_transport()`, so a request ends at the call deadline.
     """
 
     def __init__(self, config: LLMConfig, *, http_client: httpx2.Client | None = None) -> None:
+        if http_client is None:
+            http_client = anthropic.DefaultHttpxClient(transport=deadline_transport())
         self._model = config.model
         self._client = anthropic.Anthropic(
             api_key=config.api_key.get_secret_value(),
@@ -81,18 +83,16 @@ class AnthropicProvider:
             raise _too_slow()
         system = "\n\n".join(m.content for m in conversation if m.role == "system")
 
-        def request() -> APIMessage:
-            return self._client.messages.create(
-                model=self._model,
-                max_tokens=max_tokens,
-                system=system or anthropic.omit,
-                messages=[_turn(m) for m in conversation if m.role != "system"],
-                output_config={"format": output_format},
-                timeout=min(REQUEST_TIMEOUT_SECONDS, remaining),
-            )
-
         try:
-            response = _finish_within(remaining, request)
+            with until(deadline):
+                response: APIMessage = self._client.messages.create(
+                    model=self._model,
+                    max_tokens=max_tokens,
+                    system=system or anthropic.omit,
+                    messages=[_turn(m) for m in conversation if m.role != "system"],
+                    output_config={"format": output_format},
+                    timeout=min(REQUEST_TIMEOUT_SECONDS, remaining),
+                )
         # `from None`, and only the error type logged: the SDK's error carries the response
         # body, which can echo the prompt.
         except anthropic.APIStatusError as exc:
@@ -104,38 +104,11 @@ class AnthropicProvider:
             )
             raise llm_error_for_status(exc.status_code) from None
         except anthropic.APIConnectionError as exc:
+            if monotonic() >= deadline:  # the deadline transport ended the request
+                raise _too_slow() from None
             log.warning("llm provider unreachable", error=type(exc).__name__)
             raise llm_error_for_status(None) from None
         return _completion(response)
-
-
-def _finish_within[R](seconds: float, call: Callable[[], R]) -> R:
-    """`call()`'s result, or `LLMUnavailable` once `seconds` have passed.
-
-    The SDK's timeouts bound each wait for data, not a whole response (a server can keep one
-    alive by trickling bytes), so the request runs in its own thread and is abandoned at the
-    deadline; its own timeouts end it later. Context variables are copied so its logs keep
-    the job's context.
-    """
-    outcome: list[R] = []
-    failure: list[BaseException] = []
-    done = threading.Event()
-
-    def run() -> None:
-        try:
-            outcome.append(call())
-        except BaseException as exc:  # handed to the caller's thread below
-            failure.append(exc)
-        finally:
-            done.set()
-
-    context = contextvars.copy_context()
-    threading.Thread(target=context.run, args=(run,), name="llm-request", daemon=True).start()
-    if not done.wait(seconds):
-        raise _too_slow()
-    if failure:
-        raise failure[0]
-    return outcome[0]
 
 
 def _too_slow() -> LLMUnavailable:

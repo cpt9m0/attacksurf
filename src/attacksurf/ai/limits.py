@@ -8,12 +8,14 @@ recorded on the job), so SDK retries would only multiply requests and park a wor
 `Retry-After` sleeps.
 
 The request timeout still doesn't bound a call's total time: a read timeout limits the wait for
-each chunk of a response, not the whole response, and one `complete()` call can make several
-requests (the corrective retry, PR 3's format fallback). So each adapter (PR 2, PR 3) must also
-enforce `CALL_DEADLINE_SECONDS` across one `complete()` call and raise `LLMUnavailable` when it
-would be exceeded. Its tests prove that with a stubbed slow response, and that a 429 with a
-large `Retry-After` fails at once instead of sleeping. `ai/providers/anthropic.py` shows one
-way: a per-request timeout capped at the time left, and a thread abandoned at the deadline.
+each chunk of a response, not the whole response (a server can trickle bytes forever), and one
+`complete()` call can make several requests (the corrective retry, the format fallback). So
+each adapter also enforces `CALL_DEADLINE_SECONDS` across one `complete()` call: it caps each
+request's timeout at the time left, builds its SDK client on
+`ai/providers/deadline.deadline_transport()` and sends inside `until(deadline)`, so the request
+itself ends at the deadline (nothing is left running), and raises `LLMUnavailable`. Its tests
+prove that against a trickling local server, and that a 429 with a large `Retry-After` fails at
+once instead of sleeping.
 """
 
 REQUEST_TIMEOUT_SECONDS = 60.0  # one HTTP request; reasoning models need tens of seconds

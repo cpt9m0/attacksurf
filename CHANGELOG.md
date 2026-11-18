@@ -147,6 +147,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   service (#174).
 
 ### Fixed
+- An LLM call that hits its deadline now ends its HTTP request too, instead of leaving it
+  running in an abandoned thread: a server that kept trickling bytes could hold threads and
+  connections open in a Celery worker indefinitely. Both providers build their SDK client on a
+  network layer (`ai/providers/deadline.py`) that caps every connect, read and write at the time
+  left (#23).
 - Ownership verification no longer spins forever when no worker consumes the queue: a verify
   job still queued past five minutes renders `Stalled` with a queue (not record) explanation
   and stops the 2-second poll until workers are back (#174).

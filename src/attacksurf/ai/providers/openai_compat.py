@@ -1,9 +1,7 @@
 """`LLMProvider` for the OpenAI Chat Completions API and compatible endpoints (ADR 0019)."""
 
-import contextvars
 import json
-import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from time import monotonic
 from typing import Any
@@ -18,6 +16,7 @@ from pydantic import BaseModel
 
 from attacksurf.ai.errors import llm_error_for_status
 from attacksurf.ai.limits import CALL_DEADLINE_SECONDS, MAX_RETRIES, REQUEST_TIMEOUT_SECONDS
+from attacksurf.ai.providers.deadline import deadline_transport, until
 from attacksurf.ai.structured import complete_structured
 from attacksurf.domain.llm import (
     Completion,
@@ -49,10 +48,13 @@ class OpenAICompatProvider:
     `json_object` with the schema in the system prompt, and then to plain text with the schema
     in the system prompt. All three paths validate through `complete_structured`.
 
-    `http_client` is for tests (a stubbed transport); production uses the SDK's own client.
+    `http_client` is for tests (a stubbed transport); production uses the SDK's default client on
+    `deadline_transport()`, so a request ends at the call deadline.
     """
 
     def __init__(self, config: LLMConfig, *, http_client: httpx2.Client | None = None) -> None:
+        if http_client is None:
+            http_client = openai.DefaultHttpxClient(transport=deadline_transport())
         self._model = config.model
         self._client = openai.OpenAI(
             api_key=config.api_key.get_secret_value(),
@@ -115,19 +117,17 @@ class OpenAICompatProvider:
             conversation, strict_schema if step.schema_in_system else None
         )
 
-        # `max_completion_tokens` is the canonical cap on OpenAI (where reasoning models reject
-        # `max_tokens`) and on Meta's `/v1/chat/completions` endpoint, counting reasoning too.
-        def request() -> ChatCompletion:
-            return self._client.chat.completions.create(
-                model=self._model,
-                max_completion_tokens=max_tokens,
-                messages=chat_messages,
-                response_format=step.response_format,
-                timeout=min(REQUEST_TIMEOUT_SECONDS, remaining),
-            )
-
         try:
-            response = _finish_within(remaining, request)
+            with until(deadline):
+                # `max_completion_tokens` is the canonical cap on OpenAI (where reasoning models
+                # reject `max_tokens`) and on Meta's `/v1/chat/completions`, counting reasoning.
+                response: ChatCompletion = self._client.chat.completions.create(
+                    model=self._model,
+                    max_completion_tokens=max_tokens,
+                    messages=chat_messages,
+                    response_format=step.response_format,
+                    timeout=min(REQUEST_TIMEOUT_SECONDS, remaining),
+                )
         except openai.BadRequestError as exc:
             if can_fallback:
                 raise _FormatRejected from None
@@ -139,6 +139,8 @@ class OpenAICompatProvider:
             _log_status_error(exc)
             raise llm_error_for_status(exc.status_code) from None
         except openai.APIConnectionError as exc:
+            if monotonic() >= deadline:  # the deadline transport ended the request
+                raise _too_slow() from None
             log.warning("llm provider unreachable", error=type(exc).__name__)
             raise llm_error_for_status(None) from None
         except ValueError:
@@ -191,35 +193,6 @@ def _build_messages(
         messages.append({"role": "system", "content": "\n\n".join(system_parts)})
     messages.extend(_turn(m) for m in conversation if m.role != "system")
     return messages
-
-
-def _finish_within[R](seconds: float, call: Callable[[], R]) -> R:
-    """`call()`'s result, or `LLMUnavailable` once `seconds` have passed.
-
-    The SDK's timeouts bound each wait for data, not a whole response (a server can keep one
-    alive by trickling bytes), so the request runs in its own thread and is abandoned at the
-    deadline; its own timeouts end it later. Context variables are copied so its logs keep
-    the job's context.
-    """
-    outcome: list[R] = []
-    failure: list[BaseException] = []
-    done = threading.Event()
-
-    def run() -> None:
-        try:
-            outcome.append(call())
-        except BaseException as exc:  # handed to the caller's thread below
-            failure.append(exc)
-        finally:
-            done.set()
-
-    context = contextvars.copy_context()
-    threading.Thread(target=context.run, args=(run,), name="llm-request", daemon=True).start()
-    if not done.wait(seconds):
-        raise _too_slow()
-    if failure:
-        raise failure[0]
-    return outcome[0]
 
 
 def _too_slow() -> LLMUnavailable:

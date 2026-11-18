@@ -392,7 +392,10 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   shared (`ai/structured.complete_structured`). Errors map to `LLMError` subclasses
   (`ai/errors.py`). Adapters pass `ai/limits.py`'s timeout and retry count (0: no SDK retries, ADR 0024)
   to their SDK and enforce its total `CALL_DEADLINE_SECONDS` per call (which leaves room under
-  `TrackedTask.soft_time_limit`); Celery alone retries `LLMUnavailable`, at task level, so AI
+  `TrackedTask.soft_time_limit`). They build their SDK client on `ai/providers/deadline.py`'s
+  transport, whose network layer caps every connect, read and write at the time left, so a
+  request ends at the deadline in its own thread and its connection is closed; no thread or
+  connection outlives the call. Celery alone retries `LLMUnavailable`, at task level, so AI
   tasks make one call each or cache per finding.
 - Every call: versioned prompt, pydantic output schema, usage recorded, budget enforced, results
   cached by `(prompt_version, model, input hash)`. Usage is recorded for failed calls too (the
