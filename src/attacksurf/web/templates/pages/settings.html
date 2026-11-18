@@ -1,9 +1,118 @@
 {% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
-{% from "components/empty_state.html" import empty_state %}
+{% from "components/confirm.html" import confirm_dialog %}
+{% from "components/form.html" import csrf_field %}
+{% from "components/table.html" import data_table %}
 {% block title %}Settings{% endblock %}
 {% block content %}
 <h1>Settings</h1>
-<div class="card">
-  {{ empty_state("Nothing to configure yet", "Organization, members and AI provider settings will live here.", icon_name="settings") }}
-</div>
+
+<section class="card card-body" aria-labelledby="ai-settings-title">
+  <h2 id="ai-settings-title">AI provider</h2>
+  <p class="muted">
+    Configure an organization-owned LLM provider and key, or use the server instance provider when available.
+    Saved keys are encrypted at rest and never displayed again after saving.
+  </p>
+  {%- if can_manage_ai %}
+    {% include "pages/_ai_settings_form.html" %}
+    <div class="settings-actions">
+      <form method="post" action="{{ url_for('ui.test_ai_connection') }}" hx-disabled-elt="find button">
+        {{ csrf_field() }}
+        <button type="submit" class="btn btn-secondary">Test connection</button>
+      </form>
+      {%- if current.has_api_key %}
+      {{ confirm_dialog("clear-api-key", "Remove API key", "Remove saved API key?",
+          "Your organization's saved API key will be erased. Future AI calls will use the server instance key if configured, or stay off.",
+          url_for("ui.clear_org_ai_key"), "Remove API key") }}
+      {%- endif %}
+    </div>
+  {%- else %}
+    <dl class="meta">
+      <div><dt>AI features</dt><dd>{{ "Enabled" if current.ai_enabled else "Disabled" }}</dd></div>
+      <div><dt>Provider</dt><dd>{{ current.provider }}</dd></div>
+      <div><dt>Model</dt><dd>{% if current.model %}<code>{{ current.model }}</code>{% else %}<span class="muted">Instance default</span>{% endif %}</dd></div>
+      <div><dt>Custom base URL</dt><dd>{% if current.base_url %}<code class="dns-value">{{ current.base_url }}</code>{% else %}<span class="muted">Default</span>{% endif %}</dd></div>
+      <div><dt>API key</dt><dd>{% if current.has_api_key %}<code>••••{{ current.api_key_last4 }}</code>{% else %}<span class="muted">Not set</span>{% endif %}</dd></div>
+      <div><dt>Monthly token budget</dt><dd>{% if current.monthly_token_budget is not none %}{{ "{:,}".format(current.monthly_token_budget) }}{% else %}<span class="muted">No org limit</span>{% endif %}</dd></div>
+    </dl>
+    <p class="muted">Only organization administrators can modify AI settings or test connections.</p>
+  {%- endif %}
+</section>
+
+<section class="card card-body" aria-labelledby="ai-privacy-title">
+  <h2 id="ai-privacy-title">Data sent to AI providers</h2>
+  <ul class="notice-list">
+    <li><strong>Sent for triage and summaries:</strong> normalized findings only (rule ID, severity, asset hostname or identifier, trimmed evidence snippets) and aggregate scan counts. Connection tests send a minimal prompt with no scan data.</li>
+    <li><strong>Never sent:</strong> credentials, saved API keys, passwords, or raw uploaded archives and binaries.</li>
+    <li><strong>What we record:</strong> token counts, estimated cost, latency, model, purpose, key source, and failure error type only — never prompts, replies, keys, or base URLs.</li>
+    <li><strong>Your control:</strong> disable AI above at any time or provide your own endpoint and API key.</li>
+  </ul>
+</section>
+
+{%- set source_labels = {
+  "org_key": "Organization key",
+  "instance_key": "Instance key",
+  "disabled": "Disabled",
+  "unconfigured": "Not configured",
+} %}
+<section class="card" aria-labelledby="ai-usage-title">
+  <div class="card-body">
+    <h2 id="ai-usage-title">AI usage &amp; monthly budget</h2>
+    <dl class="meta">
+      <div><dt>Active key source</dt><dd>
+        {{ source_labels.get(overview.status, overview.status) }}
+        {%- if overview.key_source is none %}
+        <span class="pill pill-neutral">off</span>
+        {%- elif overview.budget.allowed %}
+        <span class="pill pill-good">within budget</span>
+        {%- else %}
+        <span class="pill pill-bad">budget exceeded</span>
+        {%- endif %}
+      </dd></div>
+      <div><dt>Month ({{ usage.current_month }} UTC)</dt><dd>
+        {%- if overview.budget.limit_tokens is not none %}
+        {{ "{:,}".format(overview.budget.used_tokens) }} / {{ "{:,}".format(overview.budget.limit_tokens) }} tokens
+        {%- else %}
+        {{ "{:,}".format(usage.current_month_tokens) }} tokens <span class="muted">(no cap)</span>
+        {%- endif %}
+      </dd></div>
+      <div><dt>Current month est. cost</dt><dd>
+        {%- if usage.current_month_cost_usd is not none %}${{ "%.6f" | format(usage.current_month_cost_usd) }}{% else %}<span class="muted">—</span>{% endif %}
+      </dd></div>
+      <div><dt>Server instance cap</dt><dd>{{ "{:,}".format(instance_budget) }} tokens / month</dd></div>
+    </dl>
+    {%- if overview.key_source is not none and not overview.budget.allowed %}
+    <p class="form-error" role="alert">{{ overview.budget.reason }} AI scan stages are skipped until next UTC month or until limits are raised.</p>
+    {%- endif %}
+  </div>
+  {%- set usage_columns = [
+    ("month", "Month"),
+    ("purpose", "Purpose"),
+    ("provider", "Provider"),
+    ("model", "Model"),
+    ("key_source", "Key"),
+    ("calls", "Calls"),
+    ("tokens", "Tokens"),
+    ("cost", "Est. cost"),
+  ] %}
+  {% call(row, key) data_table(usage_columns, usage.rows, "Monthly AI usage by purpose and model",
+      "No AI usage recorded yet",
+      "Connection tests and AI scan stages record monthly token counts and estimated costs here.") %}
+    {%- if key == "month" %}<code>{{ row.month }}</code>
+    {%- elif key == "purpose" %}<code>{{ row.purpose }}</code>
+    {%- elif key == "provider" %}{{ row.provider }}
+    {%- elif key == "model" %}<code>{{ row.model }}</code>
+    {%- elif key == "key_source" %}{{ "Organization" if row.key_source == "org" else "Instance" }}
+    {%- elif key == "calls" %}{{ row.calls }}{% if row.failed_calls %} <span class="muted">({{ row.failed_calls }} failed)</span>{% endif %}
+    {%- elif key == "tokens" %}{{ "{:,}".format(row.total_tokens) }}{% if row.has_unreported_usage %} <span class="muted">(partial)</span>{% endif %}
+    {%- elif key == "cost" %}{% if row.estimated_cost_usd is not none %}${{ "%.6f" | format(row.estimated_cost_usd) }}{% else %}<span class="muted">—</span>{% endif %}
+    {%- endif %}
+  {% endcall %}
+  {%- if usage.rows %}
+  <div class="card-body">
+    <p class="field-hint">
+      Estimated costs use list prices in code and are shown as <code>—</code> for unpriced models or providers that did not report token counts.
+    </p>
+  </div>
+  {%- endif %}
+</section>
 {% endblock %}

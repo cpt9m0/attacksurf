@@ -105,3 +105,9 @@ def test_org_endpoint_credentials_are_hidden_after_resolution() -> None:
     assert config.base_url is org.base_url
     assert isinstance(config.base_url, SecretStr)
     assert config.base_url.get_secret_value() == endpoint
+
+
+def test_resolve_llm_config_is_off_when_org_disables_ai() -> None:
+    org = org_config(ai_enabled=False)
+
+    assert resolve_llm_config(org, make_settings(**INSTANCE)) is None

@@ -1,0 +1,40 @@
+{#- Swapped in place by HTMX: re-rendered with inline field errors (422) on invalid input. -#}
+{%- from "components/form.html" import csrf_field, form_error, form_field, select_field -%}
+<form id="ai-settings-form" class="form" method="post" action="{{ url_for('ui.save_ai_settings') }}"
+      hx-post="{{ url_for('ui.save_ai_settings') }}" hx-target="this" hx-swap="outerHTML"
+      hx-disabled-elt="find button">
+  {{ csrf_field() }}
+  {{ form_error(errors.get("_form")) }}
+  <div class="field-check">
+    <input id="f-ai_enabled" name="ai_enabled" type="checkbox" value="1"{% if form.ai_enabled %} checked{% endif %}>
+    <label for="f-ai_enabled">Enable AI triage and summaries for this organization</label>
+  </div>
+  {{ select_field("provider", "Provider", provider_options, form.provider) }}
+  {%- if errors.get("provider") %}
+  <p class="field-error" id="f-provider-error">{{ errors["provider"] }}</p>
+  {%- endif %}
+  {{ form_field("model", "Model", value=form.model, error=errors.get("model"), required=false,
+                autocomplete="off", autofocus=focus_field == "model",
+                hint="Required when using your own API key (e.g. claude-sonnet-4-5 or gpt-4o).") }}
+  {{ form_field("base_url", "Custom base URL", type="url", value=form.base_url, error=errors.get("base_url"),
+                required=false, autocomplete="off", autofocus=focus_field == "base_url",
+                hint="Optional. Must use https:// and resolve to a public IP unless allowlisted by the server.") }}
+  {%- if current.has_api_key %}
+  <p class="field-hint">Saved API key: <code>••••{{ current.api_key_last4 }}</code></p>
+  {%- set key_hint = "Leave blank to keep the saved key, or enter a new key to replace it." %}
+  {%- elif encryption_configured %}
+  {%- set key_hint = "Optional. Leave blank to use the server's instance key if configured." %}
+  {%- else %}
+  {%- set key_hint = "Saving an organization API key requires APP_ENCRYPTION_KEY on the server." %}
+  {%- endif %}
+  {{ form_field("api_key", "API key", type="password", value="", error=errors.get("api_key"),
+                required=false, autocomplete="new-password", autofocus=focus_field == "api_key",
+                hint=key_hint) }}
+  {{ form_field("monthly_token_budget", "Monthly token budget", type="number",
+                value=form.monthly_token_budget, error=errors.get("monthly_token_budget"),
+                required=false, autocomplete="off", autofocus=focus_field == "monthly_token_budget",
+                hint="Optional monthly UTC token cap for this organization (leave blank for no org override).") }}
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">Save AI settings</button>
+  </div>
+</form>

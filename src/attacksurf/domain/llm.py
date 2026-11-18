@@ -47,6 +47,7 @@ class OrgLLMConfig:
     model: str
     api_key: SecretStr | None
     base_url: SecretStr | None = None
+    ai_enabled: bool = True
 
 
 @dataclass(frozen=True)

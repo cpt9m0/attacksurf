@@ -20,6 +20,8 @@ from attacksurf.domain.assets import (
     AssetType,
     InvalidAssetValue,
 )
+from attacksurf.domain.llm import ProviderKind
+from attacksurf.domain.net import DnsResolver
 from attacksurf.domain.scans import (
     ScanAlreadyActive,
     ScanError,
@@ -28,12 +30,22 @@ from attacksurf.domain.scans import (
     ScanRateLimited,
     ScanStatus,
 )
+from attacksurf.infra.dns import DnsPythonResolver
 from attacksurf.scanners.profiles import PROFILES
 from attacksurf.scanners.registry import registry
-from attacksurf.services import asset_views, binaries, repos, scan_views, verifications
+from attacksurf.services import (
+    asset_views,
+    binaries,
+    llm_usage,
+    org_settings,
+    repos,
+    scan_views,
+    verifications,
+)
 from attacksurf.services import assets as assets_service
 from attacksurf.services import scans as scans_service
 from attacksurf.services.asset_views import AssetFilter, AssetStatus
+from attacksurf.services.org_settings import InvalidOrgSettings
 from attacksurf.services.scan_views import ScanFilter
 from attacksurf.services.uploads import AssetUpload
 from attacksurf.web import uploads
@@ -324,7 +336,96 @@ def findings() -> Response:
 
 @bp.get("/settings")
 def settings() -> Response:
-    return render_page("pages/settings.html")
+    return _settings_page()
+
+
+@bp.post("/settings/ai")
+@require_role(Role.ADMIN)
+def save_ai_settings() -> BaseResponse:
+    """Validate and save per-org AI provider settings and encrypted BYO API key (#24)."""
+    ai_enabled = "ai_enabled" in request.form
+    provider = request.form.get("provider", ProviderKind.ANTHROPIC.value)
+    model = request.form.get("model", "")
+    base_url = request.form.get("base_url", "")
+    api_key = request.form.get("api_key", "")
+    clear_api_key = request.form.get("clear_api_key") in {"1", "true", "on"}
+    monthly_token_budget = request.form.get("monthly_token_budget", "")
+
+    submitted = {
+        "ai_enabled": ai_enabled,
+        "provider": provider,
+        "model": model,
+        "base_url": base_url,
+        "monthly_token_budget": monthly_token_budget,
+    }
+    session = get_session()
+    try:
+        org_settings.update_org_settings(
+            session,
+            _org_id(),
+            ai_enabled=ai_enabled,
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key=api_key,
+            clear_api_key=clear_api_key,
+            monthly_token_budget=monthly_token_budget,
+            actor_id=current_user.session_user.user_id,
+            settings=get_settings(),
+            resolver=get_dns_resolver(),
+        )
+    except InvalidOrgSettings as exc:
+        field = exc.field or "_form"
+        errors = {field: str(exc)}
+        focus_field = exc.field
+        if is_htmx_request():
+            return render_page(
+                "pages/_ai_settings_form.html",
+                status=422,
+                **_ai_settings_context(
+                    form=submitted,
+                    errors=errors,
+                    focus_field=focus_field,
+                ),
+            )
+        return _settings_page(status=422, form=submitted, errors=errors, focus_field=focus_field)
+    flash("AI provider settings saved.", "success")
+    return _navigate(url_for("ui.settings"))
+
+
+@bp.post("/settings/ai/clear-key")
+@require_role(Role.ADMIN)
+def clear_org_ai_key() -> BaseResponse:
+    """Erase the org's saved BYO API key."""
+    org_settings.clear_org_api_key(
+        get_session(), _org_id(), actor_id=current_user.session_user.user_id
+    )
+    flash("Organization API key removed.", "success")
+    return _navigate(url_for("ui.settings"))
+
+
+@bp.post("/settings/ai/test")
+@require_role(Role.ADMIN)
+def test_ai_connection() -> BaseResponse:
+    """Run a tiny structured completion against the active org or instance LLM config."""
+    result = org_settings.test_org_llm_connection(
+        get_session(),
+        _org_id(),
+        get_settings(),
+        resolver=get_dns_resolver(),
+    )
+    flash(result.message, "success" if result.ok else "error")
+    return _navigate(url_for("ui.settings"))
+
+
+def get_dns_resolver() -> DnsResolver:
+    current = get_settings()
+    return DnsPythonResolver(
+        nameservers=current.dns_resolver_addresses,
+        timeout=current.dns_timeout_seconds,
+        lifetime=current.dns_lifetime_seconds,
+        max_concurrency=current.dns_max_concurrency,
+    )
 
 
 def _org_id() -> UUID:
@@ -453,4 +554,68 @@ def _assets_page(flt: AssetFilter, page: int, status: int = 200, **form: str) ->
         archive_error=form.get("archive_error"),
         binary_error=form.get("binary_error"),
         **uploads.upload_context(),
+    )
+
+
+_PROVIDER_OPTIONS = (
+    (ProviderKind.ANTHROPIC.value, "Anthropic"),
+    (ProviderKind.OPENAI_COMPAT.value, "OpenAI-compatible"),
+)
+
+
+def _ai_settings_context(
+    *,
+    form: dict[str, Any] | None = None,
+    errors: dict[str, str] | None = None,
+    focus_field: str | None = None,
+    current: org_settings.OrgSettingsView | None = None,
+) -> dict[str, Any]:
+    app_settings = get_settings()
+    if current is None:
+        current = org_settings.get_org_settings(get_session(), _org_id())
+    resolved_form = form or {
+        "ai_enabled": current.ai_enabled,
+        "provider": current.provider.value,
+        "model": current.model or "",
+        "base_url": current.base_url or "",
+        "monthly_token_budget": ""
+        if current.monthly_token_budget is None
+        else str(current.monthly_token_budget),
+    }
+    return {
+        "current": current,
+        "form": resolved_form,
+        "errors": errors or {},
+        "focus_field": focus_field,
+        "provider_options": _PROVIDER_OPTIONS,
+        "encryption_configured": app_settings.app_encryption_key_bytes is not None,
+    }
+
+
+def _settings_page(
+    *,
+    status: int = 200,
+    form: dict[str, Any] | None = None,
+    errors: dict[str, str] | None = None,
+    focus_field: str | None = None,
+) -> Response:
+    session = get_session()
+    app_settings = get_settings()
+    org_id = _org_id()
+    current = org_settings.get_org_settings(session, org_id)
+    overview = org_settings.get_org_budget_overview(session, org_id, app_settings)
+    usage = llm_usage.get_usage_summary(session, org_id)
+    return render_page(
+        "pages/settings.html",
+        status=status,
+        can_manage_ai=has_role(current_user.role, Role.ADMIN),
+        overview=overview,
+        usage=usage,
+        instance_budget=app_settings.llm_monthly_instance_token_budget,
+        **_ai_settings_context(
+            form=form,
+            errors=errors,
+            focus_field=focus_field,
+            current=current,
+        ),
     )

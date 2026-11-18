@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from celery.backends.cache import CacheBackend
+from pydantic import SecretStr
 from sqlalchemy import update
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -11,6 +12,7 @@ from attacksurf.domain.assets import AssetNotFound
 from attacksurf.domain.events import FindingCreated, FindingFixed, ScanCompleted
 from attacksurf.domain.findings import FindingStatus
 from attacksurf.domain.jobs import JobNotFound, JobTask, TransientJobError
+from attacksurf.domain.llm import KeySource, ProviderKind
 from attacksurf.domain.scanners import (
     AssetRef,
     ClosedGate,
@@ -20,7 +22,7 @@ from attacksurf.domain.scanners import (
     ScanProfile,
 )
 from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger
-from attacksurf.infra.db.models import Asset, AssetRelation, Evidence, Finding, Job, Scan
+from attacksurf.infra.db.models import Asset, AssetRelation, Evidence, Finding, Job, LLMUsage, Scan
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.infra.events import InProcessDispatcher
 from attacksurf.services import assets as assets_service
@@ -30,6 +32,7 @@ from attacksurf.workers import runtime
 from attacksurf.workers.app import app
 from attacksurf.workers.tasks import pipeline
 from tests.fakes import FakeQueue
+from tests.helpers import make_settings
 from tests.integration.factories import make_scan
 from tests.scanner_fixtures import PROFILES, RULE, FakeCheck, FixtureGate, fixture_registry
 
@@ -579,3 +582,58 @@ def test_dispatch_of_a_scan_the_archive_missed_does_not_leave_it_queued(
     assert scan.status == ScanStatus.CANCELLED
     assert scan.finished_at is not None
     assert kickoff.status == JobStatus.SKIPPED
+
+
+def test_triage_stage_is_skipped_with_notice_when_monthly_budget_exceeded(
+    db_session: Session,
+    pipeline_env: InProcessDispatcher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configured = make_settings(
+        env="test",
+        secret_key=SecretStr("test-secret-key"),
+        llm_api_key=SecretStr("instance-key"),
+        llm_model="muse-spark-1.3",
+        llm_monthly_instance_token_budget=1_000,
+    )
+    monkeypatch.setattr(runtime, "settings", lambda: configured)
+    scan = make_scan(db_session)
+    db_session.add(
+        LLMUsage(
+            org_id=scan.org_id,
+            provider=ProviderKind.ANTHROPIC,
+            model="muse-spark-1.3",
+            purpose="triage",
+            key_source=KeySource.INSTANCE,
+            input_tokens=700,
+            output_tokens=300,
+            usage_reported=True,
+            estimated_cost_usd=None,
+            latency_ms=100,
+            success=True,
+        )
+    )
+    triage_job = jobs.create_job(
+        db_session,
+        FakeQueue(db_session),
+        org_id=scan.org_id,
+        scan_id=scan.id,
+        stage="triage",
+        task_name="passive.triage",
+    )
+    finalize_job = jobs.create_job(
+        db_session,
+        FakeQueue(db_session),
+        org_id=scan.org_id,
+        scan_id=scan.id,
+        stage="finalize",
+        task_name="passive.finalize",
+    )
+
+    pipeline.triage.apply(kwargs={"org_id": str(scan.org_id), "job_id": str(triage_job.id)})
+    pipeline.finalize.apply(kwargs={"org_id": str(scan.org_id), "job_id": str(finalize_job.id)})
+
+    db_session.expire_all()
+    assert triage_job.status is JobStatus.SKIPPED
+    assert "budget exceeded" in (triage_job.error or "").lower()
+    assert scan.status is ScanStatus.COMPLETED

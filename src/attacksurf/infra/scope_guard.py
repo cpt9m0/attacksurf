@@ -5,15 +5,20 @@ for active checks, and hands the plugin run-scoped adapters that re-check every 
 HTTP host against the plugin's declared `ScannerGrant` (ADR 0013).
 """
 
+import ipaddress
+import re
 from collections.abc import Callable, Sequence
 from typing import Protocol
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 from uuid import UUID
 
-from attacksurf.domain.assets import AssetType
+import idna
+
+from attacksurf.domain.assets import MAX_URL_LENGTH, AssetType
 from attacksurf.domain.cache import NullCache, ScanCache
 from attacksurf.domain.net import (
     AuthoritativeDns,
+    DnsError,
     DnsLookup,
     DnsQuery,
     DnsRecordType,
@@ -330,3 +335,115 @@ def request_host(url: str) -> str:
     except ValueError:
         raise ScopeError("The URL is malformed.") from None
     return host
+
+
+_LLM_DEFAULT_PORTS = {"http": 80, "https": 443}
+_UNSAFE_BASE_URL_CHARS = re.compile(r"[\x00-\x20\x7f]")
+
+
+def validate_llm_base_url(
+    raw: str,
+    *,
+    allowed_hosts: frozenset[str] = frozenset(),
+    resolver: DnsResolver,
+) -> str:
+    """Validate and normalize an org-supplied LLM `base_url` against SSRF (#24).
+
+    Unless the host is explicitly allowlisted via `LLM_ALLOWED_BASE_HOSTS`, requires `https://`,
+    rejects IP literals and internal/non-public hostnames, resolves the host via `resolver`,
+    and rejects any private, loopback, link-local/metadata or reserved address. Always rejects
+    embedded credentials, query strings, fragments and control characters.
+    """
+    parts, scheme, port = _parse_llm_base_url(raw)
+    normalized_host, is_ip = _normalize_llm_host(parts.netloc, parts.hostname or "")
+    if normalized_host in allowed_hosts:
+        host_part = f"[{normalized_host}]" if ":" in normalized_host else normalized_host
+    else:
+        host_part = _validate_public_llm_host(
+            normalized_host, scheme=scheme, is_ip=is_ip, resolver=resolver
+        )
+    netloc = (
+        f"{host_part}:{port}"
+        if port is not None and port != _LLM_DEFAULT_PORTS[scheme]
+        else host_part
+    )
+    clean = f"{scheme}://{netloc}{parts.path}"
+    if len(clean) > MAX_URL_LENGTH:
+        raise ScopeError(f"Base URL can be at most {MAX_URL_LENGTH} characters.")
+    return clean
+
+
+def _parse_llm_base_url(raw: str) -> tuple[SplitResult, str, int | None]:
+    value = raw.strip()
+    if not value:
+        raise ScopeError("Base URL cannot be empty.")
+    if _UNSAFE_BASE_URL_CHARS.search(value):
+        raise ScopeError("Base URL cannot contain spaces or control characters.")
+    if len(value) > MAX_URL_LENGTH:
+        raise ScopeError(f"Base URL can be at most {MAX_URL_LENGTH} characters.")
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        raise ScopeError("The base URL is malformed.") from None
+    scheme = parts.scheme.lower()
+    if scheme not in _LLM_DEFAULT_PORTS:
+        raise ScopeError("Base URL must use http or https.")
+    if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+        raise ScopeError("Base URL must not contain credentials.")
+    if "\\" in parts.netloc:
+        raise ScopeError("The base URL host is malformed.")
+    if parts.query or parts.fragment or "?" in value or "#" in value:
+        raise ScopeError("Base URL must not contain a query string or fragment.")
+    if not parts.hostname:
+        raise ScopeError("The base URL has no host.")
+    try:
+        port = parts.port
+    except ValueError:
+        raise ScopeError("The base URL has an invalid port.") from None
+    if port is not None and port == 0:
+        raise ScopeError("The base URL has an invalid port.")
+    return parts, scheme, port
+
+
+def _validate_public_llm_host(
+    normalized_host: str, *, scheme: str, is_ip: bool, resolver: DnsResolver
+) -> str:
+    if scheme != "https":
+        raise ScopeError("Base URL must use https:// unless the host is allowlisted.")
+    if is_ip:
+        raise ScopeError("IP addresses are not allowed in custom base URLs.")
+    public_host = check_public_hostname(normalized_host, public_suffix.classify(normalized_host))
+    try:
+        addresses = resolver.resolve_name(public_host)
+    except DnsError:
+        raise ScopeError("The base URL host could not be resolved.") from None
+    if not addresses:
+        raise ScopeError("The base URL host did not resolve to any IP address.")
+    check_addresses(addresses)
+    return public_host
+
+
+def _normalize_llm_host(netloc: str, split_hostname: str) -> tuple[str, bool]:
+    if "[" in netloc:
+        if "%" in split_hostname:
+            raise ScopeError("IPv6 zone IDs are not allowed.")
+        try:
+            address = ipaddress.IPv6Address(split_hostname)
+        except ValueError:
+            raise ScopeError("The base URL host is malformed.") from None
+        return str(address), True
+    raw_host = netloc.partition(":")[0]
+    try:
+        address = ipaddress.ip_address(raw_host)
+    except ValueError:
+        pass
+    else:
+        return str(address), True
+    stripped = raw_host.removesuffix(".")
+    if not stripped:
+        raise ScopeError("The base URL has no host.")
+    try:
+        ascii_host = idna.encode(stripped, uts46=True).decode("ascii").removesuffix(".")
+    except idna.IDNAError:
+        raise ScopeError("The base URL host is malformed.") from None
+    return ascii_host, False
