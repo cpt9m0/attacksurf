@@ -8,12 +8,13 @@ fails once it has passed. The request ends in the caller's own thread and its co
 closed: nothing keeps running after `complete()` returns.
 """
 
+import socket
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from ssl import SSLContext
 from time import monotonic
-from typing import Any
+from typing import Any, cast
 
 import httpcore2
 import httpx2
@@ -61,10 +62,36 @@ class _DeadlineBackend(httpcore2.SyncBackend):
         local_address: str | None = None,
         socket_options: Iterable[httpcore2.SOCKET_OPTION] | None = None,
     ) -> httpcore2.NetworkStream:
-        stream = super().connect_tcp(
-            host, port, _capped(timeout, httpcore2.ConnectTimeout), local_address, socket_options
+        # Resolve once, then try each address with a freshly capped timeout.
+        # `socket.create_connection` gives every address the same timeout, so
+        # black-holed early addresses could push the whole connect past the deadline.
+        if host.startswith("["):
+            host = host[1:-1]
+        try:
+            targets = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except TimeoutError as exc:
+            raise httpcore2.ConnectTimeout(exc) from exc
+        except OSError as exc:
+            raise httpcore2.ConnectError(exc) from exc
+        error: httpcore2.ConnectError | httpcore2.ConnectTimeout | None = None
+        for _, _, _, _, sockaddr in targets:
+            # Recomputed per attempt: an earlier slow address must not extend the
+            # whole connect past the deadline. Raises once the deadline has passed.
+            attempt_timeout = _capped(timeout, httpcore2.ConnectTimeout)
+            address = cast(str, sockaddr[0])  # the host part of an IPv4/IPv6 sockaddr
+            try:
+                stream = super().connect_tcp(
+                    address, port, attempt_timeout, local_address, socket_options
+                )
+            except (httpcore2.ConnectError, httpcore2.ConnectTimeout) as exc:
+                error = exc
+                continue
+            return _DeadlineStream(stream)
+        raise (
+            error
+            if error is not None
+            else httpcore2.ConnectError("getaddrinfo returns an empty list")
         )
-        return _DeadlineStream(stream)
 
 
 class _DeadlineStream(httpcore2.NetworkStream):
