@@ -52,6 +52,7 @@ def test_resolve_llm_config_falls_back_to_the_instance_key() -> None:
         api_key=SecretStr("instance-key"),
         source=KeySource.INSTANCE,
         base_url=SecretStr("https://api.meta.ai/v1"),
+        allow_private_base_url=True,
     )
 
 
@@ -111,3 +112,19 @@ def test_resolve_llm_config_is_off_when_org_disables_ai() -> None:
     org = org_config(ai_enabled=False)
 
     assert resolve_llm_config(org, make_settings(**INSTANCE)) is None
+
+
+def test_resolve_llm_config_keeps_org_private_url_flag_fail_closed() -> None:
+    assert (
+        LLMConfig(
+            provider=ProviderKind.ANTHROPIC,
+            model="org-model",
+            api_key=SecretStr("org-key"),
+            source=KeySource.ORG,
+        ).allow_private_base_url
+        is False
+    )
+
+    allowed = resolve_llm_config(org_config(allow_private_base_url=True), make_settings(**INSTANCE))
+    assert allowed is not None
+    assert allowed.allow_private_base_url is True

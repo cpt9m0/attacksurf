@@ -809,3 +809,15 @@ dl.meta dd {
   flex-direction: column;
   gap: var(--space-2);
 }
+
+.ai-test-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.ai-test-status .form-error {
+  flex: 1 1 100%;
+  margin: 0;
+}

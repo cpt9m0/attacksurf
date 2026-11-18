@@ -2,17 +2,16 @@
 {%- from "components/form.html" import csrf_field, form_error, form_field, select_field -%}
 <form id="ai-settings-form" class="form" method="post" action="{{ url_for('ui.save_ai_settings') }}"
       hx-post="{{ url_for('ui.save_ai_settings') }}" hx-target="this" hx-swap="outerHTML"
-      hx-disabled-elt="find button">
+      hx-disabled-elt="find button" x-data="aiSettingsForm"
+      data-has-key="{{ 'true' if current.has_api_key else 'false' }}" @submit="onSubmit">
   {{ csrf_field() }}
   {{ form_error(errors.get("_form")) }}
   <div class="field-check">
     <input id="f-ai_enabled" name="ai_enabled" type="checkbox" value="1"{% if form.ai_enabled %} checked{% endif %}>
     <label for="f-ai_enabled">Enable AI triage and summaries for this organization</label>
   </div>
-  {{ select_field("provider", "Provider", provider_options, form.provider) }}
-  {%- if errors.get("provider") %}
-  <p class="field-error" id="f-provider-error">{{ errors["provider"] }}</p>
-  {%- endif %}
+  {{ select_field("provider", "Provider", provider_options, form.provider,
+                  error=errors.get("provider"), autofocus=focus_field == "provider") }}
   {{ form_field("model", "Model", value=form.model, error=errors.get("model"), required=false,
                 autocomplete="off", autofocus=focus_field == "model",
                 hint="Required when using your own API key (e.g. claude-sonnet-4-5 or gpt-4o).") }}
@@ -33,8 +32,21 @@
   {{ form_field("monthly_token_budget", "Monthly token budget", type="number",
                 value=form.monthly_token_budget, error=errors.get("monthly_token_budget"),
                 required=false, autocomplete="off", autofocus=focus_field == "monthly_token_budget",
-                hint="Optional monthly UTC token cap for this organization (leave blank for no org override).") }}
+                hint="Optional monthly UTC token cap for this organization (leave blank for no org limit).") }}
   <div class="form-actions">
     <button type="submit" class="btn btn-primary">Save AI settings</button>
   </div>
+  {%- if current.has_api_key %}
+  <dialog class="dialog" x-ref="replaceDialog" aria-labelledby="replace-api-key-title"
+          aria-describedby="replace-api-key-message">
+    <h2 id="replace-api-key-title">Replace saved API key?</h2>
+    <p id="replace-api-key-message">
+      Saving a new API key overwrites your organization's existing key (<code>••••{{ current.api_key_last4 }}</code>).
+    </p>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-secondary" autofocus @click="cancelReplace">Cancel</button>
+      <button type="button" class="btn btn-danger" @click="confirmReplace">Replace API key</button>
+    </div>
+  </dialog>
+  {%- endif %}
 </form>

@@ -21,6 +21,7 @@ def resolve_llm_config(org: OrgLLMConfig | None, settings: Settings) -> LLMConfi
                 api_key=org.api_key,
                 source=KeySource.ORG,
                 base_url=org.base_url,
+                allow_private_base_url=org.allow_private_base_url,
             )
     if settings.llm_api_key is None or settings.llm_model is None:
         return None
@@ -30,4 +31,6 @@ def resolve_llm_config(org: OrgLLMConfig | None, settings: Settings) -> LLMConfi
         api_key=settings.llm_api_key,
         source=KeySource.INSTANCE,
         base_url=settings.llm_base_url,
+        # Instance endpoints are operator-configured (ADR 0019), so local/private inference works.
+        allow_private_base_url=True,
     )

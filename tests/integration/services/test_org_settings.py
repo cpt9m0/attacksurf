@@ -1,15 +1,17 @@
 """Organization LLM settings, encrypted keys, budget enforcement and connection tests (#24)."""
 
 import base64
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from attacksurf.domain.accounts import Role
+from attacksurf.domain.jobs import JobError
 from attacksurf.domain.llm import (
     KeySource,
     LLMAuthError,
@@ -24,17 +26,21 @@ from attacksurf.infra.db.models import AuditLog, Job, LLMUsage, Membership, Org,
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services import jobs
 from attacksurf.services.org_settings import (
+    QUEUE_STALL_AFTER,
+    AITestState,
     EncryptionNotConfigured,
     InvalidOrgSettings,
     OrgSettingsError,
     check_llm_budget,
     clear_org_api_key,
     enforce_triage_budget,
+    get_ai_test_status,
     get_org_budget_overview,
     get_org_settings,
     load_org_llm_config,
+    queue_ai_connection_test,
     resolve_org_llm_config,
-    test_org_llm_connection,
+    run_ai_connection_test,
     update_org_settings,
 )
 from tests.fakes import FakeLLMProvider, FakeQueue
@@ -291,6 +297,16 @@ def test_ssrf_base_url_blocked_on_save_and_revalidated_on_load(
         settings=settings,
         resolver=FakeDns({"llm.example.com": ("93.184.216.34",)}),
     )
+    loaded = load_org_llm_config(
+        db_session,
+        org.id,
+        settings,
+        resolver=FakeDns({"llm.example.com": ("93.184.216.34",)}),
+    )
+    assert loaded is not None
+    assert loaded.allow_private_base_url is False
+    # Keys shorter than 8 characters mask as "****" instead of exposing characters in last4.
+    assert get_org_settings(db_session, org.id).api_key_last4 == "****"
 
     with pytest.raises(ScopeError):
         load_org_llm_config(
@@ -299,6 +315,27 @@ def test_ssrf_base_url_blocked_on_save_and_revalidated_on_load(
             settings,
             resolver=FakeDns({"llm.example.com": ("169.254.169.254",)}),
         )
+
+    # Allowlisted local base_url sets allow_private_base_url=True so _DeadlineBackend allows it.
+    allowed_settings = make_settings(
+        app_encryption_key=SecretStr(APP_KEY_1),
+        llm_allowed_base_hosts="localhost",
+    )
+    update_org_settings(
+        db_session,
+        org.id,
+        ai_enabled=True,
+        provider=ProviderKind.OPENAI_COMPAT,
+        model="llama3.1",
+        base_url="http://localhost:11434/v1",
+        api_key="ollama",
+        actor_id=user.id,
+        settings=allowed_settings,
+        resolver=FakeDns(),
+    )
+    allowed_cfg = load_org_llm_config(db_session, org.id, allowed_settings, resolver=FakeDns())
+    assert allowed_cfg is not None
+    assert allowed_cfg.allow_private_base_url is True
 
 
 def test_disabled_ai_blocks_instance_fallback(db_session: Session, actor: tuple[Org, User]) -> None:
@@ -394,11 +431,54 @@ def test_budget_enforcement_for_instance_and_org_keys(
     assert check_llm_budget(db_session, org.id, org_cfg, settings, now=now).allowed is True
 
 
-def test_test_org_llm_connection_records_usage_on_success_and_failure(
+def test_resolve_org_llm_config_reads_org_settings_once(
     db_session: Session, actor: tuple[Org, User]
 ) -> None:
     org, user = actor
+    settings = make_settings(
+        app_encryption_key=SecretStr(APP_KEY_1),
+        llm_api_key=SecretStr("instance-key"),
+        llm_model="muse-spark-1.3",
+    )
+    update_org_settings(
+        db_session,
+        org.id,
+        ai_enabled=True,
+        provider=ProviderKind.ANTHROPIC,
+        model="claude-sonnet-4-5",
+        base_url=None,
+        api_key="sk-ant-single-read-1234",
+        actor_id=user.id,
+        settings=settings,
+        resolver=FakeDns(),
+    )
+
+    executed: list[str] = []
+
+    def _capture(_conn: Any, _cursor: Any, statement: str, *_args: Any, **_kwargs: Any) -> None:
+        if "org_settings" in statement:
+            executed.append(statement)
+
+    bind = db_session.get_bind()
+    event.listen(bind, "before_cursor_execute", _capture)
+    try:
+        resolved = resolve_org_llm_config(db_session, org.id, settings, resolver=FakeDns())
+    finally:
+        event.remove(bind, "before_cursor_execute", _capture)
+
+    assert resolved is not None
+    assert resolved.source is KeySource.ORG
+    assert len(executed) == 1
+
+
+def test_queue_and_run_ai_connection_test_records_usage_and_status(
+    db_session: Session, actor: tuple[Org, User]
+) -> None:
+    org, user = actor
+    now = datetime(2026, 11, 18, 12, 0, tzinfo=UTC)
     settings = make_settings(app_encryption_key=SecretStr(APP_KEY_1))
+    assert get_ai_test_status(db_session, org.id, now=now).state is AITestState.NONE
+
     update_org_settings(
         db_session,
         org.id,
@@ -412,40 +492,74 @@ def test_test_org_llm_connection_records_usage_on_success_and_failure(
         resolver=FakeDns(),
     )
 
+    queue = FakeQueue(db_session)
+    job = queue_ai_connection_test(db_session, queue, org.id, settings, resolver=FakeDns(), now=now)
+    assert queue.sent == [("ai.test_connection", org.id, job.id, True)]
+    queued_at = job.updated_at or job.created_at
+    assert queued_at is not None
+    assert get_ai_test_status(db_session, org.id, now=queued_at).state is AITestState.QUEUED
+    assert (
+        get_ai_test_status(
+            db_session, org.id, now=queued_at + QUEUE_STALL_AFTER + timedelta(seconds=1)
+        ).state
+        is AITestState.STALLED
+    )
+
+    job.status = JobStatus.RUNNING
+    db_session.commit()
+    assert get_ai_test_status(db_session, org.id, now=now).state is AITestState.RUNNING
+
     ok_provider = FakeLLMProvider('{"ok": true}')
-    ok_res = test_org_llm_connection(
+    ok_res = run_ai_connection_test(
         db_session,
         org.id,
+        job.id,
         settings,
         provider_factory=lambda _cfg: ok_provider,
         resolver=FakeDns(),
+        now=now,
     )
     assert ok_res.ok is True
     assert ok_res.provider is ProviderKind.ANTHROPIC
+    jobs.mark_job_completed(db_session, org.id, job.id)
+    assert get_ai_test_status(db_session, org.id, now=now).state is AITestState.COMPLETED
 
-    fail_provider = FakeLLMProvider(LLMAuthError("The AI provider rejected the API key."))
-    fail_res = test_org_llm_connection(
-        db_session,
-        org.id,
-        settings,
-        provider_factory=lambda _cfg: fail_provider,
-        resolver=FakeDns(),
+    job2 = queue_ai_connection_test(
+        db_session, queue, org.id, settings, resolver=FakeDns(), now=now
     )
-    assert fail_res.ok is False
-    assert "rejected the API key" in fail_res.message
-    assert "sk-ant-test-4321" not in fail_res.message
+    fail_provider = FakeLLMProvider(LLMAuthError("The AI provider rejected the API key."))
+    with pytest.raises(JobError, match="rejected the API key"):
+        run_ai_connection_test(
+            db_session,
+            org.id,
+            job2.id,
+            settings,
+            provider_factory=lambda _cfg: fail_provider,
+            resolver=FakeDns(),
+            now=now,
+        )
 
+    job3 = queue_ai_connection_test(
+        db_session, queue, org.id, settings, resolver=FakeDns(), now=now
+    )
     transient_provider = FakeLLMProvider(
         LLMUnavailable("The AI provider took too long.", usage=TokenUsage(12, 8))
     )
-    transient_res = test_org_llm_connection(
-        db_session,
-        org.id,
-        settings,
-        provider_factory=lambda _cfg: transient_provider,
-        resolver=FakeDns(),
-    )
-    assert transient_res.ok is False
+    with pytest.raises(JobError, match="took too long") as caught:
+        run_ai_connection_test(
+            db_session,
+            org.id,
+            job3.id,
+            settings,
+            provider_factory=lambda _cfg: transient_provider,
+            resolver=FakeDns(),
+            now=now,
+        )
+    assert type(caught.value) is JobError
+    jobs.mark_job_failed(db_session, org.id, job3.id, caught.value)
+    failed_status = get_ai_test_status(db_session, org.id, now=now)
+    assert failed_status.state is AITestState.FAILED
+    assert "took too long" in (failed_status.message or "")
 
     rows = db_session.scalars(
         scoped(LLMUsage, org.id).order_by(LLMUsage.created_at, LLMUsage.id)
@@ -507,6 +621,8 @@ def test_update_org_settings_validation_and_clear_noop(
         {"model": "bad\nmodel"},
         {"model": "m" * 201},
         {"api_key": "sk\tbad"},
+        {"api_key": "sk-non-ascii-é"},
+        {"api_key": "abc"},
         {"api_key": "k" * 4097},
         {"monthly_token_budget": True},
         {"monthly_token_budget": "abc"},
@@ -563,11 +679,11 @@ def test_load_budget_and_connection_error_paths(
     now = datetime(2026, 11, 18, tzinfo=UTC)
     enc_settings = make_settings(app_encryption_key=SecretStr(APP_KEY_1))
     no_enc_settings = make_settings()
+    queue = FakeQueue(db_session)
 
-    # Neither org nor instance configured -> connection probe explains why cleanly.
-    unconfigured = test_org_llm_connection(db_session, org.id, no_enc_settings, resolver=FakeDns())
-    assert unconfigured.ok is False
-    assert "No organization API key" in unconfigured.message
+    # Neither org nor instance configured -> queue check explains why cleanly.
+    with pytest.raises(OrgSettingsError, match="No organization API key"):
+        queue_ai_connection_test(db_session, queue, org.id, no_enc_settings, resolver=FakeDns())
     assert check_llm_budget(db_session, org.id, None, no_enc_settings, now=now).allowed is False
 
     # Save an encrypted key + org budget, then check missing APP_ENCRYPTION_KEY and org budget cap.
@@ -587,28 +703,30 @@ def test_load_budget_and_connection_error_paths(
     with pytest.raises(EncryptionNotConfigured):
         load_org_llm_config(db_session, org.id, no_enc_settings, resolver=FakeDns())
 
-    conn_missing_key = test_org_llm_connection(
-        db_session, org.id, no_enc_settings, resolver=FakeDns()
+    with pytest.raises(OrgSettingsError, match="APP_ENCRYPTION_KEY"):
+        queue_ai_connection_test(db_session, queue, org.id, no_enc_settings, resolver=FakeDns())
+
+    job = queue_ai_connection_test(
+        db_session, queue, org.id, enc_settings, resolver=FakeDns(), now=now
     )
-    assert conn_missing_key.ok is False
-    assert "APP_ENCRYPTION_KEY" in conn_missing_key.message
 
     # Unexpected non-LLMError exception still commits a sanitized LLMUnavailable usage row.
     def boom(_cfg: LLMConfig) -> FakeLLMProvider:
         raise RuntimeError("boom with sk-ant-path-1234")
 
-    unexpected = test_org_llm_connection(
-        db_session,
-        org.id,
-        enc_settings,
-        provider_factory=boom,
-        resolver=FakeDns(),
-        now=now,
-    )
-    assert unexpected.ok is False
-    assert "sk-ant-path-1234" not in unexpected.message
+    with pytest.raises(JobError) as unexpected:
+        run_ai_connection_test(
+            db_session,
+            org.id,
+            job.id,
+            enc_settings,
+            provider_factory=boom,
+            resolver=FakeDns(),
+            now=now,
+        )
+    assert "sk-ant-path-1234" not in str(unexpected.value)
 
-    # Exceeding the org budget blocks both check_llm_budget and test_org_llm_connection.
+    # Exceeding the org budget blocks both check_llm_budget and connection tests.
     db_session.add(
         LLMUsage(
             org_id=org.id,
@@ -626,16 +744,20 @@ def test_load_budget_and_connection_error_paths(
         )
     )
     db_session.commit()
-    over = test_org_llm_connection(
-        db_session,
-        org.id,
-        enc_settings,
-        provider_factory=lambda _cfg: FakeLLMProvider('{"ok": true}'),
-        resolver=FakeDns(),
-        now=now,
-    )
-    assert over.ok is False
-    assert "organization" in over.message.lower()
+    with pytest.raises(OrgSettingsError, match="Monthly organization AI token budget"):
+        queue_ai_connection_test(
+            db_session, queue, org.id, enc_settings, resolver=FakeDns(), now=now
+        )
+    with pytest.raises(JobError, match="Monthly organization AI token budget"):
+        run_ai_connection_test(
+            db_session,
+            org.id,
+            job.id,
+            enc_settings,
+            provider_factory=lambda _cfg: FakeLLMProvider('{"ok": true}'),
+            resolver=FakeDns(),
+            now=now,
+        )
 
     # Toggling AI off reports disabled cleanly on connection test.
     update_org_settings(
@@ -649,9 +771,10 @@ def test_load_budget_and_connection_error_paths(
         settings=enc_settings,
         resolver=FakeDns(),
     )
-    disabled = test_org_llm_connection(db_session, org.id, enc_settings, resolver=FakeDns())
-    assert disabled.ok is False
-    assert "disabled" in disabled.message.lower()
+    with pytest.raises(OrgSettingsError, match="AI is disabled"):
+        queue_ai_connection_test(db_session, queue, org.id, enc_settings, resolver=FakeDns())
+    with pytest.raises(JobError, match="AI is disabled"):
+        run_ai_connection_test(db_session, org.id, job.id, enc_settings, resolver=FakeDns())
 
 
 def test_enforce_triage_budget_allows_valid_and_skips_errors(db_session: Session) -> None:

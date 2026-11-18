@@ -30,6 +30,7 @@ from attacksurf.domain.scans import (
     ScanRateLimited,
     ScanStatus,
 )
+from attacksurf.domain.scope import ScopeError
 from attacksurf.infra.dns import DnsPythonResolver
 from attacksurf.scanners.profiles import PROFILES
 from attacksurf.scanners.registry import registry
@@ -45,7 +46,7 @@ from attacksurf.services import (
 from attacksurf.services import assets as assets_service
 from attacksurf.services import scans as scans_service
 from attacksurf.services.asset_views import AssetFilter, AssetStatus
-from attacksurf.services.org_settings import InvalidOrgSettings
+from attacksurf.services.org_settings import InvalidOrgSettings, OrgSettingsError
 from attacksurf.services.scan_views import ScanFilter
 from attacksurf.services.uploads import AssetUpload
 from attacksurf.web import uploads
@@ -404,18 +405,47 @@ def clear_org_ai_key() -> BaseResponse:
     return _navigate(url_for("ui.settings"))
 
 
+@bp.get("/settings/ai/test")
+def ai_test_status() -> Response:
+    """Poll-only connection test status fragment (`#ai-test-status`)."""
+    return _ai_test_card()
+
+
 @bp.post("/settings/ai/test")
 @require_role(Role.ADMIN)
 def test_ai_connection() -> BaseResponse:
-    """Run a tiny structured completion against the active org or instance LLM config."""
-    result = org_settings.test_org_llm_connection(
-        get_session(),
-        _org_id(),
-        get_settings(),
-        resolver=get_dns_resolver(),
-    )
-    flash(result.message, "success" if result.ok else "error")
-    return _navigate(url_for("ui.settings"))
+    """Validate active LLM config/budget and enqueue `ai.test_connection` on the `ai` worker."""
+    session = get_session()
+    try:
+        org_settings.queue_ai_connection_test(
+            session,
+            get_task_queue(),
+            _org_id(),
+            get_settings(),
+            resolver=get_dns_resolver(),
+        )
+    except (OrgSettingsError, ScopeError) as exc:
+        if is_htmx_request():
+            return _ai_test_card(
+                org_settings.AITestStatus(org_settings.AITestState.FAILED, message=str(exc)),
+                status=422,
+            )
+        flash(str(exc), "error")
+        return redirect(url_for("ui.settings"), 303)
+    except Exception as exc:
+        log.warning("ai connection test not queued", error=type(exc).__name__)
+        msg = "The connection test could not be queued. Try again in a moment."
+        if is_htmx_request():
+            return _ai_test_card(
+                org_settings.AITestStatus(org_settings.AITestState.FAILED, message=msg),
+                status=503,
+            )
+        flash(msg, "error")
+        return redirect(url_for("ui.settings"), 303)
+    if is_htmx_request():
+        return _ai_test_card()
+    flash("AI connection test queued.", "info")
+    return redirect(url_for("ui.settings"), 303)
 
 
 def get_dns_resolver() -> DnsResolver:
@@ -592,6 +622,20 @@ def _ai_settings_context(
     }
 
 
+def _ai_test_card(
+    test_status: org_settings.AITestStatus | None = None,
+    *,
+    status: int = 200,
+) -> Response:
+    resolved = test_status or org_settings.get_ai_test_status(get_session(), _org_id())
+    return render_page(
+        "pages/_ai_test_status.html",
+        status=status,
+        can_manage_ai=has_role(current_user.role, Role.ADMIN),
+        test_status=resolved,
+    )
+
+
 def _settings_page(
     *,
     status: int = 200,
@@ -605,12 +649,14 @@ def _settings_page(
     current = org_settings.get_org_settings(session, org_id)
     overview = org_settings.get_org_budget_overview(session, org_id, app_settings)
     usage = llm_usage.get_usage_summary(session, org_id)
+    test_status = org_settings.get_ai_test_status(session, org_id)
     return render_page(
         "pages/settings.html",
         status=status,
         can_manage_ai=has_role(current_user.role, Role.ADMIN),
         overview=overview,
         usage=usage,
+        test_status=test_status,
         instance_budget=app_settings.llm_monthly_instance_token_budget,
         **_ai_settings_context(
             form=form,

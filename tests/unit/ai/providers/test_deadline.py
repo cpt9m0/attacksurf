@@ -185,3 +185,50 @@ def test_connect_fails_when_resolution_fails(monkeypatch: pytest.MonkeyPatch) ->
             client.get(server.url)
 
         assert not server.connected.wait(timeout=0.2)
+
+
+def test_block_private_ips_rejects_loopback_and_rebinding_before_dialing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with (
+        SlowServer(COMPLETE) as server,
+        httpx2.Client(transport=deadline_transport(block_private_ips=True), timeout=30) as blocked,
+    ):
+        with pytest.raises(httpx2.ConnectError, match="ScopeGuard"):
+            blocked.get(server.url)
+        assert not server.connected.wait(timeout=0.15)
+
+        port = int(server.url.rsplit(":", 1)[1])
+        dialed: list[str] = []
+
+        def fake_connect(  # noqa: PLR0917 (mirrors httpcore2.SyncBackend.connect_tcp)
+            self: httpcore2.SyncBackend,
+            host: str,
+            port: int,
+            timeout: float | None = None,
+            local_address: str | None = None,
+            socket_options: Iterable[httpcore2.SOCKET_OPTION] | None = None,
+        ) -> httpcore2.NetworkStream:
+            dialed.append(host)
+            raise AssertionError("must not dial when any resolved IP is private/metadata")
+
+        with monkeypatch.context() as mp:
+            mp.setattr(httpcore2.SyncBackend, "connect_tcp", fake_connect)
+            mp.setattr(
+                socket,
+                "getaddrinfo",
+                lambda *args, **kwargs: [
+                    (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port)),
+                    (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", port)),
+                ],
+            )
+            with pytest.raises(httpx2.ConnectError, match="ScopeGuard"):
+                blocked.get("http://rebind.example/v1")
+            assert dialed == []
+
+    # block_private_ips=False keeps loopback usable for operator-configured / test endpoints.
+    with (
+        SlowServer(COMPLETE) as server,
+        httpx2.Client(transport=deadline_transport(block_private_ips=False), timeout=30) as allowed,
+    ):
+        assert allowed.get(server.url).json() == {}

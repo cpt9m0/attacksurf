@@ -385,13 +385,16 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   the instance `LLM_*` config, else AI off. Sources never mix; no failover between keys (a broken
   or undecryptable org config fails closed instead of falling back to the instance key). Model
   names only from config.
-- Call path: `resolve_org_llm_config(session, org_id, settings)` + `check_llm_budget(...)` (or
-  `enforce_triage_budget(...)` in `workers/tasks/pipeline.py`, which marks `passive.triage`
-  `SKIPPED` with a reason when AI is off/over budget while allowing `finalize` to complete the
-  scan), then `ai/factory.build_provider(config).complete(...)`, then
-  `services.llm_usage.record_llm_usage`. Monthly usage and cost summaries come from
-  `services.llm_usage.get_usage_summary`. The factory is the only place that picks an adapter; its
-  `assert_never` makes pyright flag a `ProviderKind` without one.
+- Call path: `resolve_org_llm_config(session, org_id, settings)` (single-query org check +
+  decryption) + `check_llm_budget(...)` (or `enforce_triage_budget(...)` in
+  `workers/tasks/pipeline.py`, which marks `passive.triage` `SKIPPED` with a reason when AI is
+  off/over budget while allowing `finalize` to complete the scan), then
+  `ai/factory.build_provider(config).complete(...)`, then `services.llm_usage.record_llm_usage`.
+  Connection probes enqueue `ai.test_connection` (`workers/tasks/ai.py`) via
+  `services.org_settings.queue_ai_connection_test` and execute in `run_ai_connection_test`.
+  Monthly usage and cost summaries come from `services.llm_usage.get_usage_summary`. The factory
+  is the only place that picks an adapter; its `assert_never` makes pyright flag a `ProviderKind`
+  without one.
 - Structured output via each API's JSON-schema format (`OpenAICompatProvider` falls back on HTTP
   400 to `json_object` mode with the schema in the system message, then plain text); validation
   plus one corrective retry is
@@ -510,12 +513,16 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
   defensively, so anything unexpected means "no diff yet"); filters are parsed by
   `web/scan_params.py` (400 on bad values), shared with the API.
 - Settings UI (`/settings`, `POST /settings/ai`, `POST /settings/ai/clear-key`,
-  `POST /settings/ai/test`): admins configure `ai_enabled`, `provider`, `model`, custom
-  `base_url` (SSRF-guarded), BYO API key (never rendered back, masked as `••••last4`, cleared via
+  `GET/POST /settings/ai/test`): admins configure `ai_enabled`, `provider`, `model`, custom
+  `base_url` (SSRF-guarded), BYO API key (never rendered back, masked as `••••last4` or
+  `••••****` when under 8 chars, confirm modal on replace via `aiSettingsForm` and on remove via
   `confirm_dialog`), and optional monthly token budget (`422` inline `_ai_settings_form.html`
   HTMX swaps on validation errors); non-admins see a read-only summary, data-sharing notice, and
-  monthly usage breakdown. `POST /settings/ai/test` sends a minimal structured JSON probe and
-  persists an `LLMUsage` row (`purpose="connection_test"`) even on provider failure.
+  monthly usage breakdown. `POST /settings/ai/test` validates config/budget synchronously and
+  enqueues `ai.test_connection` (`stage="ai_test"`) on the `ai` queue, returning
+  `_ai_test_status.html` which polls `GET /settings/ai/test` every 2 s until completion, non-retryable
+  failure, or queue stall, while persisting an `LLMUsage` row (`purpose="connection_test"`) even
+  on provider failure.
 - `/api/v1/assets` (session auth, writes need `X-CSRFToken`): `GET` list, `POST {"value"}` adds a
   root domain (201 / 422 / 409), `GET /<id>` detail with relations, `GET /<id>/findings`,
   `GET /<id>/scans`, `POST /<id>/archive` (admin). Errors are `{"error", "message"}`.

@@ -373,6 +373,15 @@ def validate_llm_base_url(
     return clean
 
 
+def is_allowlisted_llm_base_url(url: str, allowed_hosts: frozenset[str]) -> bool:
+    """True when `url`'s normalized host is explicitly allowlisted in `allowed_hosts`."""
+    if not allowed_hosts:
+        return False
+    parts = urlsplit(url)
+    normalized_host, _ = _normalize_llm_host(parts.netloc, parts.hostname or "")
+    return normalized_host in allowed_hosts
+
+
 def _parse_llm_base_url(raw: str) -> tuple[SplitResult, str, int | None]:
     value = raw.strip()
     if not value:

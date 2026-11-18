@@ -49,6 +49,7 @@ def test_redact_secrets_masks_sensitive_keys() -> None:
     event = {
         "event": "x",
         "api_key": "sk-1",
+        "x-api-key": "sk-header",
         "llm_apikey": "sk-2",
         "encryption_key": "enc-1",
         "app_encryption_key": "enc-2",
@@ -58,13 +59,14 @@ def test_redact_secrets_masks_sensitive_keys() -> None:
         "Authorization": "Bearer t",
         "password": "p",
         "session_token": "t",
-        "nested": {"api_key": "sk-nested", "endpoint": "https://u:p@host.example/v1"},
+        "nested": {"api-key": "sk-nested", "endpoint": "https://u:p@host.example/v1"},
         "path": "/healthz",
     }
 
     result = redact_secrets(None, "info", event)
 
     assert result["api_key"] == REDACTED
+    assert result["x-api-key"] == REDACTED
     assert result["llm_apikey"] == REDACTED
     assert result["encryption_key"] == REDACTED
     assert result["app_encryption_key"] == REDACTED
@@ -75,7 +77,7 @@ def test_redact_secrets_masks_sensitive_keys() -> None:
     assert result["password"] == REDACTED
     assert result["session_token"] == REDACTED
     assert result["nested"] == {
-        "api_key": REDACTED,
+        "api-key": REDACTED,
         "endpoint": f"https://{REDACTED}@host.example/v1",
     }
     assert result["path"] == "/healthz"

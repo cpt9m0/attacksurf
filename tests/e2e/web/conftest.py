@@ -55,6 +55,11 @@ def _no_assets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         org_settings, "get_org_budget_overview", lambda *_args, **_kw: default_overview
     )
+    monkeypatch.setattr(
+        org_settings,
+        "get_ai_test_status",
+        lambda *_args, **_kw: org_settings.AITestStatus(org_settings.AITestState.NONE),
+    )
     monkeypatch.setattr(llm_usage, "get_usage_summary", lambda *_args, **_kw: empty_usage)
 
 

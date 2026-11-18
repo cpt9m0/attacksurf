@@ -1,6 +1,7 @@
 """Settings UI routes against real Postgres, signed in through the real signup flow (#24)."""
 
 import re
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -13,10 +14,10 @@ from sqlalchemy.orm import Session
 import attacksurf.web.ui as ui_module
 from attacksurf.domain.accounts import Role
 from attacksurf.domain.llm import KeySource, ProviderKind
-from attacksurf.infra.db.models import LLMUsage, Membership, OrgSettings, User
+from attacksurf.domain.scans import JobStatus
+from attacksurf.infra.db.models import Job, LLMUsage, Membership, OrgSettings, User
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services import org_settings as org_settings_service
-from tests.fakes import FakeLLMProvider
 from tests.helpers import make_settings
 
 _CSRF = re.compile(r'name="csrf_token" value="([^"]+)"')
@@ -25,8 +26,23 @@ _INLINE_CODE = (
     re.compile(r"\son[a-z]+\s*="),
     re.compile(r"\sstyle\s*="),
 )
+_ALPINE_EXPRESSION = re.compile(
+    r"""\s(?:x-(?!data=|init|ref|text|show|model|bind)[a-z-]+|:[a-z-]+)=["'][^"']*[?:+*]"""
+)
 HTMX = {"HX-Request": "true"}
 APP_KEY = "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s"
+
+
+class _RecordingQueue:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.sent: list[tuple[str, UUID, UUID]] = []
+
+    def enqueue(self, task_name: str, *, org_id: UUID, job_id: UUID) -> str:
+        self.sent.append((task_name, org_id, job_id))
+        if self.fail:
+            raise ConnectionError("broker unreachable")
+        return "task-1"
 
 
 class _StubDns:
@@ -119,9 +135,14 @@ def test_admin_saves_encrypted_key_renders_last4_only_and_clears_via_confirm(
     html = alice.get("/settings").get_data(as_text=True)
     assert "••••7890" in html
     assert raw_key not in html
+    assert 'data-has-key="true"' in html
+    assert 'x-data="aiSettingsForm"' in html
+    assert 'x-ref="replaceDialog"' in html
+    assert "Replace saved API key?" in html
     assert 'action="/settings/ai/clear-key"' in html
     assert '<dialog class="dialog" x-ref="dialog"' in html
     assert not any(pattern.search(html) for pattern in _INLINE_CODE)
+    assert not _ALPINE_EXPRESSION.search(html)
 
     org_id = _org_id(db_session, "alice@example.com")
     row = db_session.scalars(scoped(OrgSettings, org_id)).one()
@@ -133,6 +154,8 @@ def test_admin_saves_encrypted_key_renders_last4_only_and_clears_via_confirm(
     after = alice.get("/settings").get_data(as_text=True)
     assert "Organization API key removed." in after
     assert "••••7890" not in after
+    assert 'data-has-key="false"' in after
+    assert 'x-ref="replaceDialog"' not in after
 
 
 def test_ssrf_base_url_returns_422_inline_error_without_echoing_api_key(
@@ -181,9 +204,18 @@ def test_allowlisted_self_hosted_host_is_accepted(alice: FlaskClient) -> None:
     assert "••••4444" in html
 
 
-def test_test_connection_button_runs_probe_and_shows_usage_row(
+def test_test_connection_queues_worker_task_and_polls_status_fragment(
     alice: FlaskClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    queue = _RecordingQueue()
+    monkeypatch.setattr(ui_module, "get_task_queue", lambda: queue)
+
+    # Unconfigured org returns 422 status fragment on HTMX without enqueuing anything.
+    unconfigured = alice.post("/settings/ai/test", data={"csrf_token": _csrf(alice)}, headers=HTMX)
+    assert unconfigured.status_code == 422
+    assert "No organization API key" in unconfigured.get_data(as_text=True)
+    assert queue.sent == []
+
     alice.post(
         "/settings/ai",
         data={
@@ -196,18 +228,62 @@ def test_test_connection_button_runs_probe_and_shows_usage_row(
             "csrf_token": _csrf(alice),
         },
     )
-    provider = FakeLLMProvider('{"ok": true}')
-    monkeypatch.setattr(org_settings_service, "build_provider", lambda _cfg: provider)
 
-    response = alice.post("/settings/ai/test", data={"csrf_token": _csrf(alice)})
+    queued_res = alice.post("/settings/ai/test", data={"csrf_token": _csrf(alice)}, headers=HTMX)
+    queued_html = queued_res.get_data(as_text=True)
+    assert queued_res.status_code == 200
+    assert queued_html.lstrip().startswith('<div id="ai-test-status"')
+    assert 'hx-get="/settings/ai/test"' in queued_html
+    assert 'hx-trigger="every 2s"' in queued_html
+    assert 'aria-busy="true"' in queued_html
+    assert "Testing" in queued_html
+    assert "disabled" in queued_html
+    assert len(queue.sent) == 1
+    assert queue.sent[0][0] == "ai.test_connection"
 
-    assert response.status_code == 303
-    html = alice.get("/settings").get_data(as_text=True)
-    assert "Connected to anthropic (muse-spark-1.3)" in html
-    assert "<code>connection_test</code>" in html
-    assert "<code>muse-spark-1.3</code>" in html
+    # GET /settings/ai/test tracks completion and stops polling.
     org_id = _org_id(db_session, "alice@example.com")
-    assert len(db_session.scalars(scoped(LLMUsage, org_id)).all()) == 1
+    job_id = db_session.scalars(scoped(Job, org_id).where(Job.stage == "ai_test")).one().id
+    job = db_session.get_one(Job, job_id)
+    job.status = JobStatus.COMPLETED
+    db_session.commit()
+
+    done_html = alice.get("/settings/ai/test", headers=HTMX).get_data(as_text=True)
+    assert 'hx-trigger="every 2s"' not in done_html
+    assert 'aria-busy="false"' in done_html
+    assert "Connection succeeded." in done_html
+
+    # Failed job stops polling and shows sanitized Job.error.
+    job = db_session.get_one(Job, job_id)
+    job.status = JobStatus.FAILED
+    job.error = "JobError: The AI provider rejected the API key."
+    db_session.commit()
+    failed_html = alice.get("/settings/ai/test", headers=HTMX).get_data(as_text=True)
+    assert 'hx-trigger="every 2s"' not in failed_html
+    assert "Test failed" in failed_html
+    assert "The AI provider rejected the API key." in failed_html
+
+    # Stalled queue stops polling and explains worker status.
+    job = db_session.get_one(Job, job_id)
+    job.status = JobStatus.QUEUED
+    job.updated_at = (
+        datetime.now(UTC) - org_settings_service.QUEUE_STALL_AFTER - timedelta(minutes=1)
+    )
+    db_session.commit()
+    stalled_html = alice.get("/settings/ai/test", headers=HTMX).get_data(as_text=True)
+    assert 'hx-trigger="every 2s"' not in stalled_html
+    assert "Stalled" in stalled_html
+    assert "no AI worker" in stalled_html
+
+    # Non-HTMX POST redirects cleanly to /settings and broken broker yields 503.
+    plain_ok = alice.post("/settings/ai/test", data={"csrf_token": _csrf(alice)})
+    assert plain_ok.status_code == 303
+    assert plain_ok.headers["Location"] == "/settings"
+
+    monkeypatch.setattr(ui_module, "get_task_queue", lambda: _RecordingQueue(fail=True))
+    down_res = alice.post("/settings/ai/test", data={"csrf_token": _csrf(alice)}, headers=HTMX)
+    assert down_res.status_code == 503
+    assert "could not be queued" in down_res.get_data(as_text=True)
 
 
 def test_non_admin_member_sees_read_only_view_and_cannot_post(
@@ -309,3 +385,28 @@ def test_non_htmx_invalid_settings_submit_renders_full_422_page(alice: FlaskClie
     assert "<!doctype html>" in html.lower()
     assert 'aria-invalid="true"' in html
     assert submitted_key not in html
+
+
+def test_invalid_provider_renders_error_inside_field_div(alice: FlaskClient) -> None:
+    response = alice.post(
+        "/settings/ai",
+        data={
+            "ai_enabled": "1",
+            "provider": "invalid-provider",
+            "model": "",
+            "base_url": "",
+            "api_key": "",
+            "monthly_token_budget": "",
+            "csrf_token": _csrf(alice),
+        },
+        headers=HTMX,
+    )
+
+    html = response.get_data(as_text=True)
+    assert response.status_code == 422
+    assert 'id="f-provider"' in html
+    assert 'aria-invalid="true"' in html
+    assert 'aria-describedby="f-provider-error"' in html
+    assert '<p class="field-error" id="f-provider-error">' in html
+    assert not any(pattern.search(html) for pattern in _INLINE_CODE)
+    assert not _ALPINE_EXPRESSION.search(html)

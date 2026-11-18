@@ -54,7 +54,11 @@ class OpenAICompatProvider:
 
     def __init__(self, config: LLMConfig, *, http_client: httpx2.Client | None = None) -> None:
         if http_client is None:
-            http_client = openai.DefaultHttpxClient(transport=deadline_transport())
+            http_client = openai.DefaultHttpxClient(
+                transport=deadline_transport(block_private_ips=not config.allow_private_base_url),
+                follow_redirects=False,
+                trust_env=False,
+            )
         self._model = config.model
         self._client = openai.OpenAI(
             api_key=config.api_key.get_secret_value(),

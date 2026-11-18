@@ -1,6 +1,5 @@
 {% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
 {% from "components/confirm.html" import confirm_dialog %}
-{% from "components/form.html" import csrf_field %}
 {% from "components/table.html" import data_table %}
 {% block title %}Settings{% endblock %}
 {% block content %}
@@ -15,10 +14,7 @@
   {%- if can_manage_ai %}
     {% include "pages/_ai_settings_form.html" %}
     <div class="settings-actions">
-      <form method="post" action="{{ url_for('ui.test_ai_connection') }}" hx-disabled-elt="find button">
-        {{ csrf_field() }}
-        <button type="submit" class="btn btn-secondary">Test connection</button>
-      </form>
+      {% include "pages/_ai_test_status.html" %}
       {%- if current.has_api_key %}
       {{ confirm_dialog("clear-api-key", "Remove API key", "Remove saved API key?",
           "Your organization's saved API key will be erased. Future AI calls will use the server instance key if configured, or stay off.",

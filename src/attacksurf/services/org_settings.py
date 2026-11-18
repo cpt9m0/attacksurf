@@ -3,7 +3,8 @@
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 from attacksurf.ai.config import resolve_llm_config
 from attacksurf.ai.factory import build_provider
 from attacksurf.config import Settings
+from attacksurf.domain.jobs import JobError, TaskQueue
 from attacksurf.domain.llm import (
     KeySource,
     LLMConfig,
@@ -26,12 +28,13 @@ from attacksurf.domain.llm import (
     ProviderKind,
 )
 from attacksurf.domain.net import DnsResolver
+from attacksurf.domain.scans import JobStatus
 from attacksurf.domain.scope import ScopeError
 from attacksurf.infra.crypto import DecryptionError, SecretCipher
-from attacksurf.infra.db.models import Org, OrgSettings
+from attacksurf.infra.db.models import Job, Org, OrgSettings
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.infra.dns import DnsPythonResolver
-from attacksurf.infra.scope_guard import validate_llm_base_url
+from attacksurf.infra.scope_guard import is_allowlisted_llm_base_url, validate_llm_base_url
 from attacksurf.services import jobs
 from attacksurf.services.audit import audit
 from attacksurf.services.llm_usage import monthly_tokens_used, record_llm_usage
@@ -40,9 +43,12 @@ log = structlog.get_logger(__name__)
 
 _KEY_PURPOSE = b"org_api_key"
 _MAX_MODEL_LENGTH = 200
+_MIN_API_KEY_LENGTH = 4
+_SHORT_KEY_MASK_LEN = 8
 _MAX_API_KEY_LENGTH = 400  # ciphertext overhead (~90 bytes) stays within LargeBinary(512)
 _MAX_BIGINT = 2**63 - 1
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+QUEUE_STALL_AFTER = timedelta(minutes=5)
 _CONNECTION_TEST_MAX_TOKENS = 1024  # reasoning models count thinking tokens toward max_tokens
 _CONNECTION_TEST_MESSAGES = (
     Message("system", "Reply with a JSON object setting ok to true."),
@@ -106,7 +112,7 @@ class OrgBudgetOverview:
 
 @dataclass(frozen=True)
 class ConnectionTestResult:
-    """Outcome of `test_org_llm_connection`; message is safe to display to users."""
+    """Outcome of `run_ai_connection_test`; message is safe to display to users."""
 
     ok: bool
     message: str
@@ -114,6 +120,31 @@ class ConnectionTestResult:
     model: str | None = None
     key_source: KeySource | None = None
     latency_ms: int | None = None
+
+
+class AITestState(StrEnum):
+    """Latest `ai_test` job state for `/settings` HTMX polling."""
+
+    NONE = "none"
+    QUEUED = "queued"
+    RUNNING = "running"
+    STALLED = "stalled"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class AITestStatus:
+    """Read-only view of an org's latest connection test job for `/settings`."""
+
+    state: AITestState
+    job_id: UUID | None = None
+    message: str | None = None
+    updated_at: datetime | None = None
+
+    @property
+    def in_flight(self) -> bool:
+        return self.state in {AITestState.QUEUED, AITestState.RUNNING}
 
 
 def get_org_settings(session: Session, org_id: UUID) -> OrgSettingsView:
@@ -243,7 +274,7 @@ def _apply_api_key_update(
         row.api_key_ciphertext = SecretCipher(primary_key, purpose=_KEY_PURPOSE).encrypt_secret(
             clean_key, aad=org_id.bytes
         )
-        row.api_key_last4 = clean_key[-4:]
+        row.api_key_last4 = _api_key_last4(clean_key)
         return "set"
     if clear_api_key:
         row.api_key_ciphertext = None
@@ -277,20 +308,13 @@ def clear_org_api_key(
     return _to_view(row)
 
 
-def load_org_llm_config(
-    session: Session,
+def _org_llm_config_from_row(
+    row: OrgSettings | None,
     org_id: UUID,
     settings: Settings,
     *,
     resolver: DnsResolver | None = None,
 ) -> OrgLLMConfig | None:
-    """Load the org's decrypted LLM config, re-validating `base_url` against SSRF before use.
-
-    Returns `None` when AI is disabled for the org or no org API key is stored. Raises if a
-    stored key cannot be decrypted or the stored `base_url` fails SSRF checks, so a broken org
-    config never silently falls back to the instance key (ADR 0019).
-    """
-    row = session.scalars(scoped(OrgSettings, org_id)).one_or_none()
     if row is None or not row.ai_enabled or row.api_key_ciphertext is None:
         return None
     primary_key = settings.app_encryption_key_bytes
@@ -312,6 +336,7 @@ def load_org_llm_config(
     if not row.model:
         raise InvalidOrgSettings("Organization API key requires a configured model.", field="model")
     validated_url: SecretStr | None = None
+    allow_private = False
     if row.base_url:
         active_resolver = resolver or _default_resolver(settings)
         clean_url = validate_llm_base_url(
@@ -319,6 +344,7 @@ def load_org_llm_config(
             allowed_hosts=settings.llm_allowed_base_host_set,
             resolver=active_resolver,
         )
+        allow_private = is_allowlisted_llm_base_url(clean_url, settings.llm_allowed_base_host_set)
         validated_url = SecretStr(clean_url)
     return OrgLLMConfig(
         provider=row.provider,
@@ -326,7 +352,25 @@ def load_org_llm_config(
         api_key=SecretStr(plaintext),
         base_url=validated_url,
         ai_enabled=row.ai_enabled,
+        allow_private_base_url=allow_private,
     )
+
+
+def load_org_llm_config(
+    session: Session,
+    org_id: UUID,
+    settings: Settings,
+    *,
+    resolver: DnsResolver | None = None,
+) -> OrgLLMConfig | None:
+    """Load the org's decrypted LLM config, re-validating `base_url` against SSRF before use.
+
+    Returns `None` when AI is disabled for the org or no org API key is stored. Raises if a
+    stored key cannot be decrypted or the stored `base_url` fails SSRF checks, so a broken org
+    config never silently falls back to the instance key (ADR 0019).
+    """
+    row = session.scalars(scoped(OrgSettings, org_id)).one_or_none()
+    return _org_llm_config_from_row(row, org_id, settings, resolver=resolver)
 
 
 def resolve_org_llm_config(
@@ -336,13 +380,11 @@ def resolve_org_llm_config(
     *,
     resolver: DnsResolver | None = None,
 ) -> LLMConfig | None:
-    """Resolve the active `LLMConfig` for `org_id`, respecting `ai_enabled=False`."""
-    ai_enabled = session.scalar(
-        scoped(OrgSettings, org_id).with_only_columns(OrgSettings.ai_enabled)
-    )
-    if ai_enabled is False:
+    """Resolve the active `LLMConfig` for `org_id` from a single row read."""
+    row = session.scalars(scoped(OrgSettings, org_id)).one_or_none()
+    if row is not None and not row.ai_enabled:
         return None
-    org_config = load_org_llm_config(session, org_id, settings, resolver=resolver)
+    org_config = _org_llm_config_from_row(row, org_id, settings, resolver=resolver)
     return resolve_llm_config(org_config, settings)
 
 
@@ -434,42 +476,115 @@ def get_org_budget_overview(
     )
 
 
-def test_org_llm_connection(
+def get_ai_test_status(
+    session: Session,
+    org_id: UUID,
+    *,
+    now: datetime | None = None,
+) -> AITestStatus:
+    """Return the latest `ai_test` job status for `/settings` HTMX polling."""
+    row = session.scalars(
+        scoped(Job, org_id)
+        .where(Job.stage == "ai_test")
+        .order_by(Job.created_at.desc(), Job.id.desc())
+        .limit(1)
+    ).one_or_none()
+    if row is None:
+        return AITestStatus(AITestState.NONE)
+    if row.status is JobStatus.QUEUED:
+        ref_time = row.updated_at or row.created_at
+        current = now or datetime.now(UTC)
+        if ref_time is not None and current - ref_time > QUEUE_STALL_AFTER:
+            return AITestStatus(AITestState.STALLED, job_id=row.id, updated_at=ref_time)
+        return AITestStatus(AITestState.QUEUED, job_id=row.id, updated_at=ref_time)
+    if row.status is JobStatus.RUNNING:
+        return AITestStatus(
+            AITestState.RUNNING, job_id=row.id, updated_at=row.updated_at or row.created_at
+        )
+    if row.status is JobStatus.COMPLETED:
+        return AITestStatus(
+            AITestState.COMPLETED,
+            job_id=row.id,
+            message="Connection succeeded.",
+            updated_at=row.finished_at or row.updated_at or row.created_at,
+        )
+    return AITestStatus(
+        AITestState.FAILED,
+        job_id=row.id,
+        message=row.error or "The AI provider connection test failed.",
+        updated_at=row.finished_at or row.updated_at or row.created_at,
+    )
+
+
+def _resolve_checked_config_for_test(
     session: Session,
     org_id: UUID,
     settings: Settings,
     *,
-    provider_factory: Callable[[LLMConfig], LLMProvider] | None = None,  # noqa: PT028
-    resolver: DnsResolver | None = None,  # noqa: PT028
-    now: datetime | None = None,  # noqa: PT028
+    resolver: DnsResolver | None,
+    now: datetime | None,
+) -> LLMConfig:
+    row = session.scalars(scoped(OrgSettings, org_id)).one_or_none()
+    if row is not None and not row.ai_enabled:
+        raise OrgSettingsError("AI is disabled for this organization.")
+    org_config = _org_llm_config_from_row(row, org_id, settings, resolver=resolver)
+    config = resolve_llm_config(org_config, settings)
+    if config is None:
+        raise OrgSettingsError("No organization API key or server instance LLM is configured.")
+    budget = _evaluate_budget(
+        session,
+        org_id,
+        source=config.source,
+        org_budget=row.monthly_token_budget if row is not None else None,
+        settings=settings,
+        now=now,
+    )
+    if not budget.allowed:
+        raise OrgSettingsError(budget.reason or "Monthly AI token budget exceeded.")
+    return config
+
+
+def queue_ai_connection_test(
+    session: Session,
+    queue: TaskQueue,
+    org_id: UUID,
+    settings: Settings,
+    *,
+    resolver: DnsResolver | None = None,
+    now: datetime | None = None,
+) -> Job:
+    """Validate config/SSRF/budget synchronously, then enqueue `ai.test_connection`."""
+    _resolve_checked_config_for_test(session, org_id, settings, resolver=resolver, now=now)
+    return jobs.create_job(
+        session,
+        queue,
+        org_id=org_id,
+        scan_id=None,
+        stage="ai_test",
+        task_name="ai.test_connection",
+    )
+
+
+def run_ai_connection_test(
+    session: Session,
+    org_id: UUID,
+    job_id: UUID,
+    settings: Settings,
+    *,
+    provider_factory: Callable[[LLMConfig], LLMProvider] | None = None,
+    resolver: DnsResolver | None = None,
+    now: datetime | None = None,
 ) -> ConnectionTestResult:
-    """Validate config + budget, run a tiny structured probe, and record usage even on failure."""
+    """Execute an `ai_test` probe inside a Celery worker; fails non-retryably on provider error."""
     factory = provider_factory or build_provider
     try:
-        config = resolve_org_llm_config(session, org_id, settings, resolver=resolver)
-    except (OrgSettingsError, ScopeError) as exc:
-        return ConnectionTestResult(ok=False, message=str(exc))
-
-    if config is None:
-        ai_enabled = session.scalar(
-            scoped(OrgSettings, org_id).with_only_columns(OrgSettings.ai_enabled)
+        config = _resolve_checked_config_for_test(
+            session, org_id, settings, resolver=resolver, now=now
         )
-        msg = (
-            "AI is disabled for this organization."
-            if ai_enabled is False
-            else "No organization API key or server instance LLM is configured."
-        )
-        return ConnectionTestResult(ok=False, message=msg)
-
-    budget = check_llm_budget(session, org_id, config, settings, now=now)
-    if not budget.allowed:
-        return ConnectionTestResult(
-            ok=False,
-            provider=config.provider,
-            model=config.model,
-            key_source=config.source,
-            message=budget.reason or "Monthly AI token budget exceeded.",
-        )
+    except ScopeError:
+        raise
+    except OrgSettingsError as exc:
+        raise JobError(str(exc)) from None
 
     # Run the provider call without holding any write locks.
     try:
@@ -482,27 +597,25 @@ def test_org_llm_connection(
     except LLMError as exc:
         record_llm_usage(session, org_id, config, purpose="connection_test", outcome=exc)
         session.commit()
-        return ConnectionTestResult(
-            ok=False,
-            provider=config.provider,
-            model=config.model,
-            key_source=config.source,
-            message=str(exc),
-        )
+        # Wrap even LLMUnavailable in a non-retryable JobError so UI polling fails on attempt 1.
+        raise JobError(str(exc)) from None
     except Exception:
         fallback = LLMUnavailable("The AI provider connection test failed.")
         record_llm_usage(session, org_id, config, purpose="connection_test", outcome=fallback)
         session.commit()
-        return ConnectionTestResult(
-            ok=False,
-            provider=config.provider,
-            model=config.model,
-            key_source=config.source,
-            message=str(fallback),
-        )
+        raise JobError(str(fallback)) from None
 
     record_llm_usage(session, org_id, config, purpose="connection_test", outcome=result)
     session.commit()
+    log.info(
+        "ai connection test succeeded",
+        org_id=str(org_id),
+        job_id=str(job_id),
+        provider=config.provider.value,
+        model=config.model,
+        key_source=config.source.value,
+        latency_ms=result.latency_ms,
+    )
     return ConnectionTestResult(
         ok=True,
         provider=config.provider,
@@ -513,9 +626,6 @@ def test_org_llm_connection(
             f"Connected to {config.provider.value} ({config.model}) in {result.latency_ms} ms."
         ),
     )
-
-
-test_org_llm_connection.__test__ = False  # type: ignore[attr-defined]
 
 
 def enforce_triage_budget(
@@ -665,14 +775,27 @@ def _clean_model(raw: str | None) -> str | None:
     return stripped
 
 
+def _api_key_last4(clean_key: str) -> str:
+    # Mask keys shorter than 8 characters so displaying last4 never leaks most of a short key.
+    return "****" if len(clean_key) < _SHORT_KEY_MASK_LEN else clean_key[-4:]
+
+
 def _clean_api_key(raw: str | None) -> str | None:
     if raw is None:
         return None
     stripped = raw.strip()
     if not stripped:
         return None
-    if _CONTROL_CHARS.search(stripped):
-        raise InvalidOrgSettings("API key contains invalid characters.", field="api_key")
+    if not stripped.isascii() or _CONTROL_CHARS.search(stripped):
+        raise InvalidOrgSettings(
+            "API key must contain printable ASCII characters only.",
+            field="api_key",
+        )
+    if len(stripped) < _MIN_API_KEY_LENGTH:
+        raise InvalidOrgSettings(
+            f"API key must be at least {_MIN_API_KEY_LENGTH} characters.",
+            field="api_key",
+        )
     if len(stripped) > _MAX_API_KEY_LENGTH:
         raise InvalidOrgSettings(
             f"API key can be at most {_MAX_API_KEY_LENGTH} characters.", field="api_key"

@@ -17,8 +17,9 @@ REQUEST_ID_HEADER = "X-Request-ID"
 # Client-supplied IDs are echoed into logs and headers; restrict them to prevent log injection.
 _VALID_REQUEST_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 _SENSITIVE_KEY = re.compile(
-    r"secret|token|password|passwd|api_?key|encryption_?key|private_?key|signing_?key|"
-    r"old_keys|key_envelope|ciphertext|authorization|cookie|credential|base_?url",
+    r"secret|token|password|passwd|api[-_]?key|encryption[-_]?key|private[-_]?key|"
+    r"signing[-_]?key|old[-_]?keys|key_envelope|ciphertext|authorization|cookie|credential|"
+    r"base[-_]?url",
     re.I,
 )
 # Redact credentials embedded inside URLs (e.g. https://user:pass@host/v1).

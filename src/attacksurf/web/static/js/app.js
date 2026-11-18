@@ -59,4 +59,53 @@ document.addEventListener("alpine:init", function () {
       },
     };
   });
+
+  // pages/_ai_settings_form.html: confirm before overwriting an existing saved API key.
+  window.Alpine.data("aiSettingsForm", function () {
+    return {
+      confirmed: false,
+      init: function () {
+        var self = this;
+        this.$el.addEventListener("htmx:confirm", function (event) {
+          if (self.needsConfirm()) {
+            event.preventDefault();
+            self.openReplaceDialog();
+          }
+        });
+      },
+      needsConfirm: function () {
+        if (this.confirmed) return false;
+        if (this.$el.dataset.hasKey !== "true") return false;
+        var input = this.$el.querySelector('input[name="api_key"]');
+        return Boolean(input && input.value.trim().length > 0);
+      },
+      openReplaceDialog: function () {
+        if (this.$refs.replaceDialog && !this.$refs.replaceDialog.open) {
+          this.$refs.replaceDialog.showModal();
+        }
+      },
+      onSubmit: function (event) {
+        if (this.needsConfirm()) {
+          event.preventDefault();
+          this.openReplaceDialog();
+        }
+      },
+      cancelReplace: function () {
+        if (this.$refs.replaceDialog) {
+          this.$refs.replaceDialog.close();
+        }
+      },
+      confirmReplace: function () {
+        var self = this;
+        this.confirmed = true;
+        if (this.$refs.replaceDialog) {
+          this.$refs.replaceDialog.close();
+        }
+        this.$el.requestSubmit();
+        window.setTimeout(function () {
+          self.confirmed = false;
+        }, 0);
+      },
+    };
+  });
 });
