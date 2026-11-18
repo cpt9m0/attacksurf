@@ -2,48 +2,36 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-17 · **Branch:** `174-verification-queue` · **Issue:** #174 (ownership verification never completes)
+**Updated:** 2026-11-17 · **Branch:** `23-openai-compat-provider` · **Issue:** #23 (LLM providers, PR 3)
 
 ## Status
-Done: `worker-passive` + `beat` added to `compose.prod.yaml` with secret-aware healthchecks;
-`scripts/deploy.sh` derives long-running services from the compose file, gates releases on
-`--wait --wait-timeout 300`, and converges stopped workers; ownership card renders `Stalled`
-with a queue explanation and stops polling past `QUEUE_STALL_AFTER` (5 min); regression tests
-cover the stuck-queued, running-old, and requeued cases. All checks green, ready to commit/PR.
+PR 3 (`23-openai-compat-provider`) implements `OpenAICompatProvider` and is merged with `main`
+(`72400d5`, which includes ADR 0024 and PR 4a `#166`). Ready for review and merge before PR 4b
+(`23-llm-factory`).
 
 ## Last task
-- #174 on branch `174-verification-queue` off `origin/main` (16 files, +326/-55):
-  prod compose (`worker-passive -Q passive -c 2`, `beat`, `env_file` moved to `x-app` anchor),
-  deploy script (service list derived, orphan cleanup on rollback, all-services running check),
-  `services/verifications.py` (`CheckState`/`InFlightCheck`, `QUEUE_STALL_AFTER`, newest-job /
-  `updated_at` based stall), `web/ui.py` + `verification.html` + `_ownership.html` +
-  `asset_detail.html` (stalled pill + `form-error role=alert`, no polling), unit + service +
-  web integration tests, docs (`deployment.md` workers section + known gaps, `architecture.md`,
-  `security.md`, ADR 0028, `DESIGN.md`), `CHANGELOG.md` Added + Fixed.
-- Verified: `ruff check`, `ruff format`, `pyright` (0 errors), `lint-imports` (8 kept),
-  `pytest` 2671 passed / 96.01%, `pre-commit run --all-files`, `RUN_WEB_E2E=1` Chromium (14 passed),
-  `compose.prod.yaml config --quiet` with temp env (services resolve).
+- Added `openai>=3.41.0,<3.42` (`3.41.0`, the newest release at least two weeks old) and extended
+  the import-linter LLM SDK contract in `pyproject.toml` to forbid `openai` outside
+  `attacksurf.ai.providers`.
+- Implemented `OpenAICompatProvider` (`src/attacksurf/ai/providers/openai_compat.py`): Chat
+  Completions with `max_completion_tokens`, explicit `api_key` and `base_url` (`DEFAULT_BASE_URL`),
+  no sampling parameters (ADR 0024), `max_retries=0`, `json_schema` response format with HTTP 400
+  fallback to `json_object` and then plain text (schema in system prompt), immediate `LLMOutputError`
+  on `finish_reason` `length`/`content_filter` or `message.refusal`, `TokenUsage(reported=False)`
+  when usage is omitted, and `CALL_DEADLINE_SECONDS` enforced across fallbacks and retries.
+- Added unit and contract tests (`tests/unit/ai/providers/test_openai_compat.py`) and the opt-in
+  live test (`tests/e2e/test_openai_compat_live.py`).
 
 ## Next step
-1. Commit as `Ali Ayati <seyyedaliayati@gmail.com>` (2 commits: infra + web), push branch,
-   open draft PR `fix(workers): run production workers and stop a stalled ownership card`,
-   `Closes #174`.
-2. After merge: CD timer deploys; verify `docker compose ps` (worker-passive + beat healthy),
-   `nuxsystems.com` verifies on first `Verify now`. `worker-ai`, backups, monitoring stay #29.
+Open PR 3 for review; once PR 3 is merged, implement PR 4b (`ai/factory.py` on `23-llm-factory`)
+to close #23.
 
 ## Open threads
-- `worker-ai` intentionally out of scope (#29); AI jobs still queue.
-- Newest-job-wins: repeated "Verify now" restarts the 5-min grace (pre-existing pile-up, harmless).
-- Stalled card is static until reload; copy says so.
+- #23: PR 4b (`build_provider` factory + live verification on both providers) remains to close #23.
+- Org-supplied base URLs still need ScopeGuard (SSRF) validation in #24 before use.
 
 ## Notes for the next agent
-- Shell env needed here: `UV_CACHE_DIR=/tmp/uv-cache-ubuntu`,
-  `PRE_COMMIT_HOME=/tmp/pre-commit-cache` (home cache is not writable),
-  `TEST_DATABASE_URL='postgresql+psycopg://attacksurf:attacksurf@127.0.0.1:5432/attacksurf_test'`.
-  Chromium: `PLAYWRIGHT_BROWSERS_PATH=/tmp/ms-playwright` (installed there).
-- Hooks are authoritative: bare `ruff check` once looked green while the commit hook
-  flagged PT018 — split compound `and` assertions in tests, always run the hooks.
-- `compose.prod.yaml config` needs a temp `deploy/attacksurf.env` (copy from `.example`,
-  delete after); `docker exec` healthchecks don't inherit entrypoint exports, hence the
-  inline `REDIS_URL` substitution. `docker compose config` output re-escapes `$` as `$$`.
-- Branch is off `origin/main` (includes #173); `21-scans-ui` work is merged, do not touch it.
+- `openai.APIStatusError` unwraps the top-level `"error"` object into `exc.body` and sets
+  `exc.type`; `_error_type` checks `exc.type` first and falls back to `exc.body`.
+- Format fallback (`json_schema` → `json_object` → plain text) triggers only on HTTP 400 before a
+  format has succeeded; once a format returns 2xx, a corrective retry stays on that format.
