@@ -2,36 +2,36 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-17 · **Branch:** `23-openai-compat-provider` · **Issue:** #23 (LLM providers, PR 3)
+**Updated:** 2026-11-17 · **Branch:** `23-llm-factory` · **Issue:** #23 (LLM providers, PR 4b)
 
 ## Status
-PR 3 (`23-openai-compat-provider`) implements `OpenAICompatProvider` and is merged with `main`
-(`72400d5`, which includes ADR 0024 and PR 4a `#166`). Ready for review and merge before PR 4b
-(`23-llm-factory`).
+PR 4b (provider factory) is committed on `23-llm-factory`, stacked on PR 3
+(`23-openai-compat-provider`, not merged yet). Both `llm_live` tests pass against Meta
+(`muse-spark-1.3-contributor`, both formats). Not pushed; DB tests not run locally.
 
 ## Last task
-- Added `openai>=3.41.0,<3.42` (`3.41.0`, the newest release at least two weeks old) and extended
-  the import-linter LLM SDK contract in `pyproject.toml` to forbid `openai` outside
-  `attacksurf.ai.providers`.
-- Implemented `OpenAICompatProvider` (`src/attacksurf/ai/providers/openai_compat.py`): Chat
-  Completions with `max_completion_tokens`, explicit `api_key` and `base_url` (`DEFAULT_BASE_URL`),
-  no sampling parameters (ADR 0024), `max_retries=0`, `json_schema` response format with HTTP 400
-  fallback to `json_object` and then plain text (schema in system prompt), immediate `LLMOutputError`
-  on `finish_reason` `length`/`content_filter` or `message.refusal`, `TokenUsage(reported=False)`
-  when usage is omitted, and `CALL_DEADLINE_SECONDS` enforced across fallbacks and retries.
-- Added unit and contract tests (`tests/unit/ai/providers/test_openai_compat.py`) and the opt-in
-  live test (`tests/e2e/test_openai_compat_live.py`).
+- `ai/factory.build_provider(config)`: `match` on `config.provider` → `AnthropicProvider` /
+  `OpenAICompatProvider`, ending in `assert_never` (pyright flags a `ProviderKind` without a case).
+- `tests/unit/ai/test_factory.py`: each kind gets its adapter, the whole config is handed over,
+  building makes no network call, the key isn't in the `repr`.
+- Docs: call path in `architecture.md` (AI layer) and the `llm-prompt` skill, CHANGELOG.
 
 ## Next step
-Open PR 3 for review; once PR 3 is merged, implement PR 4b (`ai/factory.py` on `23-llm-factory`)
-to close #23.
+Push `23-llm-factory` (the pre-push hook needs Postgres) and open a draft PR based on
+`23-openai-compat-provider`: title `feat(ai): build llm providers from config (#23)`,
+`Closes #23`, and both live results in "How was this tested?".
 
 ## Open threads
-- #23: PR 4b (`build_provider` factory + live verification on both providers) remains to close #23.
+- PR 3 must merge first. When it does, GitHub retargets this PR to `main`; then
+  `git merge origin/main` (PR 3 is squash-merged) and mark it ready. The partner reviews it.
+- Full `pytest` with Postgres not run here: Docker isn't reachable from WSL on this laptop.
+- After #23: #24 (org keys, instance-key cap, usage page). Waiting on the repo owner: default
+  monthly cap per org. Meta prices in `ai/pricing.py` still need a check on developer.meta.com.
 - Org-supplied base URLs still need ScopeGuard (SSRF) validation in #24 before use.
 
 ## Notes for the next agent
+- Review fixes on PR 3: pull them with `git merge origin/23-openai-compat-provider`; never push
+  to the partner's branch.
 - `openai.APIStatusError` unwraps the top-level `"error"` object into `exc.body` and sets
-  `exc.type`; `_error_type` checks `exc.type` first and falls back to `exc.body`.
-- Format fallback (`json_schema` → `json_object` → plain text) triggers only on HTTP 400 before a
-  format has succeeded; once a format returns 2xx, a corrective retry stays on that format.
+  `exc.type`; format fallback only triggers on HTTP 400 before a format has succeeded.
+- Git has no identity set in WSL here: set `user.name` / `user.email` before committing.

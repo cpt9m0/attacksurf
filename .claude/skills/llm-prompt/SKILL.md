@@ -8,15 +8,17 @@ description: Add or change an LLM-powered feature or prompt (triage, summaries, 
 ## Principles
 - LLMs **judge and explain**; scanners detect. The AI never creates findings from nothing and
   never changes finding status on its own.
-- Every call goes through the `LLMProvider` protocol (`domain/llm.py`, ADR 0019), built from the
-  `LLMConfig` that `ai/config.resolve_llm_config` returns (None = AI off: skip gracefully).
+- Every call goes through the `LLMProvider` protocol (`domain/llm.py`, ADR 0019):
+  `config = resolve_llm_config(org, settings)` (None = AI off: skip gracefully), then
+  `ai/factory.build_provider(config).complete(...)`. Never build an adapter directly.
   Never import a provider SDK outside `ai/providers/`; never hardcode a model name.
   API keys and base URLs stay `SecretStr`; unwrap them only when constructing the SDK client.
 - Every call has a **pydantic output schema**; `ai/structured.complete_structured` gives invalid
   output one retry, then raises `LLMOutputError`: catch it and skip gracefully. A reply cut off
   at `max_tokens` raises it at once; on models that always think, thinking counts toward
   `max_tokens`, so size it with room to spare.
-- Tests use `tests.fakes.FakeLLMProvider`; a new provider adapter must pass
+- Tests use `tests.fakes.FakeLLMProvider`; a new provider adapter gets a `ProviderKind` and a
+  case in `ai/factory.build_provider`, must pass
   `tests/unit/ai/contract.ProviderContract`, build its SDK client with `ai/limits.py`, and
   enforce `CALL_DEADLINE_SECONDS` per call (the SDK's per-chunk read timeout doesn't). SDK
   retries stay off (`MAX_RETRIES = 0`) and no sampling settings are sent (ADR 0024): Celery

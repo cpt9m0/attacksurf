@@ -382,6 +382,10 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 - A provider is built from one `LLMConfig` chosen by `ai/config.resolve_llm_config`: the org's
   own key (and its provider/model/base URL), else the instance `LLM_*` config (capped per org,
   #24), else AI off. Sources never mix; no failover between keys. Model names only from config.
+- Call path: `resolve_llm_config(org, settings)` (None: AI off, skip), then
+  `ai/factory.build_provider(config).complete(...)`, then `services.llm_usage.record_llm_usage`.
+  The factory is the only place that picks an adapter; its `assert_never` makes pyright flag a
+  `ProviderKind` without one.
 - Structured output via each API's JSON-schema format (`OpenAICompatProvider` falls back on HTTP
   400 to `json_object` mode with the schema in the system message, then plain text); validation
   plus one corrective retry is

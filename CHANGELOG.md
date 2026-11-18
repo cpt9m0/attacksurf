@@ -6,6 +6,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Provider factory (`ai/factory.build_provider`, #23): turns a resolved `LLMConfig` into the
+  Anthropic or OpenAI-compatible adapter it names, without a network call, so AI features
+  never pick an adapter themselves. Completes the LLM provider layer.
 - OpenAI-compatible provider (`ai/providers/openai_compat.py`, #23): Chat Completions requests
   with `max_completion_tokens`, native `json_schema` structured output with HTTP 400 fallback to
   `json_object` and then plain text (including the schema in the system prompt), the base URL
