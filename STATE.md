@@ -2,36 +2,52 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-17 · **Branch:** `23-openai-compat-provider` · **Issue:** #23 (LLM providers, PR 3)
+**Updated:** 2026-11-18 · **Branch:** `main` · **Issue:** Dependabot #177 + #178 merged
 
 ## Status
-PR 3 (`23-openai-compat-provider`) implements `OpenAICompatProvider` and is merged with `main`
-(`72400d5`, which includes ADR 0024 and PR 4a `#166`). Ready for review and merge before PR 4b
-(`23-llm-factory`).
+Done: merged `c1e236a build(deps): bump postgres from 18 to 18 (#177)` and `cb7c061
+build(deps): bump cloudflare/cloudflared from 2026.10.7 to 2026.11.0 (#178)` via
+squash-merge (both `CLEAN`/`MERGEABLE`, all CI green before merge). Local `main` is synced
+with `origin/main` at `cb7c061` plus this handoff. Dev `postgres` is running the new digest
+and healthy with data intact.
 
 ## Last task
-- Added `openai>=3.41.0,<3.42` (`3.41.0`, the newest release at least two weeks old) and extended
-  the import-linter LLM SDK contract in `pyproject.toml` to forbid `openai` outside
-  `attacksurf.ai.providers`.
-- Implemented `OpenAICompatProvider` (`src/attacksurf/ai/providers/openai_compat.py`): Chat
-  Completions with `max_completion_tokens`, explicit `api_key` and `base_url` (`DEFAULT_BASE_URL`),
-  no sampling parameters (ADR 0024), `max_retries=0`, `json_schema` response format with HTTP 400
-  fallback to `json_object` and then plain text (schema in system prompt), immediate `LLMOutputError`
-  on `finish_reason` `length`/`content_filter` or `message.refusal`, `TokenUsage(reported=False)`
-  when usage is omitted, and `CALL_DEADLINE_SECONDS` enforced across fallbacks and retries.
-- Added unit and contract tests (`tests/unit/ai/providers/test_openai_compat.py`) and the opt-in
-  live test (`tests/e2e/test_openai_compat_live.py`).
+- #177 (postgres digest-only refresh `e3d24f6…` → `2ea8630d…`, tag stays `18`): updated in
+  **both** `compose.yaml:46` and `compose.prod.yaml:135` (Dependabot PR did both; verified
+  consistent). No migration: major stays 18, `pgdata` parent-volume mount unchanged.
+- #178 (cloudflared `2026.10.7` → `2026.11.0`, digest `4955524a…` → `b94b96ed…`):
+  `compose.prod.yaml:57` only (cloudflared is prod-only by design). Tunnel command untouched.
+- Verified after merge: both digests resolve upstream with `linux/amd64`
+  (`imagetools inspect`); `docker compose config --quiet` passes for dev and prod (prod with
+  a temp `deploy/attacksurf.env` from `.example`, deleted after); `docker compose pull
+  postgres && up -d --wait postgres` → recreated on the new digest, `Healthy`, `pg_isready`
+  accepting connections, `alembic_version`/`attacksurf_test` reachable (dev `orgs` empty, as
+  before). Full PR CI (lint, secrets, compose, test 3.12/3.13/3.15, web-e2e, pr-title) was
+  green on both heads, so no local pytest re-run (no app code changed).
+- Rebase note: the previous session's unpushed `880c039` handoff (#174) was dropped
+  (`rebase --skip`) because `origin/main` had moved on (#176, #180, #177, #178) and its
+  STATE.md content was superseded; this file replaces it.
 
 ## Next step
-Open PR 3 for review; once PR 3 is merged, implement PR 4b (`ai/factory.py` on `23-llm-factory`)
-to close #23.
+1. Next unblocked issue in epic #31. Note `origin` also merged since the last handoff:
+   `b70587d feat(ai): add openai-compatible provider (#23) (#176)` and `bebfa32 docs(agents):
+   add issue 84 implementation plans (#180)`; remote branch `23-llm-factory` exists (PR 4b
+   factory work for #23). `worker-ai`, backups, monitoring stay #29.
+2. After the CD timer deploys `cb7c061`: `docker compose -f compose.prod.yaml logs --tail=20
+   cloudflared | grep -c Registered` should be non-zero (new `2026.11.0` image), and dev
+   `postgres` is already on `2ea8630d…` (this box).
 
 ## Open threads
-- #23: PR 4b (`build_provider` factory + live verification on both providers) remains to close #23.
-- Org-supplied base URLs still need ScopeGuard (SSRF) validation in #24 before use.
+- None from #177/#178. No rebase needed (different hunks); no `@dependabot` commands used.
 
 ## Notes for the next agent
-- `openai.APIStatusError` unwraps the top-level `"error"` object into `exc.body` and sets
-  `exc.type`; `_error_type` checks `exc.type` first and falls back to `exc.body`.
-- Format fallback (`json_schema` → `json_object` → plain text) triggers only on HTTP 400 before a
-  format has succeeded; once a format returns 2xx, a corrective retry stays on that format.
+- Shell env needed here: `UV_CACHE_DIR=/tmp/uv-cache-ubuntu`,
+  `PRE_COMMIT_HOME=/tmp/pre-commit-cache` (home cache is not writable),
+  `TEST_DATABASE_URL='postgresql+psycopg://attacksurf:attacksurf@127.0.0.1:5432/attacksurf_test'`.
+  Chromium: `PLAYWRIGHT_BROWSERS_PATH=/tmp/ms-playwright` (installed there).
+- Hooks are authoritative: always export the env above for commits/pushes, or the commit and
+  pre-push hooks fail on cache permissions.
+- `compose.prod.yaml config` needs a temp `deploy/attacksurf.env` (copy from `.example`,
+  delete after) plus stub secret files via `SECRETS_DIR`; `docker compose config` output
+  re-escapes `$` as `$$`.
+- Author/committer identity for this repo: `Ali Ayati <seyyedaliayati@gmail.com>`.
