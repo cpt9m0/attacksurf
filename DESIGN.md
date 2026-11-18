@@ -98,6 +98,7 @@ Built in #6: `button`, `severity_badge` + `status_pill` (`badges.html`), `data_t
 `select_field` and `form_field(autofocus=)` (`form.html`), `confirm_dialog` (`confirm.html`),
 `relative_time` (`time.html`) and call-block cells for `data_table`. #14 added
 `ownership_badge` + `ownership_card` (`verification.html`) and `Alpine.data("copyField")`.
+#87 added `file_field` (`form.html`); #101 reuses it for the binary upload form.
 Specs (visuals) stay TBD.
 
 | Component | Notes | Spec |
@@ -108,13 +109,15 @@ Specs (visuals) stay TBD.
 | Data table | sortable headers, filters bar, pagination, row selection for bulk actions, empty state. Rich cells (links, badges, `<code>`): `{% call(row, key) data_table(...) %}`, still autoescaped. Wide tables scroll inside `.table-wrap` (`.content` has `min-width: 0`) | TBD |
 | Card / stat tile | dashboard counts by severity | TBD |
 | Form field | label, hint, inline error (HTMX validation) | TBD |
+| File field | `file_field(name, label, accept=, error=, hint=)`: a native file input with the form field's label, hint and inline error; never a `value`. The hint states accepted formats and the size limit | TBD |
 | Flash / toast | success / error / info | TBD |
-| Progress | scan stage progress, polled via HTMX | TBD |
+| Progress | scan stage progress (`pages/_scan_progress.html`, polled via HTMX): a "N of M jobs finished" line with `role="status"`, a native `<progress>` element, a per-job table (stage, scanner, asset, status pill, sanitized error, finished time), the new/fixed/regressed/observed finding counts by severity with new/disappeared asset links (each bucket capped at 100 rows with a "Showing N of M" notice). The section polls itself (`hx-get` to `ui.scan_progress`, `hx-trigger="every 2s"`, `hx-target="this"`, `hx-swap="outerHTML"`, `hx-sync="this:replace"`, `aria-busy`); once the scan is terminal the attributes are gone, so polling stops and the final swap reveals the diff. The same response carries out-of-band swaps (`hx-swap-oob`) for the status pill, the meta block and the cancel action outside the section; the cancel action (behind `confirm_dialog`, secondary variant) lives outside the polled subtree, so a poll never closes the dialog mid-read. The scan detail page includes the same fragment for first paint | Implemented in #21 (visual spec TBD) |
 | Code / evidence block | monospace, escaped, copy button, size-capped with "show more" | TBD |
 | AI panel | AI triage output, clearly labeled as AI-generated, shows model + prompt version | TBD |
 | Empty state | illustration/icon + one-line explanation + primary action | TBD |
 | Modal / confirm | destructive actions (archive asset, accept risk): `confirm_dialog(id, trigger_label, title, message, action, confirm_label, trigger_variant="danger", confirm_variant="danger")`, a native `<dialog>` opened by `Alpine.data("confirmDialog")`; focus starts on Cancel, Escape closes, confirm POSTs with CSRF. Keep the danger variant for anything that removes data; reversible or recoverable actions (rotate a token) use `secondary` | TBD |
-| Ownership card | proof of domain control: status badge, the exact TXT record in a `.copy-field` with a copy button (`Alpine.data("copyField")`, the code block stays selectable without the Clipboard API), and admin-only actions (start / verify now / rotate behind a confirm). Subdomains show their root's record read-only | TBD |
+| DNS chain / records | monospace `asset → CNAME → IP` chain with `overflow-wrap:anywhere`, then a data table of record type → values; non-public addresses called out in muted text. All values are scan data and stay autoescaped | TBD |
+| Ownership card | proof of domain control: status badge, the exact TXT record in a `.copy-field` with a copy button (`Alpine.data("copyField")`, the code block stays selectable without the Clipboard API), and admin-only actions (start / verify now / rotate behind a confirm). Subdomains show their root's record read-only. A check queued past the grace with no consumer renders `Stalled` with a queue (not record) explanation and stops polling (#174) | TBD |
 
 ## 6. Interaction patterns (HTMX)
 
@@ -125,7 +128,8 @@ Specs (visuals) stay TBD.
   into the whole `<body>`) and normal loads get the full page (`Vary` on all three headers).
 - Long-running work: show job progress via polling (`hx-trigger="every 2s"`), stop when done.
   Ownership cards poll the viewed asset, including subdomains inheriting a root's proof, so
-  refreshing a read-only card preserves its available actions.
+  refreshing a read-only card preserves its available actions. A verify job still queued past
+  the grace stops polling and names the queue, not the record (#174).
 - Forms: inline validation errors; disable the submit button during request.
 - Destructive actions: confirm modal; never one-click delete.
 - Lists: filters update the URL query string (`hx-push-url`) so views are shareable. The
@@ -138,6 +142,17 @@ Specs (visuals) stay TBD.
   swapped region so its state updates with the content.
 - Inline-validated forms swap themselves (`hx-target="this"`, 422 with the field error) and set
   `autofocus` on the invalid field; success responds with `HX-Redirect` (and a flash).
+- Upload forms are inline-validated forms with `enctype="multipart/form-data"` **and**
+  `hx-encoding="multipart/form-data"` (HTMX otherwise sends no file), `csrf_field()` and
+  `hx-disabled-elt="find button"`. A rejected upload re-renders the form with the error (413 /
+  415 / 422 / 429 / 503), including a 413 or 429 raised before the view runs
+  (`web.uploads.upload_form`); when storage isn't configured the form is replaced by one muted
+  line saying so. Each upload form is its own card and partial on the Assets page (codebase,
+  then binary), with its own file field name so ids and errors don't collide: an HTMX swap
+  passes `upload_error`, a full-page render scopes `<field>_error` to its form. Leave `accept`
+  off when the format has no dependable extension (executables); the hint lists the formats.
+- An uploaded file's name is shown as "Uploaded file" in the asset's meta list, in monospace,
+  escaped and wrapping (`overflow-wrap: anywhere`); a binary's title is its `sha256:` value.
 - Dates: `relative_time(dt)` renders "3 days ago" with the exact UTC time on hover (§7).
 
 ## 7. Content and tone
@@ -161,5 +176,6 @@ Specs (visuals) stay TBD.
 - [ ] Color palette + severity scale (light/dark), contrast-verified
 - [ ] Typography and spacing scales
 - [ ] Component specs for the table above
-- [ ] Key screens: dashboard, asset list/detail, scan progress, findings list/detail, settings
+- [x] Key screens: dashboard, asset list/detail, scan progress, findings list/detail, settings
+  (scan progress, like the rest, has structure only; visual values are still placeholders)
 - [x] Decide CSS approach (#6): plain CSS + tokens

@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from attacksurf.domain.assets import AssetNotFound, AssetSource, AssetType
@@ -406,3 +407,76 @@ def test_backoff_grows_per_consecutive_failure(db_session: Session, org: Org, ro
 
     assert first == NOW + timedelta(hours=2)
     assert proof.retry_after == NOW + timedelta(hours=4)
+
+
+def test_check_in_flight_is_none_without_a_job(db_session: Session, org: Org, root: Asset) -> None:
+    assert verifications.check_in_flight(db_session, org.id, root.id, now=NOW) == (
+        verifications.InFlightCheck(verifications.CheckState.NONE)
+    )
+
+
+def test_check_in_flight_is_queued_inside_the_grace(
+    db_session: Session, org: Org, root: Asset
+) -> None:
+    _start(db_session, FakeQueue(db_session), org.id, root.id)
+
+    assert verifications.check_in_flight(db_session, org.id, root.id, now=NOW) == (
+        verifications.InFlightCheck(verifications.CheckState.QUEUED)
+    )
+
+
+def test_check_in_flight_is_stalled_past_the_grace(
+    db_session: Session, org: Org, root: Asset
+) -> None:
+    _start(db_session, FakeQueue(db_session), org.id, root.id)
+    job = db_session.scalars(select(Job)).one()
+    job.updated_at = NOW - verifications.QUEUE_STALL_AFTER - timedelta(minutes=1)
+    db_session.flush()
+
+    check = verifications.check_in_flight(
+        db_session, org.id, root.id, now=NOW + timedelta(minutes=1)
+    )
+
+    assert check.state is verifications.CheckState.STALLED
+    assert check.queued_since == job.updated_at
+
+
+def test_check_in_flight_running_never_stalls(db_session: Session, org: Org, root: Asset) -> None:
+    _start(db_session, FakeQueue(db_session), org.id, root.id)
+    job = db_session.scalars(select(Job)).one()
+    job.status = JobStatus.RUNNING
+    job.updated_at = NOW - verifications.QUEUE_STALL_AFTER - timedelta(hours=1)
+    db_session.flush()
+
+    check = verifications.check_in_flight(db_session, org.id, root.id, now=NOW)
+
+    assert check.state is verifications.CheckState.RUNNING
+    assert check.queued_since is None
+
+
+def test_check_in_flight_requeued_check_waits_again(
+    db_session: Session, org: Org, root: Asset
+) -> None:
+    """Regression guard: the stall clock restarts when a retry re-queues the job."""
+    _start(db_session, FakeQueue(db_session), org.id, root.id)
+    job = db_session.scalars(select(Job)).one()
+    job.created_at = NOW - verifications.QUEUE_STALL_AFTER - timedelta(hours=1)
+    job.updated_at = NOW
+    db_session.flush()
+
+    assert verifications.check_in_flight(db_session, org.id, root.id, now=NOW) == (
+        verifications.InFlightCheck(verifications.CheckState.QUEUED)
+    )
+
+
+def test_check_in_flight_newest_job_decides(db_session: Session, org: Org, root: Asset) -> None:
+    """A fresh "Verify now" gets a fresh grace window, not the stuck predecessor's age."""
+    _start(db_session, FakeQueue(db_session), org.id, root.id)
+    old = db_session.scalars(select(Job)).one()
+    old.updated_at = NOW - verifications.QUEUE_STALL_AFTER - timedelta(hours=1)
+    db_session.flush()
+    verifications.queue_check(db_session, FakeQueue(db_session), org_id=org.id, asset_id=root.id)
+
+    assert verifications.check_in_flight(db_session, org.id, root.id, now=NOW) == (
+        verifications.InFlightCheck(verifications.CheckState.QUEUED)
+    )

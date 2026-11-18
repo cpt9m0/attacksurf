@@ -36,8 +36,13 @@ src/attacksurf/   application code (src layout, import name `attacksurf`)
                   dns, public_suffix, safe http client, crypto
   workers/        Celery task entrypoints (thin, call services)
   sandbox_proxy/  Docker socket guard (ADR 0016); isolated from the app by import-linter
-  sandbox_launcher/  sandbox run building blocks (ADR 0016): analyzer catalog, artifact
-                  resolver, create-body builder, capped stdout reader; isolated by import-linter
+  sandbox_launcher/  sandbox launcher service (ADR 0016): API (`server.py`), run supervision
+                  (`runner.py`), proxy client, analyzer catalog, artifact resolver, create-body
+                  builder, capped stdout reader; isolated by import-linter
+  sandbox_tools/  code that runs inside analyzer images (ADR 0017): the archive extractor and
+                  the binary format detector;
+                  standard library only (a test; import-linter keeps the app and its
+                  dependencies out), never imported by the app
 tests/            pytest; mirrors src/attacksurf/ structure (unit/, integration/, e2e/)
 docs/             architecture, ADRs, development, security, conventions
 ```
@@ -96,14 +101,20 @@ sync" rule below is satisfied**. Do not claim done without running them.
    never write to the DB directly; the pipeline persists. Contracts: `domain/scanners.py`;
    references use `(type, value)`, not row IDs. Scanner tasks persist data + completed job
    atomically before returning a chord receipt; never return evidence through Redis (ADR 0011).
+   Per-asset metadata and lifecycle claims go through `ScanOutput.observations`
+   (`AssetObservation`): details merge top-level into `Asset.details`, are capped, carry an
+   `observed_at` marker so stale observations cannot replace newer ones, and only discovered
+   assets can be deactivated (ADR 0025).
 6. **All outbound network traffic from scanners goes through ScopeGuard and its adapters**
-   (`infra/scope_guard.py`; ADR 0013). Scanners use `ctx.runtime.dns` / `ctx.runtime.http` only,
-   never raw `requests`/`httpx`/sockets/dnspython (a test enforces it), and declare a
-   `ScannerGrant` (public data services, or the target for verified active checks). Active
-   checks require verified ownership. Flaky public sources may use `ctx.runtime.cache` (namespaced,
-   bounded, fail-open; public source data only, never findings/evidence/tenant data) and raise
-   `TransientJobError` for Celery's retry/backoff; wildcard zones are returned in
-   `ScanOutput.wildcard_zones` and persisted as `Asset.details["wildcard"] = true`.
+   (`infra/scope_guard.py`; ADRs 0013/0026). Scanners use `ctx.runtime.dns` / `ctx.runtime.http`
+   and the grant-gated `authoritative`, `zone_transfer` and `rdap` adapters only, never raw
+   `requests`/`httpx`/sockets/dnspython (a test enforces it), and declare a `ScannerGrant`
+   (public data services, the target for verified active checks, or the capability flags).
+   Active checks (target HTTP, zone transfer) require verified ownership. Flaky public sources
+   may use `ctx.runtime.cache` (namespaced, bounded, fail-open; public source data only, never
+   findings/evidence/tenant data) and raise `TransientJobError` for Celery's retry/backoff;
+   wildcard zones are returned in `ScanOutput.wildcard_zones` and persisted as
+   `Asset.details["wildcard"] = true`.
 7. **LLMs judge, scanners detect.** AI never invents findings, never auto-closes them, and only
    sees normalized findings. All LLM output is schema-validated (pydantic).
 8. **Scan-derived content is untrusted:** escape in templates (never `|safe` on it), and wrap it as
@@ -164,7 +175,11 @@ sync" rule below is satisfied**. Do not claim done without running them.
 - Block private/link-local/metadata IP ranges for any outbound request (SSRF).
 - Secrets: env vars or encrypted in DB (org API keys). Never commit `.env`, keys, or tokens.
   Never print them in logs, errors, or UI.
-- Uploaded codebases/binaries (future) are never executed; analysis runs sandboxed.
+- Uploaded codebases/binaries are never executed, parsed or extracted by the app or a worker
+  (only leading bytes are sniffed, and a binary is hashed); analysis runs sandboxed. Upload use
+  cases share `services.uploads.store_and_queue_analysis`. A new upload route adds its
+  endpoint and form partial to `web.uploads.UPLOAD_ENDPOINTS` (body ceiling before CSRF, rate
+  limit, in-place form errors).
 - New dependency? Check it's maintained and widely used; prefer stdlib. Pin via `uv.lock`.
 - See `docs/security.md`.
 

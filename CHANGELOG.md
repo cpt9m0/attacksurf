@@ -16,11 +16,104 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   against a stubbed API, adds an opt-in `llm_live` test (`tests/e2e/test_openai_compat_live.py`),
   and adds `openai` (`>=3.41.0,<3.42`, two-week supply-chain policy) to the import-linter SDK
   contract (ADR 0019, ADR 0024).
+- Scans UI: start a `dns_passive` scan from the Scans page or an active root domain's page,
+  watch stage/job progress polling every 2 s, cancel a running scan, and review the new /
+  fixed / regressed finding diff with new and disappeared assets when it finishes. Same over
+  `/api/v1/scans`: `POST` creates from a `root_asset_id` (201, `Location`), `GET` lists and
+  shows one scan with its jobs and diff. Starting and cancelling is open to every org
+  member; a second concurrent scan of the same root is refused (409 with the running scan's
+  id) and each org may start `SCAN_MAX_STARTS_PER_HOUR` scans per profile per hour (default
+  10, 429 beyond it; the count and the insert are serialized on the org row, so concurrent
+  starts for different roots cannot both slip under the quota). Cancellation is database-only
+  like archiving (ADR 0021): queued work drains without writing, nothing is revoked in
+  Celery (#21).
+- `sandbox-launcher` service (`python -m attacksurf.sandbox_launcher`): `POST /runs` takes an
+  analyzer name and artifact ID and runs the analyzer in one proxy-approved sandbox, killing it
+  at the wall time or past 2 MiB of stdout and always removing the container. It refuses to
+  start in prod unless `runsc` is a registered runtime, and exits instead of running with a
+  weaker sandbox (ADR 0016, ADR 0023, #84).
+- Upload a binary or mobile app: the Assets page takes an ELF, PE or Mach-O executable, an
+  Android `.apk` or an iOS `.ipa` (gated by its leading bytes; a text file is refused with a
+  415 before anything is stored), stores it encrypted as an artifact of a binary asset named
+  `sha256:<digest of its bytes>` and queues a `binary_static` scan. The file name is kept for
+  display only and shown escaped; the same bytes uploaded again reuse the asset. The scan stays
+  queued until the analysis worker ships (#84). Binaries are never executed, emulated or
+  decrypted. All upload routes share one allowance of 20 uploads per user per hour (#101).
+- Binary format detection for the analysis sandbox: `attacksurf.sandbox_tools.detect`, a
+  standard-library tool that names the format from fixed-size headers (ELF, PE, thin and
+  universal Mach-O, told apart from Java class files) and from a size-capped zip central
+  directory (APK, IPA; inconsistent or APK-and-IPA zips are rejected), without decompressing
+  anything; exit status 3 means rejected, 4 an I/O
+  failure. Not wired to a run yet; ships with a synthetic corpus in `tests/fixtures/binaries/`
+  (#101).
+- Upload a codebase archive: the Assets page takes a `.zip` or `.tar(.gz/.bz2/.xz)` (checked by
+  its leading bytes, never opened outside the sandbox), stores it encrypted as an artifact of
+  a repo asset `upload/<name>` and queues a `code` scan that records the archive's SHA-256 as
+  its revision. Uploading the same name again adds a version to the same asset. The scan stays
+  queued until the analysis worker ships (#84). Request bodies are now capped everywhere (2 MiB;
+  `ARTIFACT_MAX_BYTES` plus framing on the upload route, 413 beyond it), uploads are rate
+  limited per user, and repo values are normalized (`host/owner/name`, ADR 0017). The prod
+  stack gets an `artifact-store` volume; uploads stay off there until `APP_ENCRYPTION_KEY` is
+  set (#87).
+- Safe archive extraction for the analysis sandbox: `attacksurf.sandbox_tools.extract`, a
+  standard-library tool that analyzer images will run before their scanner. It unpacks zip and
+  tar(.gz/.bz2/.xz) with its own loop, never creates links, strips setuid/setgid/sticky bits,
+  skips symlinks, hard links, device nodes and FIFOs with a reason, and rejects the whole
+  artifact on unsafe or duplicate paths, corrupt archives, data after a tar's end, differing zip
+  headers or a cap (512 MiB total, 64 MiB per file, 100,000 entries including created
+  directories, depth 32, ratio 200:1), all counted while writing; for tar the size budget also
+  covers bytes the parser skips. It writes a manifest (path, size, SHA-256, skipped entries)
+  and prints a bounded summary; exit status 3 means rejected, 4 an extractor failure. Not wired to a run yet; ships with a hostile archive corpus in
+  `tests/fixtures/archives/` (ADR 0017, #86).
+- Encrypted artifact storage for uploaded and fetched repositories and binaries: an `Artifact`
+  model (migration 0010), streaming AES-256-GCM envelope encryption with a per-artifact key
+  wrapped by the new `APP_ENCRYPTION_KEY`, a per-artifact size limit enforced while reading
+  (`ARTIFACT_MAX_BYTES`), a per-organization quota (`ARTIFACT_ORG_QUOTA_BYTES`), plaintext
+  staged only for one sandbox run, and a retention task (`passive.purge_expired_artifacts`,
+  every 10 minutes) that deletes expired files and erases their keys
+  (`ARTIFACT_RETENTION_HOURS`; 0 = delete once analysis completes). Storage only: no upload
+  route yet. Adds the `cryptography` dependency (ADR 0028, #85).
+- LLM usage tracking: an `llm_usage` row per finished LLM call, failed ones included, with the
+  model, purpose, whose key paid, token counts, latency and a cost estimated from list prices
+  in `ai/pricing.py`. Prompts, replies, error messages and keys are never stored. The app warns
+  at startup when the instance key or model is missing, so AI being off isn't silent (#23).
+- Scan diffing and the finding lifecycle: a scan marks findings it no longer sees `fixed` only
+  when their own scanner completed for that asset, a previously fixed finding observed again
+  becomes `regressed`, suppressed (`accepted_risk`/`false_positive`) findings reopen only on
+  materially different evidence, and `Scan.stats` records new/fixed/regressed/total findings by
+  severity plus new assets and disappeared subdomains for the scan-history view (ADR 0027,
+  #20).
+- DNS hygiene checks (`dns.dnssec`, `dns.ns`, `dns.mx`, `dns.caa`, `dns.whois`, `dns.axfr`):
+  DS/DNSKEY delegation-chain checks (`dns.dnssec.not_enabled` info, `dns.dnssec.broken_chain`
+  high), single-nameserver / lame-delegation / inconsistent-SOA detection (`dns.ns.*`), MX
+  targets that are aliases or do not resolve (`dns.mx.*`), missing CAA (`dns.caa.missing`),
+  registration expiry and a missing registrar transfer lock via RDAP (`dns.whois.*`, 24-hour
+  cache), and unauthenticated zone transfers on verified roots (`dns.axfr.allowed`, high). Adds
+  grant-gated authoritative DNS, RDAP and zone-transfer adapters and wires the checks into the
+  `dns_passive` profile (ADR 0026, #19).
+- Subdomain takeover checks (`dns.takeover`, `dns.takeover.http`): dangling CNAMEs to
+  known-claimable services that no longer resolve and NS delegations to nameservers that no
+  longer exist are flagged from DNS alone; on verified domains a single HTTP probe also
+  flags resolving services answering with their "unclaimed instance" signature. Reports
+  `dns.takeover.dangling_cname` / `dns.takeover.fingerprint_match` (high) and
+  `dns.takeover.dangling_ns` (critical) against a pinned subset of the can-i-take-over-xyz
+  fingerprint dataset (CC-BY-4.0); wired into the `dns_passive` profile checks (#18).
+- Email security check (`dns.email`): passive evaluation of SPF, DMARC, DKIM and MTA-STS
+  publication from TXT DNS records, reporting `dns.email.*` findings (missing/multiple/
+  permissive SPF, >10 SPF DNS lookups, missing/monitor-only/unreported/partial DMARC,
+  undiscovered DKIM selectors at low confidence, missing MTA-STS as info) with raw TXT
+  records as evidence; wired into the `dns_passive` profile checks (#17).
+- DNS resolution (`dns.resolve`): configurable public resolvers with async, bounded queries;
+  A/AAAA/CNAME/MX/NS/TXT/CAA/SOA records stored in `Asset.details["dns"]`; IP assets with
+  `resolves_to` edges and in-root `cname_to` chains; reverse DNS and optional offline ip2asn
+  enrichment; non-resolving subdomains marked inactive; and the info finding
+  `dns.records.private_ip_exposed` for private/special-purpose addresses. Asset detail shows the
+  CNAME → IP chain and records (ADR 0025, #16).
 - Sandbox launcher building blocks: env-only settings (the proxy URL is a `SecretStr`, since it
   may embed credentials), an analyzer catalog (empty until the first analyzer ships), an artifact
   resolver that refuses symlinks and anything outside the artifact root, a create-body builder
   checked against the proxy's policy, and a stdout reader that drops stderr, caps output at 2 MiB
-  and rejects truncated streams. The launcher service that runs them is not built yet (#84).
+  and rejects truncated streams (#84).
 - Subdomain discovery from Certificate Transparency: `dns.discovery.ct` queries crt.sh's JSON
   endpoint with Cert Spotter as fallback, normalizes and caps names per root (1000), caches
   complete results in a namespaced Redis cache for six hours, and detects wildcard DNS zones.
@@ -45,8 +138,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 - Production stack (`compose.prod.yaml`) published through a Cloudflare Tunnel: `cloudflared`,
   Caddy, gunicorn, PostgreSQL and Redis on a private network with no inbound ports, `www`
   redirecting to the apex, and a deploy runbook in `docs/deployment.md` (ADR 0020, #132).
+- Production `worker-passive` and `beat`: ownership checks, `dns_passive` scans and the
+  artifact purge are consumed on attacksurf.dev instead of staying queued; both are gated by
+  `up -d --wait` healthchecks and the deploy's idempotence check covers every long-running
+  service (#174).
 
 ### Fixed
+- Ownership verification no longer spins forever when no worker consumes the queue: a verify
+  job still queued past five minutes renders `Stalled` with a queue (not record) explanation
+  and stops the 2-second poll until workers are back (#174).
+- Artifact staging and deletion are serialised per artifact with a `flock`, so a purge can no
+  longer mark an artifact deleted mid-staging and leave its plaintext mounted until the sweep,
+  and a failed purge pushes its artifact behind the rest of the queue instead of starving it
+  on every run (#85).
+- Artifact deletion now fails instead of reporting success when the staged plaintext cannot be
+  removed: the key is kept and the row stays live, so the purge retries it instead of leaving
+  mountable plaintext for a deleted artifact (#85).
 - The content area fills the main column on every viewport instead of stopping at a 72rem cap,
   so wide screens no longer leave empty space to the right of the dashboard (#149).
 - Pyright and pytest pass on Windows again: pyright checks as Linux (where the app runs), and

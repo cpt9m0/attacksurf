@@ -239,3 +239,42 @@ def test_another_org_can_add_the_same_domain(alice: FlaskClient, bob: FlaskClien
     theirs = _add(bob, "example.com")
 
     assert mine["id"] != theirs["id"]
+
+
+def test_asset_detail_exposes_dns_and_ip_metadata(alice: FlaskClient, db_session: Session) -> None:
+    root = _add(alice, "example.com")
+    root_asset = db_session.get(Asset, root["id"])
+    assert root_asset is not None
+    root_asset.details = {
+        "dns": {
+            "a": ["203.0.113.10"],
+            "cname_chain": ["example.com", "cdn.example.net"],
+        }
+    }
+    ip = record_asset(
+        db_session,
+        root_asset.org_id,
+        AssetType.IP,
+        "203.0.113.10",
+        source=AssetSource.DISCOVERED,
+        parent_id=root_asset.id,
+    )
+    ip.details = {"ip": {"ptr": "host.example.net", "asn": 13335, "org": "CLOUDFLARENET"}}
+    ip_id = ip.id
+    db_session.commit()
+
+    root_detail = alice.get(f"/api/v1/assets/{root['id']}").get_json()
+    ip_detail = alice.get(f"/api/v1/assets/{ip_id}").get_json()
+
+    assert root_detail["dns"]["chain"] == [
+        "example.com",
+        "cdn.example.net",
+        "203.0.113.10",
+    ]
+    assert root_detail["dns"]["records"][0] == {"type": "A", "values": ["203.0.113.10"]}
+    assert ip_detail["ip"] == {
+        "ptr": "host.example.net",
+        "asn": 13335,
+        "org": "CLOUDFLARENET",
+        "country": None,
+    }

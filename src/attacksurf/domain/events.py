@@ -20,12 +20,32 @@ class FindingFixed:
 
 
 @dataclass(frozen=True)
+class FindingRegressed:
+    """A previously fixed finding that this scan observed again."""
+
+    org_id: UUID
+    scan_id: UUID
+    finding_id: UUID
+
+
+@dataclass(frozen=True)
+class FindingReopened:
+    """A suppressed finding that was re-observed with materially different evidence."""
+
+    org_id: UUID
+    scan_id: UUID
+    finding_id: UUID
+
+
+@dataclass(frozen=True)
 class ScanCompleted:
     org_id: UUID
     scan_id: UUID
 
 
-type DomainEvent = FindingCreated | FindingFixed | ScanCompleted
+type DomainEvent = (
+    FindingCreated | FindingFixed | FindingRegressed | FindingReopened | ScanCompleted
+)
 
 
 class EventDispatcher(Protocol):

@@ -1,6 +1,7 @@
 {% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
 {% from "components/badges.html" import severity_badge, status_pill %}
 {% from "components/confirm.html" import confirm_dialog %}
+{% from "components/form.html" import csrf_field %}
 {% from "components/table.html" import data_table %}
 {% from "components/time.html" import relative_time %}
 {% from "components/verification.html" import ownership_badge, ownership_card %}
@@ -18,6 +19,20 @@
   <h1 class="mono">{{ asset.value }}</h1>
   {%- if not asset.is_active %} {{ status_pill("archived") }}{% endif %}
   {%- if asset.verification == "verified" %} {{ ownership_badge("verified") }}{% endif %}
+  {%- if can_scan %}
+  <div class="page-actions">
+    {%- if active_scan %}
+    <a class="btn btn-secondary" href="{{ url_for('ui.scan_detail', scan_id=active_scan.id) }}">View running scan</a>
+    {%- else %}
+    <form method="post" action="{{ url_for('ui.create_scan') }}">
+      {{ csrf_field() }}
+      <input type="hidden" name="root_asset_id" value="{{ asset.id }}">
+      <input type="hidden" name="profile" value="dns_passive">
+      <button type="submit" class="btn btn-primary">Scan now</button>
+    </form>
+    {%- endif %}
+  </div>
+  {%- endif %}
   {%- if can_archive %}
   <div class="page-actions">
     {%- if detail.discovered %}
@@ -35,6 +50,9 @@
 
 <dl class="meta card card-body">
   <div><dt>Type</dt><dd>{{ asset.type }}</dd></div>
+  {%- if detail.uploaded_as %}
+  <div><dt>Uploaded file</dt><dd class="mono">{{ detail.uploaded_as }}</dd></div>
+  {%- endif %}
   <div><dt>Source</dt><dd>{{ "Added by your team" if asset.source == "user" else "Discovered" }}</dd></div>
   <div><dt>First seen</dt><dd>{{ relative_time(asset.first_seen) }}</dd></div>
   <div><dt>Last seen</dt><dd>{{ relative_time(asset.last_seen) }}</dd></div>
@@ -60,7 +78,39 @@
   {%- if tab == "overview" %}
   {#- Only roots hold a proof; on a subdomain this shows the root's proof, read-only. -#}
   {%- if asset.type in ("domain", "subdomain") %}
-  {{ ownership_card(view_id, proof_root_value, ownership, can_manage_ownership, checking) }}
+  {{ ownership_card(view_id, proof_root_value, ownership, can_manage_ownership, checking, stalled_since) }}
+  {%- endif %}
+  {%- if detail.dns %}
+  <section class="card" aria-labelledby="dns-title">
+    <h2 class="card-title" id="dns-title">DNS records</h2>
+    {%- if detail.dns.chain %}
+    <p class="dns-chain mono" aria-label="DNS resolution chain">
+      {%- for hop in detail.dns.chain %}{{ hop }}{% if not loop.last %} <span aria-hidden="true">→</span> {% endif %}{% endfor %}
+    </p>
+    {%- endif %}
+    {%- if detail.dns.records %}
+    {% call(row, key) data_table([("type", "Record"), ("values", "Value")],
+        detail.dns.records, "DNS records", "No DNS records", "") %}
+      {%- if key == "type" %}<code>{{ row.type }}</code>
+      {%- elif key == "values" %}{% for value in row.values %}<code class="dns-value">{{ value }}</code>{% if not loop.last %}<br>{% endif %}{% endfor %}{% endif %}
+    {% endcall %}
+    {%- endif %}
+    {%- if detail.dns.private_ips %}
+    <p class="muted">Non-public addresses:
+      {%- for address in detail.dns.private_ips %} <code>{{ address }}</code>{% if not loop.last %},{% endif %}{% endfor %}</p>
+    {%- endif %}
+  </section>
+  {%- endif %}
+  {%- if detail.ip %}
+  <section class="card" aria-labelledby="ip-title">
+    <h2 class="card-title" id="ip-title">IP address</h2>
+    <dl class="meta card-body">
+      <div><dt>PTR</dt><dd class="mono">{{ detail.ip.ptr or "—" }}</dd></div>
+      <div><dt>ASN</dt><dd>{% if detail.ip.asn is not none %}AS{{ detail.ip.asn }}{% else %}—{% endif %}</dd></div>
+      <div><dt>Organisation</dt><dd>{{ detail.ip.org or "—" }}</dd></div>
+      <div><dt>Country</dt><dd>{{ detail.ip.country or "—" }}</dd></div>
+    </dl>
+  </section>
   {%- endif %}
   <section class="card" aria-labelledby="outgoing-title">
     <h2 class="card-title" id="outgoing-title">Points to</h2>
@@ -102,7 +152,7 @@
     {% call(row, key) data_table([("created_at", "Queued"), ("profile", "Profile"), ("trigger", "Trigger"), ("status", "Status"), ("finished_at", "Finished")],
         scans, "Scans of this asset's root domain", "No scans yet",
         "Scans run on root domains; their history shows here for the root and everything under it.") %}
-      {%- if key == "created_at" %}{{ relative_time(row.created_at) }}
+      {%- if key == "created_at" %}<a href="{{ url_for('ui.scan_detail', scan_id=row.id) }}">{{ relative_time(row.created_at) }}</a>
       {%- elif key == "profile" %}<code>{{ row.profile }}</code>
       {%- elif key == "trigger" %}{{ row.triggered_by }}
       {%- elif key == "status" %}{{ status_pill(row.status) }}

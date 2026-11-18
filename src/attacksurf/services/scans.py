@@ -1,23 +1,35 @@
 """Scan use cases and pipeline planning. Celery canvas stays behind PipelineQueue."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from attacksurf.domain.assets import AssetNotFound, AssetType
 from attacksurf.domain.events import EventDispatcher, ScanCompleted
 from attacksurf.domain.jobs import JobNotFound, JobTask, PipelineQueue, TaskQueue
 from attacksurf.domain.scanners import ScanProfile
-from attacksurf.domain.scans import JobStatus, ScanError, ScanStatus, ScanTrigger
-from attacksurf.infra.db.models import Asset, Job, Scan
+from attacksurf.domain.scans import (
+    JobStatus,
+    ScanAlreadyActive,
+    ScanError,
+    ScanNotFound,
+    ScanRateLimited,
+    ScanStatus,
+    ScanTrigger,
+)
+from attacksurf.infra.db.models import Asset, Job, Org, Scan
 from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.scanners.registry import ScannerRegistry
 from attacksurf.services import jobs
 from attacksurf.services.audit import audit
 
 TERMINAL = {ScanStatus.COMPLETED, ScanStatus.FAILED, ScanStatus.CANCELLED}
+_ACTIVE = (ScanStatus.QUEUED, ScanStatus.RUNNING)
+_UNFINISHED_JOBS = (JobStatus.QUEUED, JobStatus.RUNNING)
 
 
 def start_scan(
@@ -30,7 +42,21 @@ def start_scan(
     registry: ScannerRegistry,
     profiles: Mapping[str, ScanProfile],
     triggered_by: ScanTrigger = ScanTrigger.USER,
+    actor_id: UUID | None = None,
+    max_starts_per_hour: int | None = None,
 ) -> Scan:
+    """Queue a scan of a root domain and commit. Raises `ScanError` for bad requests.
+
+    The root row is locked, so two concurrent starts for the same root serialize: the
+    second sees the first's committed scan and gets `ScanAlreadyActive` instead of a
+    duplicate. The lock is only ever taken on the root here; archiving locks the root's
+    scans first and the root second, so the two wait in one direction and never deadlock
+    (ADR 0021). `max_starts_per_hour` caps starts of this profile in the trailing hour
+    (all statuses: even a failed start consumed a worker slot); None means no quota.
+    The quota count and the insert are serialised on the org row: concurrent starts for
+    different roots lock different asset rows and could otherwise both read a below-limit
+    count and both insert (same pattern as the artifact quota, `services.artifacts`).
+    """
     selected = profiles.get(profile)
     if selected is None:
         raise ScanError("Unknown scan profile.")
@@ -38,13 +64,38 @@ def start_scan(
     if not selected.discover and not selected.checks:
         raise ScanError("profile has no scanners")
     root = session.scalars(
-        scoped(Asset, org_id).where(Asset.id == root_asset_id),
+        scoped(Asset, org_id).where(Asset.id == root_asset_id).with_for_update(),
         execution_options={"populate_existing": True},  # a committed archive must not be missed
     ).one_or_none()
     if root is None or root.parent_id is not None or not root.is_active:
         raise AssetNotFound("Root asset not found.")
     if root.type != AssetType.DOMAIN:
         raise ScanError("only domain root scans are supported")
+    active = session.scalars(
+        scoped(Scan, org_id).where(
+            Scan.root_asset_id == root.id,
+            Scan.status.in_(_ACTIVE),
+        )
+    ).one_or_none()
+    if active is not None:
+        raise ScanAlreadyActive(active.id)
+    if max_starts_per_hour is not None:
+        # Serialise the org's starts (see docstring): the lock is held until the
+        # transaction commits in `create_job` below.
+        session.execute(select(Org.id).where(Org.id == org_id).with_for_update())
+        recent = (
+            session.scalar(
+                scoped(Scan, org_id)
+                .where(
+                    Scan.profile == profile,
+                    Scan.created_at > func.now() - timedelta(hours=1),
+                )
+                .with_only_columns(func.count())
+            )
+            or 0
+        )
+        if recent >= max_starts_per_hour:
+            raise ScanRateLimited("Too many scans started recently. Try again later.")
     scan = Scan(
         org_id=org_id,
         root_asset_id=root.id,
@@ -55,7 +106,14 @@ def start_scan(
     session.add(scan)
     session.flush()
     scan_id = scan.id
-    audit(session, org_id, "scan.started", target_type="scan", target_id=str(scan_id))
+    audit(
+        session,
+        org_id,
+        "scan.started",
+        actor_id=actor_id,
+        target_type="scan",
+        target_id=str(scan_id),
+    )
     try:
         jobs.create_job(
             session,
@@ -71,6 +129,100 @@ def start_scan(
     return scan
 
 
+def cancel_scan(
+    session: Session, org_id: UUID, scan_id: UUID, *, actor_id: UUID | None = None
+) -> Scan:
+    """Cancel a queued/running scan and its unfinished jobs, and commit (ADR 0021).
+
+    Database-only, like archiving: already-queued tasks run once and drop their output when
+    they see the terminal scan, so nothing is revoked in Celery. Cancelling a finished scan
+    changes nothing. Raises `ScanNotFound` for a missing or another org's scan.
+    """
+    scan = session.scalars(
+        scoped(Scan, org_id).where(Scan.id == scan_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).one_or_none()
+    if scan is None:
+        raise ScanNotFound(str(scan_id))
+    if scan.status in TERMINAL:
+        return scan
+    cancel_scan_rows(session, org_id, (scan.id,), job_error="Scan cancelled.")
+    audit(
+        session,
+        org_id,
+        "scan.cancelled",
+        actor_id=actor_id,
+        target_type="scan",
+        target_id=str(scan.id),
+        details={"reason": "user_requested"},
+    )
+    session.commit()
+    return scan
+
+
+def cancel_scan_rows(
+    session: Session, org_id: UUID, scan_ids: Sequence[UUID], *, job_error: str
+) -> Sequence[UUID]:
+    """Mark queued/running scans cancelled with their unfinished jobs, without committing.
+
+    Shares its single statement with `cancel_root_scans` (archiving): only the scan filter,
+    the job error text and the audit reason differ.
+    """
+    return _cancel_matching(session, org_id, Scan.id.in_(scan_ids), job_error=job_error)
+
+
+def cancel_root_scans(
+    session: Session, org_id: UUID, root_id: UUID, *, job_error: str
+) -> Sequence[UUID]:
+    """Cancel the root's queued/running scans and their unfinished jobs, without committing.
+
+    One atomic statement: a scan committed between a separate select and the update would
+    otherwise be missed. Rows are locked scan-then-job, the order `run_check` and
+    `TrackedTask` use, so a cancellation and a worker finishing a job can't deadlock.
+    `clock_timestamp()` is the real time of each update: `now()` is when this transaction
+    began, which can precede a worker's `started_at` committed in between, and the schema
+    requires `finished_at >= started_at` (ADR 0021).
+    """
+    return _cancel_matching(session, org_id, Scan.root_asset_id == root_id, job_error=job_error)
+
+
+def _cancel_matching(
+    session: Session, org_id: UUID, scan_filter: ColumnElement[bool], *, job_error: str
+) -> Sequence[UUID]:
+    cancelled = session.scalars(
+        update(Scan)
+        .where(
+            Scan.org_id == org_id,
+            scan_filter,
+            Scan.status.in_(_ACTIVE),
+        )
+        .values(
+            status=ScanStatus.CANCELLED,
+            started_at=func.coalesce(Scan.started_at, func.clock_timestamp()),
+            finished_at=func.clock_timestamp(),
+        )
+        .returning(Scan.id),
+        execution_options={"synchronize_session": "fetch"},
+    ).all()
+    if not cancelled:
+        return []
+    session.execute(
+        update(Job)
+        .where(
+            Job.org_id == org_id,
+            Job.scan_id.in_(cancelled),
+            Job.status.in_(_UNFINISHED_JOBS),
+        )
+        .values(
+            status=JobStatus.CANCELLED,
+            error=job_error,
+            finished_at=func.greatest(Job.started_at, func.clock_timestamp()),
+        ),
+        execution_options={"synchronize_session": "fetch"},
+    )
+    return cancelled
+
+
 def dispatch_stage(
     session: Session,
     queue: PipelineQueue,
@@ -81,7 +233,7 @@ def dispatch_stage(
     profiles: Mapping[str, ScanProfile],
 ) -> None:
     job, scan = load_job_scan(session, org_id, job_id)
-    if scan.status in TERMINAL or not _root_active(session, org_id, scan):
+    if scan.status in TERMINAL or not root_is_active(session, org_id, scan):
         _abandon_stage(session, org_id, job)
         session.commit()
         return
@@ -157,7 +309,7 @@ def _task(
     return JobTask(task_name, scan.org_id, row.id)
 
 
-def _root_active(session: Session, org_id: UUID, scan: Scan) -> bool:
+def root_is_active(session: Session, org_id: UUID, scan: Scan) -> bool:
     """Fresh read: an archive may have committed after this task loaded the scan.
 
     A cancelled scan normally shows its own status; checking the root too means a scan whose
@@ -205,7 +357,7 @@ def load_job_scan(session: Session, org_id: UUID, job_id: UUID) -> tuple[Job, Sc
 
 def finalize_scan(session: Session, org_id: UUID, job_id: UUID, events: EventDispatcher) -> None:
     _, scan = load_job_scan(session, org_id, job_id)
-    if scan.status in TERMINAL or not _root_active(session, org_id, scan):
+    if scan.status in TERMINAL or not root_is_active(session, org_id, scan):
         session.rollback()
         return
     pending = session.scalars(

@@ -126,3 +126,21 @@ def test_beat_schedules_the_ownership_reverification_hourly() -> None:
     # Every hour at :17, so a mass expiry doesn't hit the queue all at once.
     assert entry["schedule"].minute == {17}
     assert len(entry["schedule"].hour) == 24
+
+
+def test_beat_schedules_the_artifact_purge_every_ten_minutes() -> None:
+    app = create_celery(make_settings(redis_url=SecretStr("redis://redis.test:6379/2")))
+
+    entry = app.conf.beat_schedule["purge-expired-artifacts"]
+
+    assert entry["task"] == "passive.purge_expired_artifacts"
+    assert entry["schedule"].minute == {0, 10, 20, 30, 40, 50}
+    assert len(entry["schedule"].hour) == 24
+
+
+def test_every_beat_entry_names_a_registered_task_on_a_consumed_queue() -> None:
+    worker_app.loader.import_default_modules()
+
+    for entry in worker_app.conf.beat_schedule.values():
+        assert entry["task"] in worker_app.tasks
+        assert queue_for(entry["task"]) in QUEUES

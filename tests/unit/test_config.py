@@ -32,6 +32,22 @@ def test_settings_have_no_default_llm_model() -> None:
     assert make_settings().llm_model is None
 
 
+def test_scan_quota_defaults_to_ten_starts_per_hour() -> None:
+    assert make_settings().scan_max_starts_per_hour == 10
+
+
+def test_scan_quota_reads_from_environment(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("SCAN_MAX_STARTS_PER_HOUR", "3")
+
+    assert settings_from_env().scan_max_starts_per_hour == 3
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1001", "many"])
+def test_scan_quota_rejects_out_of_range(value: str) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(scan_max_starts_per_hour=value)  # type: ignore[arg-type]
+
+
 def test_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
     clean_env.setenv("ENV", "prod")
     clean_env.setenv("SECRET_KEY", PROD_SECRET_KEY)
@@ -326,3 +342,188 @@ def test_sandbox_launcher_settings_refuse_runc_in_prod() -> None:
 def test_sandbox_launcher_settings_refuse_unsafe_artifact_roots(root: str) -> None:
     with pytest.raises(ValueError, match="artifact root"):
         SandboxLauncherSettings(sandbox_artifact_root=root)
+
+
+def test_dns_settings_defaults() -> None:
+    settings = make_settings()
+
+    assert settings.dns_resolver_addresses == ("1.1.1.1", "8.8.8.8")
+    assert settings.dns_timeout_seconds == 3.0
+    assert settings.dns_lifetime_seconds == 5.0
+    assert settings.dns_max_concurrency == 20
+    assert settings.ip_asn_db_path is None
+
+
+def test_dns_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("DNS_RESOLVERS", "9.9.9.9, 1.0.0.1")
+    clean_env.setenv("DNS_TIMEOUT_SECONDS", "1.5")
+    clean_env.setenv("DNS_LIFETIME_SECONDS", "2.5")
+    clean_env.setenv("DNS_MAX_CONCURRENCY", "4")
+    clean_env.setenv("IP_ASN_DB_PATH", "/srv/ip2asn.tsv")
+
+    settings = settings_from_env()
+
+    assert settings.dns_resolver_addresses == ("9.9.9.9", "1.0.0.1")
+    assert settings.dns_timeout_seconds == 1.5
+    assert settings.dns_lifetime_seconds == 2.5
+    assert settings.dns_max_concurrency == 4
+    assert settings.ip_asn_db_path == "/srv/ip2asn.tsv"
+
+
+@pytest.mark.parametrize(
+    "resolvers",
+    ["", "127.0.0.1", "10.0.0.1,1.1.1.1", "not-an-ip"],
+)
+def test_dns_settings_require_public_resolver_addresses(resolvers: str) -> None:
+    with pytest.raises(ValidationError, match="DNS_RESOLVERS"):
+        make_settings(dns_resolvers=resolvers)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("dns_timeout_seconds", 0),
+        ("dns_timeout_seconds", 31),
+        ("dns_lifetime_seconds", 0),
+        ("dns_lifetime_seconds", 61),
+        ("dns_max_concurrency", 0),
+        ("dns_max_concurrency", 101),
+    ],
+)
+def test_dns_settings_reject_out_of_range(field: str, value: int) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(**{field: value})
+
+
+def test_dns_lifetime_must_not_be_shorter_than_timeout() -> None:
+    with pytest.raises(ValidationError, match="DNS_LIFETIME_SECONDS"):
+        make_settings(dns_timeout_seconds=3.0, dns_lifetime_seconds=2.0)
+
+
+def test_empty_ip_asn_path_is_unset() -> None:
+    assert make_settings(ip_asn_db_path="  ").ip_asn_db_path is None
+
+
+APP_KEY = "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s"  # urlsafe base64 of b"k" * 32, unpadded
+
+
+def test_artifact_settings_defaults() -> None:
+    settings = make_settings()
+
+    assert settings.app_encryption_key is None
+    assert settings.app_encryption_key_bytes is None
+    assert settings.artifact_max_bytes == 256 * 1024**2
+    assert settings.artifact_retention_hours == 0
+    assert settings.artifact_org_quota_bytes == 2 * 1024**3
+    assert settings.artifact_store_root == "/var/lib/attacksurf/artifact-store"
+    assert settings.sandbox_artifact_root == "/var/lib/attacksurf/artifacts"
+
+
+def test_prod_starts_without_an_app_encryption_key() -> None:
+    # Storage fails closed at use instead (ADR 0028), so existing deployments keep booting.
+    settings = make_settings(env="prod", secret_key=SecretStr(PROD_SECRET_KEY))
+
+    assert settings.app_encryption_key is None
+
+
+def test_artifact_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("APP_ENCRYPTION_KEY", APP_KEY)
+    clean_env.setenv("ARTIFACT_MAX_BYTES", "1048576")
+    clean_env.setenv("ARTIFACT_RETENTION_HOURS", "48")
+    clean_env.setenv("ARTIFACT_ORG_QUOTA_BYTES", "2097152")
+    clean_env.setenv("ARTIFACT_STORE_ROOT", "/srv/store")
+    clean_env.setenv("SANDBOX_ARTIFACT_ROOT", "/srv/artifacts")
+
+    settings = settings_from_env()
+
+    assert settings.app_encryption_key_bytes == b"k" * 32
+    assert APP_KEY not in repr(settings)
+    assert (settings.artifact_max_bytes, settings.artifact_org_quota_bytes) == (1048576, 2097152)
+    assert settings.artifact_retention_hours == 48
+    assert (settings.artifact_store_root, settings.sandbox_artifact_root) == (
+        "/srv/store",
+        "/srv/artifacts",
+    )
+
+
+def test_app_encryption_key_accepts_padded_base64() -> None:
+    settings = make_settings(app_encryption_key=SecretStr(APP_KEY + "="))
+
+    assert settings.app_encryption_key_bytes == b"k" * 32
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "too-short-sentinel",
+        "not base64 at all !! sentinel",
+        "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2tr",  # 36 bytes
+    ],
+)
+def test_malformed_app_encryption_key_is_rejected_without_echoing_it(
+    value: str, clean_env: pytest.MonkeyPatch
+) -> None:
+    clean_env.setenv("APP_ENCRYPTION_KEY", value)
+
+    with pytest.raises(ValidationError, match="APP_ENCRYPTION_KEY") as error:
+        settings_from_env()
+
+    assert value not in str(error.value)
+    assert "sentinel" not in str(error.value)
+    assert "a2tra2" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("artifact_max_bytes", 0),
+        ("artifact_max_bytes", 512 * 1024**2 + 1),
+        ("artifact_retention_hours", -1),
+        ("artifact_retention_hours", 721),
+        ("artifact_org_quota_bytes", 0),
+        ("artifact_org_quota_bytes", 1024**4 + 1),
+    ],
+)
+def test_artifact_limits_reject_out_of_range(field: str, value: int) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(**{field: value})
+
+
+def test_artifact_quota_below_the_per_artifact_limit_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="ARTIFACT_ORG_QUOTA_BYTES"):
+        make_settings(artifact_max_bytes=2048, artifact_org_quota_bytes=1024)
+
+
+@pytest.mark.parametrize("field", ["artifact_store_root", "sandbox_artifact_root"])
+@pytest.mark.parametrize("root", ["relative/path", "/", "/srv/../etc"])
+def test_unsafe_artifact_roots_are_rejected(field: str, root: str) -> None:
+    with pytest.raises(ValidationError, match="absolute paths below /"):
+        make_settings(**{field: root})
+
+
+@pytest.mark.parametrize(
+    ("store", "run"),
+    [
+        ("/srv/artifacts", "/srv/artifacts"),
+        ("/srv/artifacts/", "/srv//artifacts"),
+        ("/srv/artifacts/store", "/srv/artifacts"),  # ciphertext inside the sandbox mount
+        ("/srv/data", "/srv/data/runs"),
+    ],
+)
+def test_overlapping_artifact_roots_are_rejected(store: str, run: str) -> None:
+    with pytest.raises(ValidationError, match="must not contain each other"):
+        make_settings(artifact_store_root=store, sandbox_artifact_root=run)
+
+
+def test_sibling_artifact_roots_with_a_shared_prefix_are_accepted() -> None:
+    settings = make_settings(
+        artifact_store_root="/srv/artifacts-store", sandbox_artifact_root="/srv/artifacts"
+    )
+
+    assert settings.artifact_store_root == "/srv/artifacts-store"
+
+
+def test_sandbox_services_never_receive_the_app_encryption_key() -> None:
+    for settings in (SandboxProxySettings(), SandboxLauncherSettings()):
+        assert not hasattr(settings, "app_encryption_key")
+        assert not hasattr(settings, "artifact_store_root")

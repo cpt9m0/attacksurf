@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
 import attacksurf
 from attacksurf import create_app
@@ -38,6 +39,28 @@ def test_ephemeral_secret_key_logs_warning(capsys: pytest.CaptureFixture[str]) -
     create_app(make_settings(env="dev"))
 
     assert "no SECRET_KEY set" in capsys.readouterr().out
+
+
+def test_missing_instance_llm_config_logs_that_ai_is_off(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    create_app(make_settings(llm_api_key=SecretStr("test-key-not-real"), llm_model=None))
+
+    output = capsys.readouterr().out
+    assert "AI is off" in output
+    assert "test-key-not-real" not in output
+
+
+def test_configured_instance_llm_logs_no_ai_off_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    create_app(
+        make_settings(llm_api_key=SecretStr("test-key-not-real"), llm_model="muse-spark-1.3")
+    )
+
+    output = capsys.readouterr().out
+    assert "AI is off" not in output
+    assert "test-key-not-real" not in output
 
 
 def test_importing_inner_layers_does_not_load_flask() -> None:

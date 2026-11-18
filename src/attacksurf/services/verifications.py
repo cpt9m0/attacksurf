@@ -7,6 +7,7 @@ worker task that runs it commits. Nothing here performs DNS I/O; the lookup arri
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from uuid import UUID
 
 from sqlalchemy import case, func, or_, select
@@ -37,6 +38,27 @@ from attacksurf.services.audit import audit
 MAX_DUE_PER_RUN = 200
 # Backoff cap: 2**8 hours is already longer than any lookup outage worth retrying at all.
 MAX_BACKOFF_EXP = 8
+# A queued check older than this never had a consumer: TrackedTask's soft limit is 300 s, so a
+# job still queued past it is not slow, it is stuck (#174). The card stops polling and names
+# the queue instead of the DNS record.
+QUEUE_STALL_AFTER = timedelta(minutes=5)
+
+
+class CheckState(StrEnum):
+    """Where a root's verification check stands, for the ownership card's polling."""
+
+    NONE = "none"  # no queued or running verify job
+    QUEUED = "queued"  # waiting for a worker; the card polls
+    RUNNING = "running"  # a worker picked it up; the card polls (bounded by the task limit)
+    STALLED = "stalled"  # queued past QUEUE_STALL_AFTER with no consumer; the card stops
+
+
+@dataclass(frozen=True)
+class InFlightCheck:
+    """The newest queued/running verify job: `queued_since` is set only when stalled."""
+
+    state: CheckState
+    queued_since: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -167,25 +189,42 @@ def queue_check(
     return verification
 
 
-def check_in_flight(session: Session, org_id: UUID, asset_id: UUID) -> bool:
-    """True while a verification job for this root is still queued or running.
+def check_in_flight(
+    session: Session, org_id: UUID, asset_id: UUID, *, now: datetime | None = None
+) -> InFlightCheck:
+    """Where the newest verification job for this root stands.
 
-    The card polls itself while this is true, so the result of "Verify now" (or of the
-    scheduled re-check) appears without the admin reloading the page.
+    The card polls itself while the state is queued or running, so the result of "Verify now"
+    (or of the scheduled re-check) appears without the admin reloading the page. Past
+    `QUEUE_STALL_AFTER` a queued job is stalled, not slow — no worker consumed it — so the card
+    stops polling and points at the queue instead of the DNS record (#174).
+
+    Measured from `updated_at`, not `created_at`: a retry puts the job back in the queue and
+    bumps it, so the clock restarts. The newest job decides, so a fresh "Verify now" gets a
+    fresh grace window instead of inheriting a stuck predecessor.
     """
-    return (
-        session.scalar(
-            scoped(Job, org_id)
-            .where(
-                Job.asset_id == asset_id,
-                Job.stage == "verify",
-                Job.status.in_((JobStatus.QUEUED, JobStatus.RUNNING)),
-            )
-            .with_only_columns(Job.id)
-            .limit(1)
+    row = session.execute(
+        scoped(Job, org_id)
+        .where(
+            Job.asset_id == asset_id,
+            Job.stage == "verify",
+            Job.status.in_((JobStatus.QUEUED, JobStatus.RUNNING)),
         )
-        is not None
-    )
+        .with_only_columns(Job.status, Job.updated_at)
+        .order_by(Job.updated_at.desc(), Job.id.desc())
+        .limit(1)
+    ).one_or_none()
+    if row is None:
+        return InFlightCheck(CheckState.NONE)
+    status, updated_at = row
+    if status is JobStatus.RUNNING:
+        return InFlightCheck(CheckState.RUNNING)
+    if updated_at is None:
+        return InFlightCheck(CheckState.QUEUED)
+    now = now or datetime.now(UTC)
+    if now - updated_at > QUEUE_STALL_AFTER:
+        return InFlightCheck(CheckState.STALLED, queued_since=updated_at)
+    return InFlightCheck(CheckState.QUEUED)
 
 
 def verification_for_asset(session: Session, org_id: UUID, asset_id: UUID) -> UUID | None:

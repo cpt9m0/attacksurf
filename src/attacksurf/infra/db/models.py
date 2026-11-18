@@ -1,16 +1,20 @@
 """ORM models. Alembic autogenerate sees every model imported here."""
 
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     Enum,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    LargeBinary,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -21,6 +25,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from attacksurf.domain.accounts import Role
+from attacksurf.domain.artifacts import ArtifactKind
 from attacksurf.domain.assets import MAX_URL_LENGTH, AssetSource, AssetType, RelationKind
 from attacksurf.domain.findings import (
     FINGERPRINT_LENGTH,
@@ -30,6 +35,7 @@ from attacksurf.domain.findings import (
     FindingStatus,
     Severity,
 )
+from attacksurf.domain.llm import KeySource, ProviderKind
 from attacksurf.domain.rules import MAX_RULE_ID_LENGTH
 from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger
 from attacksurf.domain.verification import MAX_TOKEN_LENGTH, VerificationMethod, VerificationStatus
@@ -92,6 +98,18 @@ class AuditLog(TenantScoped, Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
+def _same_org_fk(column: str, target: str, ondelete: str = "CASCADE") -> ForeignKeyConstraint:
+    """`(column, org_id) -> target(id, org_id)`: links can only point at the same org's rows."""
+    return ForeignKeyConstraint(
+        [column, "org_id"], [f"{target}.id", f"{target}.org_id"], ondelete=ondelete
+    )
+
+
+def _same_org_fk_set_null(column: str, target: str) -> ForeignKeyConstraint:
+    # Postgres 15+ column list: plain SET NULL would also null org_id (NOT NULL) and fail.
+    return _same_org_fk(column, target, ondelete=f"SET NULL ({column})")
+
+
 class Asset(TenantScoped, Timestamps, Base):
     """Anything an org owns or we discovered for it: domain, subdomain, IP, URL (repo/binary later).
 
@@ -112,6 +130,21 @@ class Asset(TenantScoped, Timestamps, Base):
         CheckConstraint("parent_id IS NULL OR parent_id <> id", name="no_self_parent"),
         CheckConstraint("source = 'discovered' OR parent_id IS NULL", name="user_asset_is_root"),
         CheckConstraint("is_active = (deactivated_at IS NULL)", name="deactivated_at_matches"),
+        # Which scan discovered/deactivated it, so a scan's diff counts only its own changes
+        # even when scans overlap (ADR 0027). NULL for user roots and pre-#20 rows. `use_alter`
+        # because `scans` already points back at `assets`: the cycle must not block table order.
+        ForeignKeyConstraint(
+            ["first_seen_scan_id", "org_id"],
+            ["scans.id", "scans.org_id"],
+            ondelete="SET NULL (first_seen_scan_id)",
+            use_alter=True,
+        ),
+        ForeignKeyConstraint(
+            ["deactivated_by_scan_id", "org_id"],
+            ["scans.id", "scans.org_id"],
+            ondelete="SET NULL (deactivated_by_scan_id)",
+            use_alter=True,
+        ),
     )
 
     type: Mapped[AssetType] = mapped_column(_str_enum(AssetType, "asset_type"))
@@ -123,9 +156,11 @@ class Asset(TenantScoped, Timestamps, Base):
     )
     first_seen: Mapped[datetime]
     last_seen: Mapped[datetime]
+    first_seen_scan_id: Mapped[UUID | None] = mapped_column(index=True)
     is_active: Mapped[bool] = mapped_column(server_default=text("true"))
     # When a scan found it gone; only sightings after this reactivate it.
     deactivated_at: Mapped[datetime | None]
+    deactivated_by_scan_id: Mapped[UUID | None] = mapped_column(index=True)
     details: Mapped[dict[str, Any]] = mapped_column(
         JSONB, default=dict, server_default=text("'{}'::jsonb")
     )
@@ -151,18 +186,6 @@ class AssetRelation(TenantScoped, Base):
     kind: Mapped[RelationKind] = mapped_column(_str_enum(RelationKind, "relation_kind"))
     first_seen: Mapped[datetime]
     last_seen: Mapped[datetime]
-
-
-def _same_org_fk(column: str, target: str, ondelete: str = "CASCADE") -> ForeignKeyConstraint:
-    """`(column, org_id) -> target(id, org_id)`: links can only point at the same org's rows."""
-    return ForeignKeyConstraint(
-        [column, "org_id"], [f"{target}.id", f"{target}.org_id"], ondelete=ondelete
-    )
-
-
-def _same_org_fk_set_null(column: str, target: str) -> ForeignKeyConstraint:
-    # Postgres 15+ column list: plain SET NULL would also null org_id (NOT NULL) and fail.
-    return _same_org_fk(column, target, ondelete=f"SET NULL ({column})")
 
 
 class Verification(TenantScoped, Timestamps, Base):
@@ -200,6 +223,35 @@ class Verification(TenantScoped, Timestamps, Base):
     # broken domain can't occupy every batch slot and starve the rest (ADR 0014).
     failed_attempts: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     retry_after: Mapped[datetime | None]
+
+
+class Artifact(TenantScoped, Timestamps, Base):
+    """An uploaded or fetched repo/binary, stored encrypted (#85, ADR 0028).
+
+    The file at `storage_key` can only be decrypted with `key_envelope`, the per-artifact key
+    wrapped by the app key. Deleting an artifact erases that key and keeps the row as the
+    record; a cascade from its asset or org removes the row, and the key with it.
+    """
+
+    __tablename__ = "artifacts"
+    __table_args__ = (
+        _same_org_fk("asset_id", "assets"),
+        UniqueConstraint("storage_key"),
+        CheckConstraint("size_bytes >= 0", name="size_not_negative"),
+        CheckConstraint(
+            "(deleted_at IS NULL) = (key_envelope IS NOT NULL)", name="key_erased_on_delete"
+        ),
+        Index("ix_artifacts_delete_after", "delete_after"),  # the purge task's scan
+    )
+
+    asset_id: Mapped[UUID] = mapped_column(index=True)
+    kind: Mapped[ArtifactKind] = mapped_column(_str_enum(ArtifactKind, "artifact_kind"))
+    sha256: Mapped[str] = mapped_column(String(64))  # of the plaintext
+    size_bytes: Mapped[int] = mapped_column(BigInteger)  # plaintext bytes
+    storage_key: Mapped[str] = mapped_column(String(100))  # "{org_id}/{artifact_id}", server-built
+    key_envelope: Mapped[bytes | None] = mapped_column(LargeBinary(61))
+    delete_after: Mapped[datetime]
+    deleted_at: Mapped[datetime | None]
 
 
 class Scan(TenantScoped, Timestamps, Base):
@@ -276,6 +328,13 @@ class Finding(TenantScoped, Timestamps, Base):
     rule_id: Mapped[str] = mapped_column(String(MAX_RULE_ID_LENGTH))
     fingerprint: Mapped[str] = mapped_column(String(FINGERPRINT_LENGTH))
     location: Mapped[str] = mapped_column(String(MAX_LOCATION_LENGTH), server_default="")
+    # The scanner that last observed it (a `Job.scanner` name). NULL for rows written before
+    # #20 or by a caller that didn't name one: those are never auto-fixed (ADR 0027).
+    scanner: Mapped[str | None] = mapped_column(String(100))
+    # SHA-256 of the last observed evidence set, empty set included, so a material change is an
+    # O(1) comparison instead of loading the finding's evidence history (ADR 0027). NULL means
+    # the baseline predates this column: the next observation records it without reopening.
+    evidence_digest: Mapped[str | None] = mapped_column(String(FINGERPRINT_LENGTH))
     title: Mapped[str] = mapped_column(String(300))
     description: Mapped[str] = mapped_column(Text)
     severity: Mapped[Severity] = mapped_column(_str_enum(Severity, "severity"))
@@ -285,12 +344,33 @@ class Finding(TenantScoped, Timestamps, Base):
     )
     first_seen: Mapped[datetime]
     last_seen: Mapped[datetime]
+    # The fixing scan's start (ADR 0027), not wall-clock time: it orders fixes against scans.
     fixed_at: Mapped[datetime | None]
     remediation: Mapped[str] = mapped_column(Text, server_default="")
     references: Mapped[list[str]] = mapped_column(
         ARRAY(String(MAX_URL_LENGTH)), default=list, server_default=text("'{}'")
     )
     ai_triage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class FindingObservation(TenantScoped, Base):
+    """One finding seen by one scan: the per-scan set `Scan.stats` and the diff work from.
+
+    `Finding.last_seen_scan_id` follows the latest observation, which overlapping scans can
+    move; this row belongs to the scan that observed the finding, so a scan's own totals and
+    fix/regress decisions never depend on that mutable pointer (ADR 0027).
+    """
+
+    __tablename__ = "finding_observations"
+    __table_args__ = (
+        UniqueConstraint("org_id", "scan_id", "finding_id"),
+        _same_org_fk("scan_id", "scans"),
+        _same_org_fk("finding_id", "findings"),
+    )
+
+    scan_id: Mapped[UUID] = mapped_column(index=True)
+    finding_id: Mapped[UUID] = mapped_column(index=True)
+    severity: Mapped[Severity] = mapped_column(_str_enum(Severity, "severity"))
 
 
 class Evidence(TenantScoped, Base):
@@ -303,3 +383,37 @@ class Evidence(TenantScoped, Base):
     kind: Mapped[EvidenceKind] = mapped_column(_str_enum(EvidenceKind, "evidence_kind"))
     data: Mapped[dict[str, Any]] = mapped_column(JSONB)
     captured_at: Mapped[datetime]
+
+
+class LLMUsage(TenantScoped, Base):
+    """One finished `LLMProvider.complete()` call, successful or not (#23).
+
+    Append-only, like `AuditLog`. Counts and labels only: never the prompt, the reply, the key
+    or the base URL. Failed calls get a row too, since they spent tokens; #24's monthly cap
+    sums the `instance` rows of each org.
+    """
+
+    __tablename__ = "llm_usage"
+    __table_args__ = (
+        CheckConstraint("input_tokens >= 0", name="input_tokens_not_negative"),
+        CheckConstraint("output_tokens >= 0", name="output_tokens_not_negative"),
+        CheckConstraint("estimated_cost_usd >= 0", name="estimated_cost_not_negative"),
+        CheckConstraint("latency_ms >= 0", name="latency_ms_not_negative"),
+        CheckConstraint("success = (error_type IS NULL)", name="error_type_matches"),
+        Index("ix_llm_usage_org_id_created_at", "org_id", "created_at"),  # monthly sums
+    )
+
+    provider: Mapped[ProviderKind] = mapped_column(_str_enum(ProviderKind, "llm_provider"))
+    model: Mapped[str] = mapped_column(String(200))
+    purpose: Mapped[str] = mapped_column(String(50))  # what the call was for, e.g. "triage"
+    key_source: Mapped[KeySource] = mapped_column(_str_enum(KeySource, "llm_key_source"))
+    input_tokens: Mapped[int]
+    output_tokens: Mapped[int]
+    # False when the backend sent no counts: the zeros above are then unknown, not free.
+    usage_reported: Mapped[bool]
+    # Fixed when the call is recorded, so later price changes don't rewrite history.
+    estimated_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
+    latency_ms: Mapped[int | None]  # NULL for failed calls
+    success: Mapped[bool]
+    error_type: Mapped[str | None] = mapped_column(String(50))  # error class name, no message
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

@@ -1,20 +1,25 @@
 """Per-process worker state: settings, the database session factory and the scanner gate."""
 
 from functools import lru_cache
+from pathlib import Path
 
 import redis
 from sqlalchemy.orm import Session, sessionmaker
 
 from attacksurf.config import Settings, get_settings
+from attacksurf.domain.artifacts import ArtifactPolicy, ArtifactStore
 from attacksurf.domain.cache import ScanCache
-from attacksurf.domain.net import DnsResolver, TxtLookup
+from attacksurf.domain.net import IpIntel, TxtLookup
 from attacksurf.domain.scanners import ScannerGate
 from attacksurf.infra.authoritative_dns import AuthoritativeTxtLookup
 from attacksurf.infra.cache import RedisScanCache
+from attacksurf.infra.crypto import EnvelopeCipher
 from attacksurf.infra.db.session import create_db_engine, create_session_factory
 from attacksurf.infra.dns import DnsPythonResolver
 from attacksurf.infra.http import SafeHttpClient
+from attacksurf.infra.ip_intel import Ip2AsnLookup
 from attacksurf.infra.scope_guard import ScopeGuard
+from attacksurf.infra.storage import LocalArtifactStore
 from attacksurf.services.ownership import DbOwnershipChecker
 
 # crt.sh regularly takes several seconds; the client's 5 s default is too tight for it.
@@ -33,14 +38,26 @@ def session_factory() -> sessionmaker[Session]:
 
 
 @lru_cache(maxsize=1)
-def dns_resolver() -> DnsResolver:
-    return DnsPythonResolver()
+def dns_resolver() -> DnsPythonResolver:
+    current = settings()
+    return DnsPythonResolver(
+        nameservers=current.dns_resolver_addresses,
+        timeout=current.dns_timeout_seconds,
+        lifetime=current.dns_lifetime_seconds,
+        max_concurrency=current.dns_max_concurrency,
+    )
 
 
 @lru_cache(maxsize=1)
 def txt_lookup() -> TxtLookup:
     """Ownership checks: needs the A/AAAA/NS answers, so it takes the dnspython resolver."""
-    return AuthoritativeTxtLookup(DnsPythonResolver())
+    return AuthoritativeTxtLookup(dns_resolver())
+
+
+@lru_cache(maxsize=1)
+def ip_intel() -> IpIntel:
+    """Offline ASN/org enrichment; an unset path means lookups return None."""
+    return Ip2AsnLookup(settings().ip_asn_db_path)
 
 
 @lru_cache(maxsize=1)
@@ -60,6 +77,28 @@ def scan_cache() -> ScanCache:
     )
 
 
+@lru_cache(maxsize=1)
+def artifact_store() -> ArtifactStore:
+    """Encrypted artifact storage (ADR 0028). Without `APP_ENCRYPTION_KEY` it only deletes."""
+    current = settings()
+    key = current.app_encryption_key_bytes
+    return LocalArtifactStore(
+        Path(current.artifact_store_root),
+        Path(current.sandbox_artifact_root),
+        EnvelopeCipher(key, purpose=b"artifact") if key else None,
+    )
+
+
+@lru_cache(maxsize=1)
+def artifact_policy() -> ArtifactPolicy:
+    current = settings()
+    return ArtifactPolicy(
+        max_bytes=current.artifact_max_bytes,
+        org_quota_bytes=current.artifact_org_quota_bytes,
+        retention_hours=current.artifact_retention_hours,
+    )
+
+
 def scanner_gate() -> ScannerGate:
     """The production gate: active checks run only on assets whose root proved ownership (#14)."""
     return ScopeGuard(
@@ -67,6 +106,7 @@ def scanner_gate() -> ScannerGate:
         http=http_client(),
         ownership=DbOwnershipChecker(session_factory()),
         cache=scan_cache(),
+        ip_intel=ip_intel(),
     )
 
 

@@ -39,12 +39,18 @@ own key) **triages, prioritizes, and explains** them in plain language with fix 
 
 ### Domains & DNS (MVP)
 - **Subdomain enumeration** from Certificate Transparency logs, with wildcard DNS detection
+- **DNS resolution**: A/AAAA/CNAME/MX/NS/TXT/CAA/SOA records, CNAME → IP chains, IP assets
+  with reverse DNS and offline ASN/organisation, and non-resolving subdomain tracking
 - **Subdomain takeover detection**: dangling CNAMEs and NS records pointing to unclaimed cloud services
 - **Email security**: SPF, DMARC, DKIM, MTA-STS checks (is your domain spoofable?)
 - **DNS hygiene**: DNSSEC, nameserver and MX configuration, CAA, zone transfer (AXFR) exposure
 - **Domain expiry** monitoring via RDAP
+- **Codebase upload** (early): upload a source archive; it is stored encrypted and queued for analysis (analyzers are coming)
+- **Binary and mobile app upload** (early): upload an ELF, PE or Mach-O executable, an APK or an IPA; it is identified by its SHA-256, stored encrypted, never run, and queued for analysis (analyzers are coming)
 - **Asset inventory**: add the domains you own, then browse everything discovered under them
   (filters, search, open findings per asset) and the asset graph: domain → subdomain → CNAME → IP
+- **Scan control**: start a scan from the UI or the API, watch its progress live, cancel it,
+  and review what changed (new / fixed / regressed findings, new and disappeared assets)
 
 ### Platform
 - **AI triage**: severity adjustment, false-positive likelihood, remediation steps, exposure summaries
@@ -106,7 +112,7 @@ Flask + HTMX web app, Celery workers, PostgreSQL, Redis. Each check is a small p
 |---|---|---|
 | 1 | Foundation: tooling, DB, auth, UI shell | 🚧 in progress |
 | 2 | Scan engine: plugins, pipeline, ScopeGuard | ✅ built |
-| 3 | DNS module | planned |
+| 3 | DNS module | 🚧 in progress |
 | 4 | AI triage and summaries | planned |
 | 5 | Scheduling, alerts, deployment → **v0.1.0** | planned |
 | next | Website ([#66](https://github.com/cpt9m0/attacksurf/issues/66)), codebase ([#67](https://github.com/cpt9m0/attacksurf/issues/67)), binary ([#68](https://github.com/cpt9m0/attacksurf/issues/68)), IP scanning | planned |

@@ -1,6 +1,7 @@
 """The real CT scanner through `run_check`, with fixture sources and no network."""
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from uuid import UUID
 
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from attacksurf.domain.assets import AssetSource, AssetType, RelationKind
 from attacksurf.domain.events import DomainEvent
-from attacksurf.domain.net import HttpBody, ScannerRuntime
+from attacksurf.domain.net import DnsLookup, DnsQuery, HttpBody, ScannerRuntime
 from attacksurf.domain.scanners import AssetRef, ScanContext, Scanner
 from attacksurf.domain.scans import JobStatus
 from attacksurf.infra.db.models import Asset, AssetRelation, Job
@@ -35,6 +36,9 @@ class FakeDns:
 
     def resolve_ipv4(self, host: str) -> tuple[str, ...]:
         return self.resolve_name(host)
+
+    def lookup_many(self, queries: Sequence[DnsQuery]) -> tuple[DnsLookup, ...]:
+        raise AssertionError("CT discovery must not use raw record lookups")
 
 
 class FakeHttp:

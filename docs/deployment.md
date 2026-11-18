@@ -44,11 +44,11 @@ running exits immediately without doing anything.
 
 | File | Purpose |
 |---|---|
-| `compose.prod.yaml` | the stack: `cloudflared`, `caddy`, `web`, `postgres`, `redis`, one-off `migrate`; `web`/`migrate` use `${WEB_IMAGE:-attacksurf:prod}` |
+| `compose.prod.yaml` | the stack: `cloudflared`, `caddy`, `web`, `worker-passive`, `beat`, `postgres`, `redis`, one-off `migrate`; `web`/`worker-passive`/`beat`/`migrate` share the `x-app` anchor and `${WEB_IMAGE:-attacksurf:prod}` |
 | `deploy/Caddyfile` | `www` → apex redirect, security headers, visitor IP forwarding, proxy to `web` |
 | `deploy/Caddy.Dockerfile` | Caddy with this Caddyfile baked in (no plugins needed) |
 | `deploy/attacksurf.env.example` | copy of the app env file; filled copy lives on the host |
-| `scripts/deploy.sh` | the deploy: bootstrap checkout, fetch, build, migrate, replace `web`, smoke test, roll back |
+| `scripts/deploy.sh` | the deploy: bootstrap checkout, fetch, build, migrate, replace the long-running services, smoke test, roll back |
 | `deploy/systemd/attacksurf-deploy.service` | root oneshot unit that runs the script under `flock` |
 | `deploy/systemd/attacksurf-deploy.timer` | fires the unit 3 min after the previous run started |
 | `deploy/systemd/README.md` | unit installation, operation and troubleshooting in isolation |
@@ -450,9 +450,42 @@ choose ownership verification:
 
 Only the TXT method avoids cache surprises; prefer it.
 
+## Upload size limits
+
+Three limits apply to `POST /assets/upload` and `POST /assets/upload-binary`, and the smallest
+wins: **Cloudflare** rejects request bodies over 100 MB on Free and Pro plans,
+`deploy/Caddyfile` allows 257 MiB on those paths
+(2 MB elsewhere), and the app allows `ARTIFACT_MAX_BYTES` (default 256 MiB) plus framing. So
+behind the tunnel an archive over 100 MB fails at the edge with Cloudflare's own 413 page.
+Raising `ARTIFACT_MAX_BYTES` also means raising the Caddyfile value. gunicorn's default 30 s
+worker timeout can also end a slow, large upload; tuning it is part of #29.
+
+## Uploaded artifacts
+
+Archive uploads are off until `APP_ENCRYPTION_KEY` is set in `/etc/attacksurf/attacksurf.env`
+(the Assets page then shows "not configured"). With the key set, ciphertext is written to the
+named volume `artifact-store` (`/var/lib/attacksurf/artifact-store` in the app containers), so
+it survives deploys; `docker compose down -v` deletes it. The volume is not backed up yet, and
+`beat` purges expired artifacts every 10 minutes once the key is set. Keep the key
+safe: without it stored artifacts cannot be read.
+
+## Background workers
+
+`worker-passive` consumes the `passive` queue (ownership checks, `dns_passive` scans, the
+artifact purge); `beat` schedules the hourly ownership re-verification and the 10-minute purge.
+One cannot work without the other: beat only queues, the worker only consumes (#174).
+
+```bash
+docker compose -f compose.prod.yaml ps                          # worker-passive and beat healthy
+docker compose -f compose.prod.yaml logs worker-passive         # passive.verify_ownership consumed
+```
+
+`up -d --wait` (and the deploy script's `--wait-timeout 300`) gates a release on both
+healthchecks: the worker probe is `celery inspect ping`, the beat probe checks the broker
+connection. Both substitute the Redis password from the secret at probe time, the same way the
+entrypoint does for the main process. An unhealthy worker fails the deploy and rolls back.
+
 ## Known gaps on this host
 
-The stack covers the web app and its database only. **No Celery workers or beat are running**,
-so scans, ownership checks and AI jobs stay queued. Adding `worker-passive`, `worker-ai` and
-`beat` is part of #29, together with backups and monitoring; the `x-app` anchor in
-`compose.prod.yaml` can be reused for their services.
+The stack runs `web`, `worker-passive` and `beat` plus the database. `worker-ai` is still
+missing, so AI jobs stay queued, together with backups and monitoring (all #29).

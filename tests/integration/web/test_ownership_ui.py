@@ -307,6 +307,56 @@ def test_the_card_stops_polling_once_the_check_finished(
     assert "Checking" not in page
 
 
+def test_a_check_queued_too_long_stops_polling_and_points_at_the_queue(
+    alice: FlaskClient, db_session: Session, root: UUID
+) -> None:
+    """Regression (#174): a verify job with no consumer spun the card forever."""
+    _start(alice, root)
+    job = db_session.scalars(select(Job)).one()
+    job.updated_at = datetime.now(UTC) - verifications.QUEUE_STALL_AFTER - timedelta(minutes=1)
+    db_session.commit()
+
+    page = _html(alice, f"/assets/{root}/ownership")
+
+    assert "hx-trigger" not in page
+    assert 'aria-busy="false"' in page
+    assert "Stalled" in page
+    assert "Checking" not in page
+    assert "no worker has" in page
+    assert "The card stopped refreshing" in page
+    assert "Verify now" in page
+    assert "disabled" not in page.split("Verify now")[0].rsplit("<button", 1)[-1]
+
+
+def test_a_running_check_keeps_polling_even_when_it_is_old(
+    alice: FlaskClient, db_session: Session, root: UUID
+) -> None:
+    _start(alice, root)
+    job = db_session.scalars(select(Job)).one()
+    job.status = JobStatus.RUNNING
+    job.updated_at = datetime.now(UTC) - verifications.QUEUE_STALL_AFTER - timedelta(hours=1)
+    db_session.commit()
+
+    page = _html(alice, f"/assets/{root}/ownership")
+
+    assert 'hx-trigger="every 2s"' in page
+    assert "Checking" in page
+    assert "Stalled" not in page
+
+
+def test_a_requeued_check_waits_again(alice: FlaskClient, db_session: Session, root: UUID) -> None:
+    _start(alice, root)
+    job = db_session.scalars(select(Job)).one()
+    job.created_at = datetime.now(UTC) - verifications.QUEUE_STALL_AFTER - timedelta(hours=1)
+    job.updated_at = datetime.now(UTC)
+    db_session.commit()
+
+    page = _html(alice, f"/assets/{root}/ownership")
+
+    assert 'hx-trigger="every 2s"' in page
+    assert "Stalled" not in page
+
+
 def test_the_card_polls_nothing_before_a_proof_exists(alice: FlaskClient, root: UUID) -> None:
     page = _html(alice, f"/assets/{root}/ownership")
 

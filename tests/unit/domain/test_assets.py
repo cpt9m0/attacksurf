@@ -4,11 +4,11 @@ from attacksurf.domain.assets import (
     MAX_URL_LENGTH,
     AssetType,
     InvalidAssetValue,
-    UnsupportedAssetType,
     normalize_asset_value,
     normalize_hostname,
     normalize_ip,
     normalize_url,
+    upload_repo_value,
 )
 
 
@@ -159,7 +159,91 @@ def test_normalize_asset_value_dispatches_by_type(
     assert normalize_asset_value(asset_type, raw) == expected
 
 
-@pytest.mark.parametrize("asset_type", [AssetType.REPO, AssetType.BINARY])
-def test_repo_and_binary_are_not_supported_yet(asset_type: AssetType) -> None:
-    with pytest.raises(UnsupportedAssetType):
-        normalize_asset_value(asset_type, "anything")
+def test_binary_value_is_the_lowercase_sha256_of_its_bytes() -> None:
+    digest = "AB" * 32
+
+    value = normalize_asset_value(AssetType.BINARY, f" sha256:{digest} ")
+
+    assert value == "sha256:" + "ab" * 32
+    assert normalize_asset_value(AssetType.BINARY, value) == value
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["", "anything", "ab" * 32, "sha256:" + "ab" * 31, "sha256:" + "zz" * 32, "md5:" + "ab" * 32],
+)
+def test_binary_value_rejects_anything_but_a_sha256_digest(raw: str) -> None:
+    with pytest.raises(InvalidAssetValue):
+        normalize_asset_value(AssetType.BINARY, raw)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("github.com/acme/app", "github.com/acme/app"),
+        ("https://GitHub.com/Acme/App.git", "github.com/Acme/App"),
+        ("  gitlab.com/group/sub/app/ ", "gitlab.com/group/sub/app"),
+        ("upload/my-app", "upload/my-app"),
+    ],
+)
+def test_repo_value_is_host_and_path_without_scheme_or_git_suffix(raw: str, expected: str) -> None:
+    assert normalize_asset_value(AssetType.REPO, raw) == expected
+    # Stored values are normalized again on every write: the result must be a fixed point.
+    assert normalize_asset_value(AssetType.REPO, expected) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "github.com",
+        "github.com/acme",
+        "http://github.com/acme/app",
+        "ssh://github.com/acme/app",
+        "git@github.com:acme/app",
+        "https://user:token@github.com/acme/app",
+        "github.com/acme/app?ref=main",
+        "github.com/acme/app#readme",
+        "github.com/acme/../app",
+        "github.com/./acme/app",
+        "github.com/acme//app",
+        "github.com/acme/app.git.git",
+        "github.com/acme/app.GIT",
+        "github.com/acme/app.Git.git",
+        "github.com/acme/-app",
+        "github.com/acme/a b",
+        "github.com/acme/app%2e",
+        "github.com\\acme\\app",
+        "github.com:8443/acme/app",
+        "localhost/acme/app",
+        "upload/",
+        "upload/My-App",
+        "upload/a/b",
+        "upload/..",
+        "upload/" + "a" * 65,
+    ],
+)
+def test_repo_value_rejects_anything_a_fetch_url_must_not_carry(raw: str) -> None:
+    with pytest.raises(InvalidAssetValue):
+        normalize_asset_value(AssetType.REPO, raw)
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        ("My App.zip", "upload/my-app"),
+        ("app-1.2.tar.gz", "upload/app-1.2"),
+        ("src.TGZ", "upload/src"),
+        ("../../etc/passwd.tar", "upload/passwd"),
+        ("C:\\work\\Proj.tar.xz", "upload/proj"),
+        ("<script>.zip", "upload/script"),
+        ("...zip", "upload/archive"),
+        ("", "upload/archive"),
+        ("x" * 200 + ".zip", "upload/" + "x" * 64),
+    ],
+)
+def test_upload_repo_value_is_a_bounded_slug_of_the_file_name(filename: str, expected: str) -> None:
+    value = upload_repo_value(filename)
+
+    assert value == expected
+    assert normalize_asset_value(AssetType.REPO, value) == value

@@ -1,0 +1,113 @@
+{#- Scan progress, jobs and diff. Rendered inside the scan detail page and polled in
+    place (`hx-get` to `ui.scan_progress`) while the scan is active; when the scan
+    finishes the attributes are gone, so polling stops and the final swap shows the
+    diff. `detail.can_cancel` is exactly "not terminal".
+
+    `oob` is true only for the standalone progress route: out-of-band swaps then refresh
+    the status pill, the meta block and the cancel action outside this section (the
+    dialog lives there so polling never closes it mid-read). On first paint the detail
+    page already renders all three, so no duplicates. Without HTMX the attributes are
+    inert, so they are suppressed for a direct non-JS visit too. -#}
+{%- import "pages/_scan_parts.html" as parts -%}
+{%- from "components/badges.html" import status_pill -%}
+{%- from "components/time.html" import relative_time -%}
+{%- if oob and is_htmx %}
+{#- The replacements carry the targets' own IDs: an `outerHTML` swap removes the old
+    element, so without them the first poll would delete the targets and every later
+    poll would have nothing to swap into. -#}
+<span id="scan-status" hx-swap-oob="true">{{ parts.scan_status(scan) }}</span>
+<div id="scan-meta" hx-swap-oob="true">{{ parts.scan_meta(scan) }}</div>
+{%- if not detail.can_cancel %}
+<div id="scan-actions" hx-swap-oob="true"></div>
+{%- endif %}
+{%- endif %}
+<section class="card" id="scan-progress" aria-label="Scan progress"
+         {%- if detail.can_cancel %} hx-get="{{ url_for('ui.scan_progress', scan_id=scan.id) }}"
+         hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML" hx-sync="this:replace"{% endif %}
+         aria-busy="{{ 'true' if detail.can_cancel else 'false' }}">
+  <div class="card-header">
+    <h2 class="card-title">Progress</h2>
+    {%- if detail.can_cancel %} <span class="pill pill-active" role="status">Running…</span>{% endif %}
+  </div>
+  <div class="card-body">
+    <p role="status">
+      {%- if detail.jobs_total %}{{ detail.jobs_finished }} of {{ detail.jobs_total }} job{{ "" if detail.jobs_total == 1 else "s" }} finished
+      {%- else %}Queued — jobs appear once the pipeline fans out{% endif %}
+    </p>
+    {%- if detail.jobs_total %}
+    <progress max="{{ detail.jobs_total }}" value="{{ detail.jobs_finished }}"></progress>
+    {%- endif %}
+    {%- if detail.jobs %}
+    <div class="table-wrap">
+      <table class="data">
+        <caption class="visually-hidden">Jobs of this scan</caption>
+        <thead>
+          <tr><th scope="col">Stage</th><th scope="col">Scanner</th><th scope="col">Asset</th>
+            <th scope="col">Status</th><th scope="col">Error</th><th scope="col">Finished</th></tr>
+        </thead>
+        <tbody>
+          {%- for job in detail.jobs %}
+          <tr>
+            <td><code>{{ job.stage }}</code></td>
+            <td>{% if job.scanner %}<code>{{ job.scanner }}</code>{% else %}<span class="muted">—</span>{% endif %}</td>
+            <td>{%- if job.asset_id and job.asset_value %}<a class="mono" href="{{ url_for('ui.asset_detail', asset_id=job.asset_id) }}">{{ job.asset_value }}</a>{% else %}<span class="muted">—</span>{% endif %}</td>
+            <td>{{ status_pill(job.status) }}</td>
+            <td>{%- if job.error %}<code>{{ job.error }}</code>{% else %}<span class="muted">—</span>{% endif %}</td>
+            <td>{{ relative_time(job.finished_at) }}</td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+    {%- endif %}
+
+    {%- if detail.diff %}
+    <h3>Changes since the last scan</h3>
+    <div class="table-wrap">
+      <table class="data">
+        <caption class="visually-hidden">Finding changes recorded by this scan</caption>
+        <thead>
+          <tr><th scope="col">Change</th><th scope="col">Total</th>
+            {%- for name, count in detail.diff.new_findings.by_severity %}<th scope="col">{{ name | capitalize }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody>
+          {%- for label, bucket in [("New", detail.diff.new_findings), ("Fixed", detail.diff.fixed_findings), ("Regressed", detail.diff.regressed_findings), ("Observed", detail.diff.total_findings)] %}
+          <tr><th scope="row">{{ label }}</th><td>{{ bucket.total }}</td>
+            {%- for name, count in bucket.by_severity %}<td>{{ count }}</td>{% endfor %}</tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+    {%- if detail.diff.new_assets.assets or detail.diff.disappeared_assets.assets %}
+    <div class="table-wrap">
+      <table class="data">
+        <caption class="visually-hidden">Asset changes recorded by this scan</caption>
+        <thead>
+          <tr><th scope="col">Change</th><th scope="col">Asset</th><th scope="col">Type</th></tr>
+        </thead>
+        <tbody>
+          {%- for asset in detail.diff.new_assets.assets %}
+          <tr><td>New</td>
+            <td><a class="mono" href="{{ url_for('ui.asset_detail', asset_id=asset.id) }}">{{ asset.value }}</a></td>
+            <td>{{ asset.type }}</td></tr>
+          {%- endfor %}
+          {%- for asset in detail.diff.disappeared_assets.assets %}
+          <tr><td>Gone</td>
+            <td><a class="mono" href="{{ url_for('ui.asset_detail', asset_id=asset.id) }}">{{ asset.value }}</a></td>
+            <td>{{ asset.type }}</td></tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+    {%- if detail.diff.new_assets.truncated %}
+    <p class="muted">Showing {{ detail.diff.new_assets.assets | length }} of {{ detail.diff.new_assets.total }} new assets.</p>
+    {%- endif %}
+    {%- if detail.diff.disappeared_assets.truncated %}
+    <p class="muted">Showing {{ detail.diff.disappeared_assets.assets | length }} of {{ detail.diff.disappeared_assets.total }} disappeared assets.</p>
+    {%- endif %}
+    {%- endif %}
+    {%- elif not detail.can_cancel %}
+    <p class="muted">No comparison available: the scan never reached the compare step.</p>
+    {%- endif %}
+  </div>
+</section>

@@ -14,8 +14,22 @@ x-app: &app
     ENV: dev
     DATABASE_URL: postgresql+psycopg://attacksurf:attacksurf@postgres:5432/attacksurf
     REDIS_URL: redis://redis:6379/0
+    # Pinned like the URLs above: must match the artifact-store volume mount below.
+    ARTIFACT_STORE_ROOT: /var/lib/attacksurf/artifact-store
+    DNS_RESOLVERS: ${DNS_RESOLVERS:-1.1.1.1,8.8.8.8}
+    DNS_TIMEOUT_SECONDS: ${DNS_TIMEOUT_SECONDS:-3}
+    DNS_LIFETIME_SECONDS: ${DNS_LIFETIME_SECONDS:-5}
+    DNS_MAX_CONCURRENCY: ${DNS_MAX_CONCURRENCY:-20}
+    IP_ASN_DB_PATH: ${IP_ASN_DB_PATH:-}
+    APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
+    ARTIFACT_MAX_BYTES: ${ARTIFACT_MAX_BYTES:-}
+    ARTIFACT_RETENTION_HOURS: ${ARTIFACT_RETENTION_HOURS:-}
+    ARTIFACT_ORG_QUOTA_BYTES: ${ARTIFACT_ORG_QUOTA_BYTES:-}
+    SCAN_MAX_STARTS_PER_HOUR: ${SCAN_MAX_STARTS_PER_HOUR:-}
   volumes:
     - ./src:/app/src  # hot reload
+    # Encrypted artifacts (ADR 0028). On the anchor, not per service: a merge replaces lists.
+    - artifact-store:/var/lib/attacksurf/artifact-store
   depends_on:
     postgres:
       condition: service_healthy
@@ -94,3 +108,4 @@ services:
 
 volumes:
   pgdata:
+  artifact-store:

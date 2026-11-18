@@ -2,11 +2,12 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-12 · **Branch:** `23-openai-compat-provider` · **Issue:** #23 (LLM providers, PR 3)
+**Updated:** 2026-11-17 · **Branch:** `23-openai-compat-provider` · **Issue:** #23 (LLM providers, PR 3)
 
 ## Status
-PR 3 (`23-openai-compat-provider`) implements `OpenAICompatProvider` on top of `main` (`917e2b4`,
-which includes ADR 0024). Ready for review and merge before PR 4b (`23-llm-factory`).
+PR 3 (`23-openai-compat-provider`) implements `OpenAICompatProvider` and is merged with `main`
+(`72400d5`, which includes ADR 0024 and PR 4a `#166`). Ready for review and merge before PR 4b
+(`23-llm-factory`).
 
 ## Last task
 - Added `openai>=3.41.0,<3.42` (`3.41.0`, the newest release at least two weeks old) and extended
@@ -22,12 +23,11 @@ which includes ADR 0024). Ready for review and merge before PR 4b (`23-llm-facto
   live test (`tests/e2e/test_openai_compat_live.py`).
 
 ## Next step
-Open PR 3 for review; once PR 3 and PR 4a (`23-llm-usage`) are ready, implement PR 4b
-(`ai/factory.py` on `23-llm-factory`) to close #23.
+Open PR 3 for review; once PR 3 is merged, implement PR 4b (`ai/factory.py` on `23-llm-factory`)
+to close #23.
 
 ## Open threads
-- #23: PR 4a (`LLMUsage` table, pricing, `record_llm_usage`, AI-off startup warning) and PR 4b
-  (`build_provider` factory + live verification on both providers) remain to close #23.
+- #23: PR 4b (`build_provider` factory + live verification on both providers) remains to close #23.
 - Org-supplied base URLs still need ScopeGuard (SSRF) validation in #24 before use.
 
 ## Notes for the next agent

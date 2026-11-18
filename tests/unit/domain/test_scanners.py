@@ -5,7 +5,9 @@ from pydantic import ValidationError
 
 from attacksurf.domain.assets import AssetType
 from attacksurf.domain.scanners import (
+    MAX_ASSET_DETAILS_BYTES,
     MAX_EVIDENCE_BYTES,
+    AssetObservation,
     AssetRef,
     RawEvidence,
     RawFinding,
@@ -71,3 +73,29 @@ def test_scan_context_has_no_discovery_cap_by_default() -> None:
 
     assert ctx.max_discovered_assets is None
     assert ctx.runtime is None
+
+
+def test_asset_observation_details_are_optional_and_capped() -> None:
+    asset = AssetRef(type=AssetType.SUBDOMAIN, value="www.example.com")
+
+    assert AssetObservation(asset=asset).active is None
+    with pytest.raises(ValidationError, match="asset details"):
+        AssetObservation(asset=asset, details={"txt": "x" * (MAX_ASSET_DETAILS_BYTES + 1)})
+
+
+def test_scan_output_observations_round_trip_and_are_capped() -> None:
+    asset = AssetRef(type=AssetType.SUBDOMAIN, value="www.example.com")
+    observation = AssetObservation(
+        asset=asset, details={"dns": {"a": ["93.184.216.34"]}}, active=True
+    )
+    output = ScanOutput(observations=(observation,))
+
+    assert ScanOutput.model_validate_json(output.model_dump_json()) == output
+    with pytest.raises(ValidationError):
+        ScanOutput(observations=(observation,) * 1001)
+
+
+def test_scan_context_target_is_not_wildcard_by_default() -> None:
+    root = AssetRef(type=AssetType.DOMAIN, value="example.com")
+
+    assert ScanContext(uuid4(), uuid4(), root, "fixture").target_is_wildcard is False

@@ -17,6 +17,8 @@ x-app: &app
   security_opt:
     - no-new-privileges:true
   networks: [internal]
+  # The app env file (SECRET_KEY, DNS, LLM, ...); secrets stay in Docker secrets, never here.
+  env_file: [./deploy/attacksurf.env]
   # Redis and Postgres passwords come from the same secret files the servers use, so the
   # connection strings never appear in this file or in an env file.
   secrets: [postgres_password, redis_password]
@@ -36,6 +38,12 @@ x-app: &app
     # mounted secrets by the entrypoint above (passwords may contain `@`).
     DATABASE_URL: "postgresql+psycopg://attacksurf:__PGPASS__@postgres:5432/attacksurf"
     REDIS_URL: "redis://:__REDIS_PASS__@redis:6379/0"
+    # Pinned: must match the artifact-store volume mount below.
+    ARTIFACT_STORE_ROOT: /var/lib/attacksurf/artifact-store
+  volumes:
+    # Encrypted uploads (ADR 0028). Without it they would live in the container's writable
+    # layer and vanish on every deploy while their database rows stay.
+    - artifact-store:/var/lib/attacksurf/artifact-store
   depends_on:
     postgres:
       condition: service_healthy
@@ -73,20 +81,53 @@ services:
     <<: *app
     restart: "no"
     command: ["alembic", "upgrade", "head"]
-    env_file: [./deploy/attacksurf.env]
     depends_on:
       postgres:
         condition: service_healthy
 
   web:
     <<: *app
-    env_file: [./deploy/attacksurf.env]
     command: ["gunicorn", "attacksurf.app:create_app()", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "4"]
     expose: ["5000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=2)"]
       interval: 30s
       timeout: 3s
+      start_period: 20s
+      retries: 3
+
+  # Consumes the `passive` queue: ownership checks, dns_passive scans, artifact purge (#174).
+  # Without it every `passive.verify_ownership` job stays queued and the ownership card
+  # polls forever. `worker-ai` stays out until #29 (AI triage still has no consumer).
+  worker-passive:
+    <<: *app
+    command:
+      ["celery", "-A", "attacksurf.workers.app", "worker", "-Q", "passive", "-c", "2",
+       "-n", "passive@%h", "--loglevel", "INFO"]
+    healthcheck:
+      # `docker exec` does not inherit the entrypoint's exported, password-substituted URL,
+      # so substitute it here too; otherwise the probe dials `__REDIS_PASS__` and fails.
+      # Explicit `bash -c`: CMD-SHELL runs `/bin/sh` (dash), which rejects `${var//pat/rep}`.
+      test: ["CMD-SHELL", "bash -c 'export REDIS_URL=\"$${REDIS_URL//__REDIS_PASS__/$$(cat /run/secrets/redis_password)}\"; exec celery -A attacksurf.workers.app inspect ping -d passive@$$HOSTNAME --timeout 5'"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+  # Schedules the hourly ownership re-verification and the 10-minute artifact purge.
+  # Useless without `worker-passive` (and vice versa): beat only queues, the worker consumes.
+  beat:
+    <<: *app
+    # Schedule state in /tmp: the image's /app is not meant to be written at runtime.
+    command:
+      ["celery", "-A", "attacksurf.workers.app", "beat", "--loglevel", "INFO",
+       "--schedule", "/tmp/celerybeat-schedule"]
+    # `up --wait` needs a healthcheck on every service; beat has no ping, so check its broker.
+    # Explicit `bash -c` for the substitution: CMD-SHELL runs `/bin/sh` (dash).
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'export REDIS_URL=\"$${REDIS_URL//__REDIS_PASS__/$$(cat /run/secrets/redis_password)}\"; exec python -c \"from attacksurf.workers.app import app; app.connection_for_write().ensure_connection(max_retries=1)\"'"]
+      interval: 30s
+      timeout: 10s
       start_period: 20s
       retries: 3
 
@@ -145,3 +186,4 @@ networks:
 
 volumes:
   pgdata:
+  artifact-store:

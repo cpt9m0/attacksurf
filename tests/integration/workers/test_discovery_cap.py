@@ -22,6 +22,7 @@ pytestmark = pytest.mark.usefixtures("pipeline_env")
 
 def _start(session: Session, name: str) -> tuple[UUID, Scan]:
     root = make_scan(session, name)
+    root.status = ScanStatus.COMPLETED  # the fixture scan is only tenant context
     scan = scans.start_scan(
         session,
         FakeQueue(session),

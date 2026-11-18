@@ -22,8 +22,8 @@ Browser ─► web    ├────────────►│ Redis  ├�
             └──────────────────► PostgreSQL ◄───────────────┘
 ```
 
-Analysis path (ADR 0016; `sandbox-proxy` and the launcher's building blocks exist, the launcher
-service and the analysis worker do not yet): only `sandbox-proxy` holds the Docker socket, and the
+Analysis path (ADR 0016; `sandbox-proxy` and `sandbox-launcher` exist, the worker-side client
+and the analysis worker do not yet): only `sandbox-proxy` holds the Docker socket, and the
 sandbox that reads the artifact has no network and no credentials.
 
 ```
@@ -36,10 +36,10 @@ worker-analysis ─ run(artifact ID, analyzer) ─► sandbox-launcher ─► sa
                                                           tmpfs /scratch · CPU/mem/pids/time caps
 ```
 
-### Sandbox launcher building blocks
+### Sandbox launcher
 
-`sandbox_launcher/` holds the pure parts of `sandbox-launcher`; nothing runs them yet. Each one
-refuses rather than guesses:
+`sandbox_launcher/` is `sandbox-launcher` (`python -m attacksurf.sandbox_launcher`). It has no
+DB, Redis or Docker credentials. Each part refuses rather than guesses:
 
 - `config.SandboxLauncherSettings`: process env only (no `.env`, no app secrets); the proxy URL
   may embed credentials, so it is a `SecretStr` unwrapped only where connecting, and must be
@@ -58,8 +58,69 @@ refuses rather than guesses:
 
 The package imports nothing from the app or `sandbox_proxy` (import-linter). The values it
 shares with them (proxy limit ceilings, the digest pattern, create-body constants,
-`MAX_STDOUT_BYTES`) are copies that unit tests keep equal. PR 3c of #84 adds the service around
-them: `runner.py` (create, attach, start, kill), `server.py` (`POST /runs`) and `__main__.py`.
+`MAX_STDOUT_BYTES`) are copies that unit tests keep equal. The service around them:
+
+- `proxy.py`: `ProxyClient`, the launcher's only way to Docker. One connection per call; replies
+  are parsed strictly and errors carry the stage and status only. Attach is a raw socket because
+  the proxy relays a hijacked stream.
+- `runner.py`: `run_sandbox` creates the container, arms the removed-wait on a thread (before
+  start, since `AutoRemove` deletes the container at exit), attaches, starts, and reads stdout
+  against a wall-time deadline. It returns `RunOutcome(exit_code, stdout, timed_out,
+  output_exceeded)`; anything unexplained raises `SandboxRunFailed`.
+- `server.py`: `ThreadingHTTPServer` with `GET /healthz` and `POST /runs`. The body is exactly
+  `{"analyzer", "artifact_id"}` (canonical lowercase UUID, 1 KiB cap); the reply is
+  `{exit_code, stdout_b64, timed_out, output_exceeded}`. Unknown analyzer or artifact is 404, a
+  busy launcher (`SANDBOX_MAX_CONCURRENT_RUNS` slots) or a failed run is 503, with fixed messages.
+- `__main__.py`: asks the proxy's `GET /info` for runtime names (ADR 0023) and picks the runtime
+  once (`select_runtime`): `runsc`, or `runc` only outside prod with `SANDBOX_ALLOW_RUNC=true`.
+  Otherwise it exits non-zero. The empty catalog is allowed, so every run is a 404 until the
+  first analyzer ships.
+
+### Sandbox tools
+
+`sandbox_tools/` is the code analyzer images ship and run *inside* the sandbox. It uses the
+standard library only (a test checks every import; an import-linter contract also names the
+app and its dependencies) and the app never imports it. No image or catalog entry uses it yet (#84).
+
+- `extract.py`: `extract_archive(archive, dest)` unpacks one zip or tar(.gz/.bz2/.xz), detected
+  by magic bytes, into a new directory under the rules and caps of ADR 0017. `zipfile` and
+  `tarfile` only parse; the module copies every byte, counts it as it is written and never
+  creates a link. It returns a `Manifest` (files with path, size and SHA-256; skipped entries
+  with a reason; totals) or raises `ArchiveRejected` with a fixed reason code and removes the
+  partial tree.
+- Command line: `python -m attacksurf.sandbox_tools.extract /input/artifact /scratch/src`. It
+  writes the full manifest to `/scratch/src.manifest.json` (or `--manifest <path>`) and prints
+  one bounded JSON line: counts and the first 50 skipped entries (exit status 0),
+  `{"status": "rejected", "reason": ...}` when the artifact is refused (3), or
+  `{"status": "error", "reason": "io_error"}` when the extractor itself failed, for example an
+  unreadable input or an existing destination (4). Status 1 or 2 with no JSON is a crash or a
+  usage error. The summary is bounded because stdout is capped at 2 MiB and a manifest of
+  100,000 files is larger.
+- A sandbox run is one container with one fixed command, so each analyzer's `AnalyzerSpec.command`
+  will be a wrapper in its image: extract `/input/artifact` to `/scratch`, stop with the
+  rejection if there is one, otherwise run the tool on the tree and report the skipped entries
+  with its results. Images must set `PYTHONDONTWRITEBYTECODE=1`; the proxy allows no `Env`.
+
+- `detect.py`: `detect_binary(path)` names one binary's format by content (#101): `elf`, `pe`,
+  `macho`, `macho_fat`, `apk` or `ipa`, with a few header facts (bitness, byte order, machine
+  or CPU type, slice or entry count: numbers and fixed words only, never bytes of the file).
+  It reads fixed-size headers and a zip's central directory, which may be at most 4 MiB and
+  50,000 entries (a larger one is refused whole, never judged on a part);
+  it never decompresses, decrypts or executes anything, opens the file with `O_NOFOLLOW` and
+  refuses non-regular files. PE needs a valid `e_lfanew` and `PE\0\0`; a universal Mach-O
+  needs 1 to 16 slices that lie inside the file, which also excludes Java class files (same
+  magic, version word of 45 or more); an APK lists `AndroidManifest.xml` at the top level, an
+  IPA a `Payload/<name>.app/` entry, and a zip with both is refused (`ambiguous_zip`) so a
+  polyglot cannot pick its analyzer. The zip end record must be the last one whose comment
+  ends exactly at the end of the file, and its entry count and directory size must match the
+  entries found (`bad_header` otherwise); zip64 end records are refused. Command line:
+  `python -m attacksurf.sandbox_tools.detect /input/artifact` prints one JSON line with the same exit
+  statuses as `extract`: 0, 3 (`unknown_format`, `truncated`, `bad_header`, `no_zip_end`,
+  `not_apk_or_ipa`, `ambiguous_zip`, `zip_too_large`), 4 (`io_error`). The binary corpus in `tests/fixtures/binaries/` (header
+  stubs, not programs) is generated by `uv run python -m tests.binary_fixtures`.
+
+The corpus in `tests/fixtures/archives/` (zip-slip, link escapes, bombs, device nodes, header
+mismatches, truncations) is generated by `uv run python -m tests.archive_fixtures`.
 
 ## Layers
 
@@ -119,12 +180,14 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 | Entity | Purpose |
 |---|---|
 | `Org`, `User`, `Membership` | tenancy; every tenant row carries `org_id`. `User` is global (one login, many orgs); `Membership.role` is `owner`/`admin`/`member` (`domain.accounts.has_role`) |
-| `Asset` | polymorphic target: `domain`, `subdomain`, `ip`, `url`, `repo`, `binary`; one row per `(org_id, type, value)` with `value` normalized by `domain.assets.normalize_asset_value` (hostnames lowercase punycode via `idna`, canonical IPs, `http(s)` URLs without credentials/fragment/default port; repo/binary not yet); `source` user/discovered, `parent_id` = asset a discovered one was found under (set once at first sighting, so no cycles; user-added assets are roots; deleting a parent cascades to its discovered children), `first_seen`/`last_seen`, `is_active` + `deactivated_at` (only sightings after it reactivate), `tags`, `details` (a JSONB bag for scan-derived metadata: CT discovery stores `{"wildcard": true}` on wildcard zones; #16 adds DNS records). Roots come from `services.assets.add_root_domain` (any name `check_public_hostname` accepts, registrable or subdomain; re-adding an archived root restores it) and are removed only by `archive_root_domain` (root + its discovered children go inactive; findings and scans are kept) |
+| `Asset` | polymorphic target: `domain`, `subdomain`, `ip`, `url`, `repo`, `binary`; one row per `(org_id, type, value)` with `value` normalized by `domain.assets.normalize_asset_value` (hostnames lowercase punycode via `idna`, canonical IPs, `http(s)` URLs without credentials/fragment/default port; repos as `host/owner/name` or `upload/<slug>`; binaries as `sha256:<64 lowercase hex>` of their bytes); `source` user/discovered, `parent_id` = asset a discovered one was found under (set once at first sighting, so no cycles; user-added assets are roots; deleting a parent cascades to its discovered children), `first_seen`/`last_seen`, `first_seen_scan_id` + `deactivated_by_scan_id` (which scan discovered/deactivated it, so an overlapping scan's diff cannot claim it), `is_active` + `deactivated_at` (only sightings after it reactivate), `tags`, `details` (a JSONB bag for scan-derived metadata: CT discovery stores `{"wildcard": true}` on wildcard zones; DNS resolution stores `dns` records/chain and `ip` PTR/ASN/organisation, plus an `observed_at` marker so stale scans cannot replace newer details, ADR 0025). Roots come from `services.assets.add_root_domain` (any name `check_public_hostname` accepts, registrable or subdomain; re-adding an archived root restores it) and are removed only by `archive_root_domain` (root + its discovered children go inactive; findings and scans are kept) |
 | `AssetRelation` | graph edges: `subdomain_of`, `cname_to`, `resolves_to`, `serves`; unique per `(org_id, from, to, kind)`, no self-edges. `services.assets.record_asset` / `record_relation` upsert atomically (`INSERT … ON CONFLICT`): re-seen rows extend `last_seen`, never downgrade `source=user`, don't commit (the pipeline commits once), and raise `AssetNotFound` for a parent or endpoint that isn't the org's (locked `FOR KEY SHARE` so it can't vanish before the insert) |
 | `Verification` | proof of ownership of a root domain (`_attacksurf-verify.<root>` TXT, `pending`/`verified`/`revoked`, `verified_at`, `last_checked_at`, `recheck_at`, `expires_at`; unique per `(org_id, asset_id)`). Renewals are due after 20 hours; authorization expires after 24 hours. Subdomains inherit their root's proof; a `verified` row counts only while `expires_at` is in the future. Written by `services.verifications` / `services.ownership`, read by `DbOwnershipChecker` (ADRs 0014, 0015) |
-| `Scan`, `Job` | one run of a profile (`dns_passive`, …) against a root asset (`queued/running/completed/failed/cancelled`, triggered by `user`/`schedule`, `stats`), and its jobs: a pipeline stage, or one scanner on one asset (`skipped` = not run, e.g. denied by ScopeGuard). `scan_id` is NULL for work that isn't part of a scan (ownership verification). Deleting the root asset deletes its scans (their jobs are kept with `scan_id` NULL); deleting another asset keeps the job with `asset_id` NULL |
-| `Finding`, `Evidence` | normalized result, one row per issue across scans: unique `(org_id, fingerprint)`, with `fingerprint = domain.findings.finding_fingerprint(org_id, asset_id, rule_id, location)` (SHA-256 of a versioned JSON array; `location` tells apart several issues of one rule on one asset). `rule_id` points into the rule catalog (`domain.rules`: title, default severity, remediation template, references). Status `open → fixed / accepted_risk / false_positive` (`fixed_at` set exactly when `fixed`); regression detection in #20. Deleting a scan keeps its findings (scan references become NULL); evidence (`dns_record`/`http_response`/`raw`) goes with its finding |
-| `OrgSettings`, `LLMUsage` | LLM provider config (encrypted keys) and token/cost tracking |
+| `Scan`, `Job` | one run of a profile (`dns_passive`, …) against a root asset (`queued/running/completed/failed/cancelled`, triggered by `user`/`schedule`; `stats` holds the #20 diff: new/fixed/regressed findings by severity and new/disappeared assets, ADR 0027), and its jobs: a pipeline stage, or one scanner on one asset (`skipped` = not run, e.g. denied by ScopeGuard). `scan_id` is NULL for work that isn't part of a scan (ownership verification). Deleting the root asset deletes its scans (their jobs are kept with `scan_id` NULL); deleting another asset keeps the job with `asset_id` NULL |
+| `Finding`, `Evidence` | normalized result, one row per issue across scans: unique `(org_id, fingerprint)`, with `fingerprint = domain.findings.finding_fingerprint(org_id, asset_id, rule_id, location)` (SHA-256 of a versioned JSON array; `location` tells apart several issues of one rule on one asset). `rule_id` points into the rule catalog (`domain.rules`: title, default severity, remediation template, references). `scanner` is the `Job.scanner` that last observed it (`NULL` before #20: never auto-fixed), and `evidence_digest` is the SHA-256 of the last observed evidence set (empty included) for material-change checks. Status `open → fixed → regressed → fixed` (the diff stage `services.scan_diff` owns those transitions, ADR 0027), plus the user's `accepted_risk`/`false_positive`, which reopen to `open` only on a material change; `fixed_at` is set exactly when `fixed`. `FindingObservation` records one row per `(scan, finding)` with the severity at observation time: it is what a scan's own stats and fix/regress decisions use, so they never depend on the mutable `last_seen_scan_id`; rows cascade with their scan and finding. Deleting a scan keeps its findings (scan references become NULL); evidence (`dns_record`/`http_response`/`raw`) goes with its finding |
+| `Artifact` | an uploaded or fetched repo/binary of an asset, stored encrypted (#85, ADR 0028): `kind` (`repo`/`binary`), plaintext `sha256` + `size_bytes`, `storage_key` (`{org_id}/{artifact_id}`), `key_envelope` (the per-artifact AES key wrapped by `APP_ENCRYPTION_KEY`; NULL exactly when `deleted_at` is set, enforced by a CHECK), `delete_after`. `services.artifacts`: `store_artifact` (streams through the `domain.artifacts.ArtifactStore` port, per-artifact limit and per-org quota, audited), `open_artifact`, `stage_artifact`, `delete_artifact` (file removed, key erased, row kept), `purge_expired` (beat, every 10 min; a failed deletion keeps the key and is retried behind everything still waiting). `infra.storage.LocalArtifactStore` writes ciphertext to `ARTIFACT_STORE_ROOT/{org}/{artifact}` (0700/0600, temp file + `os.replace`; staging and deletion of one artifact are serialised by a `flock` on `{artifact}.lock` there) and stages plaintext for one sandbox run at `SANDBOX_ARTIFACT_ROOT/{artifact}/artifact`; the two roots may not overlap. Deleting the asset or org cascades the row, which erases the key. Nothing stages yet: the caller is #84's decision |
+| `LLMUsage` | one row per finished LLM call, successful or not: provider, model, `purpose`, `key_source` (`org`/`instance`), input/output tokens, `usage_reported`, `estimated_cost_usd` (snapshotted from `ai/pricing.py` list prices; NULL for an unpriced model or unreported usage), latency (NULL on failure), `success` + `error_type` (class name only). Append-only; indexed by `(org_id, created_at)` for #24's monthly instance-key cap. Written by `services.llm_usage.record_llm_usage` |
+| `OrgSettings` *(#24)* | per-org LLM provider config (encrypted keys) |
 | `ScanSchedule`, `AuditLog` | continuous monitoring and an append-only audit trail (`services.audit.audit()`, written in the same transaction as the change) |
 
 ## Scan pipeline
@@ -138,18 +201,23 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   A scan **profile** (e.g. `dns_passive`) selects the scanners to run.
 - A failing scanner fails only its job, not the scan.
 - Implemented framework (ADR 0011/0013): `domain/scanners.py` defines pydantic `ScanOutput`,
-  `AssetRef(type, value)`, relations, raw rule findings/evidence, `ScanContext`, the `Scanner`
-  protocol, the frozen `ScannerGrant` and `ScannerRuntime` (validated DNS/HTTP adapters, the
-  run cache and the grant-checked sandbox port from `domain/sandbox.py`). Plugins
+  `AssetRef(type, value)`, relations, raw rule findings/evidence, `AssetObservation` details,
+  `ScanContext`, the `Scanner` protocol, the frozen `ScannerGrant` and `ScannerRuntime`
+  (validated DNS/HTTP adapters, raw record lookups, the run cache, offline IP intel and the
+  grant-checked sandbox port from `domain/sandbox.py`). Plugins
   declare `name`, `asset_types`, `queue`, `requires_verification`, `timeout_seconds`
   (0 < timeout <= 240 s) and `grant`, and return `run(ctx, asset) -> ScanOutput`.
   `ScanOutput.wildcard_zones` marks assets that are wildcard DNS zones rather than hosts; a
   discovery profile's cap reaches the plugin through `ScanContext.max_discovered_assets`.
+  `ScanOutput.observations` carries per-asset details and lifecycle claims; persistence merges
+  the details and may deactivate only discovered assets.
 - `scanners/registry.py` supplies `@register_scanner`; `workers/app.py` and `app.create_app`
   import production plugin modules explicitly, so each process registers them once.
   `scanners/profiles.py`
-  selects discovery/check plugins by name. `dns_passive` runs `dns.discovery.ct` with
-  `max_discovered_assets=1000`; empty/unknown profiles are rejected. Profiles cannot route to
+  selects discovery/check plugins by name. `dns_passive` runs `dns.discovery.ct` for discovery
+  and `dns.resolve`, `dns.email`, `dns.takeover`, `dns.takeover.http`, `dns.dnssec`, `dns.ns`,
+  `dns.mx`, `dns.caa`, `dns.whois` and `dns.axfr` for checks, with `max_discovered_assets=1000`;
+  empty/unknown profiles are rejected. Profiles cannot route to
   the reserved `active`/`analysis` queues before those workers are implemented.
 - **CT discovery (#15, ADR 0022):** `dns.discovery.ct` queries crt.sh's JSON endpoint and falls
   back to Cert Spotter when crt.sh fails, times out or truncates. Names are normalized, filtered
@@ -158,8 +226,71 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   failures. A bounded number of random-label DNS lookups (`ctx.runtime.dns`) detects wildcard
   zones, and detected zones are persisted as `Asset.details["wildcard"] = true`. When both
   sources fail the scanner raises `TransientJobError`, so Celery retries with backoff.
+- **DNS resolution (#16, ADR 0025):** `dns.resolve` queries A, AAAA, CNAME, MX, NS, TXT, CAA
+  and SOA through the configured public resolvers, follows CNAMEs up to five hops, resolves the
+  terminal name, and stores capped records in `Asset.details["dns"]`. A/AAAA answers create IP
+  assets and `resolves_to` edges; in-root CNAME hops create `cname_to` edges (external targets
+  stay in `cname_chain`). Reverse DNS and an optional offline ip2asn database fill
+  `Asset.details["ip"]`; private/special-purpose addresses emit the info finding
+  `dns.records.private_ip_exposed`. A discovered subdomain with no records becomes inactive;
+  roots/user assets and wildcard-marked zones are never deactivated. A partial lookup failure
+  withholds the DNS details replacement (and a failed PTR lookup withholds that IP's `ip`
+  subtree), so the last complete observation stays; NUL bytes in TXT values are stored as `\0`
+  because PostgreSQL JSONB rejects U+0000. `Asset.details["observed_at"]` orders observations,
+  so a delayed older result cannot replace newer details.
+- **Email security (#17):** `dns.email` is a check-only plugin on root domains (no assets,
+  relations or observations) that reads TXT records for the apex, `_dmarc`, `_mta-sts` and common
+  `<selector>._domainkey` names in one `lookup_many` round and evaluates SPF (missing,
+  multiple, permissive `+all`/`?all`, >10 reachable DNS-querying terms), DMARC (missing —
+  including multiple records, monitor-only, no reporting, partial `pct`), DKIM (no common
+  selector publishes a usable key; low confidence) and MTA-STS (missing, info). A scanned
+  name without a usable DMARC record falls back to its organizational domain's record
+  (`ScannerRuntime.org_domain`, fed by the ScopeGuard's public-suffix classifier), whose
+  `sp` policy then applies; an invalid `p`/`sp` is read as `p=none` when a valid reporting
+  URI exists, per RFC 7489. Evidence is the raw
+  TXT records as `dns_record` evidence. A failed query fails open (that check is skipped);
+  only an all-error run raises `TransientJobError`. No HTTP fetch: MTA-STS is the DNS
+  signal only, and parked-domain hardening (`v=spf1 -all` + `p=reject`) is covered by the
+  missing-record remediation text.
+- **Subdomain takeover (#18):** two check-only plugins split by the ScopeGuard gate, because a
+  `TARGET` HTTP grant makes the gate skip unverified assets before the plugin runs. `dns.takeover`
+  is passive and DNS-only on domains and subdomains: it follows the CNAME chain (≤5 hops) and
+  reports `dns.takeover.dangling_cname` (high) when the terminal name suffix-matches a
+  known-claimable service whose deprovisioned instances return NXDOMAIN, and
+  `dns.takeover.dangling_ns` (critical, medium confidence) per NS host whose own name is
+  NXDOMAIN. `dns.takeover.http` declares `requires_verification` with a `TARGET` grant on the
+  passive queue, so it runs only while the root's ownership proof is valid; when the terminal
+  CNAME matches a resolving service it makes one plain-HTTP GET of the asset (a deprovisioned
+  instance rarely has a valid cert for the victim name) and reports
+  `dns.takeover.fingerprint_match` (high) when the body or status carries the service's
+  signature, with the CNAME chain and a response snippet as evidence. Services are matched
+  against a pinned subset of the can-i-take-over-xyz dataset (CC-BY-4.0, vulnerable entries
+  with a CNAME pattern and a usable signal; `scanners/dns/fingerprints-NOTICE.md`), matched as
+  literal substrings, never regex. Neither plugin claims or registers anything; HTTP errors
+  are no-finding, and only an all-error DNS round raises `TransientJobError`.
+- **DNS hygiene (#19, ADR 0026):** six check-only plugins. `dns.dnssec` reads the DS record at
+  the delegation (stub) and the zone's DNSKEY RRset from its own nameservers, reporting
+  `dns.dnssec.not_enabled` (info, low confidence) and `dns.dnssec.broken_chain` (high) when no
+  published key matches the DS; only the DS -> DNSKEY linkage is verified, not RRSIG
+  signatures. `dns.ns` probes each authoritative server for SOA and reports
+  `dns.ns.single_nameserver` (low), `dns.ns.lame_delegation` (medium, per server) and
+  `dns.ns.inconsistent_soa` (medium). `dns.mx` reports MX targets that are CNAMEs
+  (`dns.mx.points_to_cname`, low) or have no address records (`dns.mx.unresolvable`, medium),
+  skipping a null MX. `dns.caa` reports a missing CAA record (`dns.caa.missing`, info) after
+  checking the asset and every ancestor up to the registrable domain. `dns.whois` reads RDAP
+  registration data through the IANA
+  bootstrap (24 h cache) for `dns.whois.expiring_soon` (medium below 30 days, high below 7) and
+  `dns.whois.registrar_lock_missing` (medium). `dns.axfr` is an active check on verified zone
+  apexes: one AXFR per nameserver, `dns.axfr.allowed` (high) with only the first message's
+  record count as evidence. The zone-level checks run only when the asset is itself a zone apex;
+  all six accept `DOMAIN` assets only, so they run once per scan root.
 - `services.scans.start_scan` validates a tenant-owned, active domain root, audits and commits
-  the scan/kickoff job, then enqueues `passive.discover`. Two waves use Celery chords:
+  the scan/kickoff job, then enqueues `passive.discover`. The root row is locked, so two
+  concurrent starts for the same root serialize and the second gets `ScanAlreadyActive`;
+  a queued/running scan of the root and a per-org hourly quota per profile
+  (`SCAN_MAX_STARTS_PER_HOUR`, all statuses count) refuse the rest. The quota count and the
+  insert are serialised on the org row, so concurrent starts for different roots cannot both
+  read a below-limit count. Two waves use Celery chords:
   discovery on the root, then checks on the active root and its known direct children, filtered
   by each plugin's supported asset types. Continuations use immutable signatures and tracked
   jobs: `checks`, then `persist → diff → triage → finalize`. Batch rows commit before messages.
@@ -179,7 +310,10 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   cancel queued work. Terminal scan status and an inactive root are checked again before
   persistence: a cancelled scan or an archived root writes nothing (ADR 0021).
 - Archiving a root domain cancels its queued/running scans and their unfinished jobs in the same
-  transaction (audited `scan.cancelled`), and is the only cancellation path for now. Archive and
+  transaction (audited `scan.cancelled`), sharing one statement with user cancellation:
+  `services.scans.cancel_scan` marks a scan `cancelled` (idempotent, audited
+  `scan.cancelled` with `reason: user_requested`) and is offered on the scan page by any org
+  member. Archive and
   persistence lock the scan rows and then the root, in the same order, and take the root lock
   once (never upgrading it), so overlapping runs never deadlock; cancellation timestamps come
   from `clock_timestamp()`, and a stage that finds its
@@ -189,30 +323,54 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   archived root even when a stale session copy still says active (ADR 0021).
   Threads cannot be killed: safe network adapters need their own deadlines, four unfinished
   threads exhaust that child's capacity, and prefork children recycle after 100 tasks.
-- `diff` (#20) and `triage` (#25) are no-op seams for now; no finding lifecycle transitions or
-  stats are inferred. Finalization completes only after scanner/barrier work is terminal;
-  scanner failures do not make the whole scan fail. Identifier-only `FindingCreated` and
+- **Finding lifecycle and scan diffing (#20, ADR 0027):** `services.scan_diff.diff_scan` runs
+  after the `persist` barrier. A fixed finding observed again becomes `regressed` (with
+  `fixed_at` cleared); an active finding is fixed only when a `COMPLETED` check/discovery job of
+  this scan has its own `scanner` and `asset_id` and its `last_seen` is not newer than the scan
+  start, so a failed/skipped check proves nothing and a delayed older scan never undoes a newer
+  observation. `fixed_at` is the fixing scan's start, and only a fix older than this scan
+  regresses, so a delayed positive from an older scan cannot undo a newer fix. What this scan
+  observed comes from its `finding_observations` rows, not `last_seen_scan_id`, so overlapping
+  scans cannot skew its totals or fix/regress decisions. Suppressed findings are never
+  auto-fixed: persistence reopens them only when this observation is at least as new as the
+  stored one and severity/confidence changed or the evidence digest (empty batch included)
+  differs from the last observed set. The same
+  transaction diffs discovered assets by their scan-scoped columns (`new` = this scan's
+  `first_seen_scan_id`; `disappeared` = subdomains this scan deactivated by resolving them to
+  nothing, so it neither depends on discovery completeness nor on an overlapping scan's
+  changes; IPs need per-hostname resolution coverage), writes `Scan.stats` from the scan's
+  observation rows
+  (`findings.{new,fixed,regressed,total}` with zero-filled `by_severity`, `assets.{new,
+  disappeared}` capped at 1000 entries) and audits `scan.diffed`; `FindingFixed` and
+  `FindingRegressed` publish after commit. A redelivery finds the stats already present and
+  changes nothing. `triage` (#25) remains a no-op seam. Finalization completes only after
+  scanner/barrier work is terminal; scanner failures do not make the whole scan fail.
+  Identifier-only `FindingCreated`, `FindingFixed`, `FindingRegressed`, `FindingReopened` and
   `ScanCompleted` events publish after commit through `infra.events.InProcessDispatcher`;
-  handler errors are isolated. `FindingFixed` is reserved for #20. Delivery is best-effort.
+  handler errors are isolated. Delivery is best-effort.
 - **ScopeGuard** runs before every scanner (`infra/scope_guard.py`, ADR 0013): it validates the
   target (public domain under the bundled PSL; no internal/single-label names or IP literals;
   resolved addresses must be public), requires verified ownership for active checks, and returns
   run-scoped DNS/HTTP adapters bounded by the plugin's `ScannerGrant` (declared public data
-  services only, or the target after verification), plus the run cache.
+  services only, or the target after verification; plus the #19 capabilities: read-only
+  authoritative SOA/DNSKEY probes, RDAP for the target's registration, and zone transfers on a
+  verified zone apex), plus the run cache and offline IP intel.
   `workers.runtime.scanner_gate()` wires it with `services.ownership.DbOwnershipChecker`, so an
   active check runs
   only while the target's root has a verified, unexpired TXT proof (ADR 0014).
 - Scanners only reach the network through those adapters: `infra/http.py` pins the validated
   address (keeping `Host`/SNI), re-checks redirects against the grant, ignores env proxies and
-  caps time and body size; `infra/dns.py` uses the stub resolver without search domains. A test
-  fails if scanner modules import raw network libraries. Profiles may cap discovered assets per
-  root (`max_discovered_assets`), enforced by the scanner and at persistence; CT discovery also
-  marks wildcard zones in `Asset.details` so later resolution does not treat wildcard answers as
-  real hosts.
+  caps time and body size; `infra/dns.py` queries configurable public resolvers without search
+  domains and bounds each run by the plugin's DNS budget. Raw `lookup_many` records are data
+  only; connection paths still validate every address, so a private answer can be reported but
+  never dialed. A test fails if scanner modules import raw network libraries. Profiles may cap
+  discovered assets per root (`max_discovered_assets`), enforced by the scanner and at
+  persistence; CT discovery marks wildcard zones in `Asset.details`, and `dns.resolve` does not
+  deactivate a marked zone on an empty answer.
 - Repository fetches (ADR 0017, not built yet) use `ScopeGuard.check_fetch` and a separate
   streaming port for git smart HTTP (dulwich over the pinned client). There's no `git` binary
   with network access, hosts come from an allowlist in code, and packs are stored unparsed.
-  Archives arrive by upload only and are extracted inside the sandbox.
+  Archives arrive by upload only and are extracted inside the sandbox (`sandbox_tools.extract`).
 
 ## AI layer
 
@@ -233,7 +391,12 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   `TrackedTask.soft_time_limit`); Celery alone retries `LLMUnavailable`, at task level, so AI
   tasks make one call each or cache per finding.
 - Every call: versioned prompt, pydantic output schema, usage recorded, budget enforced, results
-  cached by `(prompt_version, model, input hash)`.
+  cached by `(prompt_version, model, input hash)`. Usage is recorded for failed calls too (the
+  tokens their earlier attempts spent, `LLMError.usage`); the caller commits that row before
+  re-raising, or it rolls back with the task. Cost is an estimate from list prices in code, not
+  a bill.
+- Without an instance key and model, `create_app` logs once that AI is off for orgs without
+  their own key.
 - AI consumes **normalized findings only**; scan-derived text is treated as untrusted data.
 - AI output is advisory: adjusted severity is shown next to the scanner's severity and never
   auto-closes findings.
@@ -246,7 +409,7 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 | `ai` | LLM calls | rate-limited per org |
 | `fetch` *(later)* | git smart-HTTP fetches | egress to allowlisted forges through ScopeGuard; no access to `sandbox-launcher`; never parses repository content (ADR 0017) |
 | `active` *(later)* | port/web probes on verified targets | separate network, egress rules |
-| `analysis` *(later)* | code/binary analysis (`sandbox_proxy/` and the `sandbox_launcher/` building blocks are implemented; the launcher service and the worker are not yet) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
+| `analysis` *(later)* | code/binary analysis (`sandbox_proxy/`, `sandbox_launcher/` and the `sandbox_tools/` archive extractor and binary format detector are implemented; the worker-side client, the images and the worker are not yet) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
 
 - `infra/queue.py`: `create_celery(settings)` (Redis broker + result backend from `REDIS_URL`,
   JSON only, `acks_late` + `reject_on_worker_lost`, prefetch 1, results ignored unless a
@@ -289,9 +452,58 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
 - Read side: `services/asset_views.py` returns frozen dataclasses (`AssetRow`, `AssetDetail`,
   `AssetPage`, …) so `web/` never handles ORM rows; `web/asset_params.py` parses list filters
   (`type`, `root`, `tag`, `q`, `status`, `page`; 400 on bad values) for pages and API alike.
+- `web/uploads.py` (shared by every upload route): `init_uploads` caps all request bodies at
+  2 MiB and raises the ceiling to `ARTIFACT_MAX_BYTES` + 64 KiB for `UPLOAD_ENDPOINTS` in a
+  `before_request` registered ahead of CSRF (which parses the whole form before a view runs);
+  `get_artifact_store()` is None without `APP_ENCRYPTION_KEY`. That hook also spends the
+  per-user rate limit (one shared bucket for all upload endpoints) and leaves the 2 MiB ceiling for anonymous requests and when storage is
+  off, so a refused request never has a large body read. `UPLOAD_ENDPOINTS` maps each endpoint
+  to its form partial: `upload_form` re-renders it with a field error, also for an HTMX 413 /
+  429 raised before the view (`refused_upload_form`, used by `web/errors.py`);
+  `upload_error_status` maps use-case errors to 413 / 415 / 503 / 422.
+- `POST /assets/upload` → `services.repos.upload_repo_archive`: sniffs the leading bytes
+  (`domain.artifacts.sniff_archive`; never a parse, ADR 0017), upserts the repo asset
+  `upload/<slug of the file name>` (original name in `Asset.details["upload"]`), stores the
+  `Artifact`, then creates a `Scan` with profile `code` (`scanners.profiles.CODE_PROFILE`, not
+  in `PROFILES`) whose `stats` hold `revision` (the archive SHA-256) and `artifact_id`, and
+  enqueues `analysis.code_scan`. That queue has no worker until #84, so the scan stays
+  `queued`. Three commits (asset, artifact, scan + audit + job): an upload that fails in
+  storage leaves its (possibly empty) asset, because deleting it could remove a concurrent
+  upload of the same name; an enqueue failure fails the scan, deletes the artifact and raises
+  `ScanNotQueued` (503). The store-artifact, scan, audit and job part is
+  `services.uploads.store_and_queue_analysis`, shared with the binary upload.
+- `POST /assets/upload-binary` → `services.binaries.upload_binary` (#101): gates on the leading
+  bytes (`domain.artifacts.sniff_binary`: ELF, `MZ`, Mach-O, universal Mach-O or zip; 415
+  otherwise, nothing written), hashes the spooled upload in chunks (413 over the cap), checks that its
+  size still fits the org quota (`services.artifacts.check_quota`, so a refusal leaves no
+  asset), upserts
+  the binary asset `sha256:<digest>` with `details["upload"] = {filename, format_hint}`, then
+  stores the `Artifact` (deleted again if its digest differs from the asset's) and queues a
+  `Scan` with profile `binary_static` (`BINARY_STATIC_PROFILE`, not in `PROFILES`) and the job
+  `analysis.binary_static`, audited as `binary.uploaded`. The hint is only a guess: the real
+  format is decided in the sandbox by `sandbox_tools.detect`. Like the `code` scan it stays
+  `queued` until #84.
+- Scans UI (#21): `GET /scans` lists scans with `root`/`status` filters and a start form over
+  the org's active roots; `POST /scans` queues `dns_passive` for any org member (PRG with
+  flashes; a duplicate start redirects to the running scan); `GET /scans/<id>` shows the scan
+  meta and includes `_scan_progress.html`, which polls `GET /scans/<id>/progress` every 2 s
+  while the scan is active — the attributes are gone once it is terminal, so the final swap
+  reveals the #20 diff without a reload. The poll response also carries out-of-band swaps for
+  the status pill, the meta block and the cancel action, so those refresh without a reload
+  too; the cancel dialog lives outside the polled subtree, so a poll never closes it mid-read
+  (only the completion swap clears it). `POST /scans/<id>/cancel` cancels (idempotent). A
+  root domain's page offers the same "Scan now" post (or a link to the running scan). Reads
+  go through `services/scan_views.py` (frozen dataclasses; the JSONB `stats` parse
+  defensively, so anything unexpected means "no diff yet"); filters are parsed by
+  `web/scan_params.py` (400 on bad values), shared with the API.
 - `/api/v1/assets` (session auth, writes need `X-CSRFToken`): `GET` list, `POST {"value"}` adds a
   root domain (201 / 422 / 409), `GET /<id>` detail with relations, `GET /<id>/findings`,
   `GET /<id>/scans`, `POST /<id>/archive` (admin). Errors are `{"error", "message"}`.
+- `/api/v1/scans` (same auth): `POST {"root_asset_id", "profile"?}` (`dns_passive` default)
+  queues a scan (201 with `Location`, 404 for a foreign root, 409 with the running scan's id,
+  429 past the hourly quota, 422 for an unknown profile, 503 when the broker is down),
+  `GET` lists with the page's `root`/`status` filters, `GET /<id>` shows the scan with its
+  jobs and diff (404 `Scan not found.` across orgs, indistinguishable from missing).
 
 ## Authentication (ADR 0009)
 
@@ -305,15 +517,17 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
 ## Deployment
 
 Single VPS: Cloudflare Tunnel → Caddy → gunicorn (web), plus PostgreSQL and Redis, all in Docker
-Compose (`compose.prod.yaml`); no inbound ports (ADR 0020, `docs/deployment.md`). Celery workers
-and beat are not part of the production stack yet. Nightly `pg_dump` off-box. See issue #29.
+Compose (`compose.prod.yaml`); no inbound ports (ADR 0020, `docs/deployment.md`). Celery
+`worker-passive` (`-Q passive -c 2`) and `beat` run in production (#174); `worker-ai` is not
+part of the stack yet, so AI jobs stay queued. Nightly `pg_dump` off-box. See issue #29.
 
 The `Dockerfile` has two targets: `dev` (dev deps, Flask debug server, source bind-mounted by
 `compose.yaml` for hot reload) and `prod` (no dev deps, gunicorn, non-root uid 10001). Base and
 service images are pinned by digest and updated by Dependabot. The dev `compose.yaml` runs `web`,
 `postgres`, `redis`, the Celery workers `worker-passive` (`-Q passive -c 4`) and `worker-ai`
-(`-Q ai -c 2`) with `inspect ping` healthchecks, and `beat` (broker-connection healthcheck; no
-schedules until #27). Each queue has its own exchange and routing key.
+(`-Q ai -c 2`) with `inspect ping` healthchecks, and `beat` (broker-connection healthcheck;
+schedules: ownership re-verification hourly, artifact purge every 10 minutes). Encrypted
+artifacts live in the `artifact-store` volume. Each queue has its own exchange and routing key.
 Dev `make up` builds images, waits for PostgreSQL/Redis, runs `make migrate`, then starts
 application services (ADR 0012). Migration failure stops startup; application processes never
 run migrations themselves. `/healthz` is liveness only and does not establish schema readiness.

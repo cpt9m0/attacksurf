@@ -1,0 +1,19 @@
+{% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
+{%- import "pages/_scan_parts.html" as parts -%}
+{% block title %}Scan of {{ scan.root_value }}{% endblock %}
+{% block content %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+  <a href="{{ url_for('ui.scans') }}">Scans</a>
+  / <a class="mono" href="{{ url_for('ui.asset_detail', asset_id=scan.root_asset_id) }}">{{ scan.root_value }}</a>
+</nav>
+
+<div class="page-header">
+  <h1>Scan of <span class="mono">{{ scan.root_value }}</span></h1>
+  <span id="scan-status">{{ parts.scan_status(scan) }}</span>
+</div>
+
+<div id="scan-meta">{{ parts.scan_meta(scan) }}</div>
+<div id="scan-actions">{{ parts.scan_actions(scan, detail.can_cancel) }}</div>
+
+{% include "pages/_scan_progress.html" %}
+{% endblock %}

@@ -29,10 +29,11 @@ Open http://127.0.0.1:5000/signup to create an account (no default credentials).
 | `postgres` | 5432 | PostgreSQL 18, user/password/db `attacksurf` (dev only), volume `pgdata` |
 | `redis` | 6379 | Redis 8 |
 | `worker-passive`, `worker-ai` | n/a | Celery workers for the `passive` / `ai` queues; no hot reload: `docker compose restart worker-passive worker-ai` after code changes |
-| `beat` | n/a | Celery beat (schedules arrive with #27) |
+| `beat` | n/a | Celery beat: ownership re-verification (hourly), artifact purge (every 10 min) |
+| all app services | n/a | share the volume `artifact-store` (encrypted artifacts, ADR 0028) |
 
-Inside compose, `DATABASE_URL` / `REDIS_URL` point at the service names; your `.env` supplies the
-rest. Targets: `make up | down | logs | ps | build | shell | test | test-worker | check | migrate |
+Inside compose, `DATABASE_URL` / `REDIS_URL` point at the service names and
+`ARTIFACT_STORE_ROOT` at the `artifact-store` volume; your `.env` supplies the rest. Targets: `make up | down | logs | ps | build | shell | test | test-worker | check | migrate |
 revision`. `make test-worker` (after `make up`) checks signup against the existing schema
 (account writes roll back), then checks real worker jobs; CI's compose job runs the same suite
 (`make` lists them). `make down` keeps the database; `docker compose down -v` wipes it.
@@ -120,6 +121,13 @@ All settings live in `src/attacksurf/config.py` and are read from environment va
 (see `.env.example`). Leave `SECRET_KEY` empty in dev (an ephemeral key is generated);
 `ENV=prod` refuses to start without a random `SECRET_KEY` of ≥ 32 characters. Never commit `.env`.
 
+Artifact storage (ADR 0028): `APP_ENCRYPTION_KEY` (URL-safe base64 of 32 bytes; without it
+artifacts can't be stored or read), `ARTIFACT_MAX_BYTES`, `ARTIFACT_ORG_QUOTA_BYTES`,
+`ARTIFACT_RETENTION_HOURS` (0 = delete once analysis completes) and `ARTIFACT_STORE_ROOT`
+(ciphertext; must not overlap `SANDBOX_ARTIFACT_ROOT`). Archive upload on the Assets page
+(#87) and binary upload (#101) need `APP_ENCRYPTION_KEY`; without it the forms show "not
+configured". Their scans stay queued: nothing consumes the `analysis` queue until #84.
+
 Auth settings: `ALLOW_SIGNUP` (default `true`; when `false` only the first user can sign up),
 `SESSION_LIFETIME_HOURS` (default 12), `PROXY_COUNT` (trusted proxy hops in front of the app).
 `PROXY_COUNT` counts hops, not components: 0 in dev, 1 behind Caddy, and also 1 behind the
@@ -130,13 +138,30 @@ limits key on the visitor address Cloudflare forwards (`CF-Connecting-IP`, else 
 http://127.0.0.1:5000, sign up; the first account owns a new org. Production setup:
 [deployment.md](deployment.md).
 
+Scans (#21): `SCAN_MAX_STARTS_PER_HOUR` caps scan starts per organization per profile in a
+trailing hour (default 10); failed starts count too. Upload scans (`code`, `binary_static`)
+have their own profiles and limiter.
+
+### DNS resolution (#16)
+
+`DNS_RESOLVERS` is a comma-separated list of public recursive resolvers (default
+`1.1.1.1,8.8.8.8`); private, loopback and link-local addresses are refused at startup.
+`DNS_TIMEOUT_SECONDS` and `DNS_LIFETIME_SECONDS` bound each query and each resolution, and
+`DNS_MAX_CONCURRENCY` caps concurrent queries per scanner run. Search domains stay disabled.
+
+`IP_ASN_DB_PATH` optionally points at a combined public ip2asn TSV (one
+`start end asn country organisation` row per line; IPv4 and IPv6 can be concatenated). The file
+is read once per worker process, no network is used, and a missing file simply leaves ASN/
+organisation details empty. Reverse DNS is always attempted for resolved addresses.
+
 ### AI provider (instance key)
 
 `LLM_PROVIDER` (`anthropic` or `openai_compat`), `LLM_MODEL`, `LLM_BASE_URL` and `LLM_API_KEY`
 are the instance config: orgs without their own key use it (ADR 0019). The code has no default
-model; without a key and a model, AI is off. For development we use Meta's Muse Spark, which
-speaks both API formats with one key (it starts with `LLM_`): put this configuration in your own
-`.env`, replacing the `LLM_*` values copied from `.env.example`:
+model; without a key and a model, AI is off and the app logs a warning saying so at startup.
+For development we use Meta's Muse Spark, which speaks both API formats with one key (it starts
+with `LLM_`): put this configuration in your own `.env`, replacing the `LLM_*` values copied
+from `.env.example`:
 
 ```bash
 LLM_PROVIDER=openai_compat
@@ -156,6 +181,24 @@ RUN_LLM_TESTS=1 uv run pytest tests/e2e/test_openai_compat_live.py -m llm_live -
 LLM_PROVIDER=anthropic LLM_BASE_URL=https://api.meta.ai RUN_LLM_TESTS=1 \
     uv run pytest tests/e2e/test_anthropic_live.py -m llm_live --no-cov
 ```
+
+### Running the sandbox services locally
+
+Both read the process environment only (no `.env`). On a host without gVisor, allow `runc` for
+dev:
+
+```bash
+echo '{}' > /tmp/sandbox-images.lock           # no analyzer images exist yet
+export SANDBOX_ALLOW_RUNC=true SANDBOX_ARTIFACT_ROOT=/tmp/artifacts SANDBOX_IMAGES_LOCK=/tmp/sandbox-images.lock
+uv run python -m attacksurf.sandbox_proxy &    # needs the Docker socket; port 8790
+SANDBOX_PROXY_URL=http://127.0.0.1:8790 SANDBOX_LAUNCHER_HOST=127.0.0.1 \
+  uv run python -m attacksurf.sandbox_launcher # port 8791
+curl -i 127.0.0.1:8791/healthz                 # 200
+```
+
+The catalog is empty until the first analyzer ships, so a `POST /runs` for any analyzer is a 404.
+Without a reachable proxy, or without `runsc` (and no `runc` fallback), the launcher exits
+non-zero. Compose wiring comes with the analysis worker (#84).
 
 ## Everyday commands
 
