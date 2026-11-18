@@ -1,9 +1,8 @@
 """The OpenAI-compatible adapter against a stubbed Chat Completions API (never the network)."""
 
 import json
-import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import Any
 
 import httpx2
@@ -35,6 +34,7 @@ from tests.unit.ai.contract import (
     SentRequest,
     Verdict,
 )
+from tests.unit.ai.providers.slow_server import TRICKLING_HEAD, SlowServer
 
 MODEL = "test-model"
 
@@ -482,39 +482,48 @@ def test_request_with_time_to_spare_gets_the_full_request_timeout(
     assert harness.read_timeout(0) == REQUEST_TIMEOUT_SECONDS
 
 
-@pytest.fixture
-def release() -> Iterator[threading.Event]:
-    """Holds stalled stub responses until the test ends, so no stub thread outlives it."""
-    event = threading.Event()
-    yield event
-    event.set()
+def _stalled(harness: OpenAIHarness) -> Callable[[], httpx2.Response]:
+    """A server that never answers: the transport gives up at the request's read timeout."""
 
-
-def _stalled(release: threading.Event) -> Callable[[], httpx2.Response]:
     def answer() -> httpx2.Response:
-        release.wait(timeout=30)
-        return httpx2.Response(200, json=_completion(VALID))
+        index = len(harness.requests) - 1
+        time.sleep(harness.read_timeout(index))
+        raise httpx2.ReadTimeout("stalled", request=harness.requests[index])
 
     return answer
 
 
-def test_slow_response_is_abandoned_at_the_call_deadline(
-    harness: OpenAIHarness, release: threading.Event, monkeypatch: pytest.MonkeyPatch
+def test_stalled_response_fails_at_the_call_deadline(
+    harness: OpenAIHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Per-read timeouts can't catch a server that trickles bytes; the call deadline does.
     monkeypatch.setattr(openai_compat_provider, "CALL_DEADLINE_SECONDS", 0.2)
-    harness.respond_slowly(_stalled(release))
+    harness.respond_slowly(_stalled(harness))
     started = time.monotonic()
 
-    with pytest.raises(LLMUnavailable) as caught:
+    with pytest.raises(LLMUnavailable, match="took too long") as caught:
         harness.provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
 
     assert time.monotonic() - started < 5
     assert isinstance(caught.value, TransientJobError)
 
 
+def test_trickling_reply_is_cut_off_at_the_call_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Per-read timeouts can't catch a server that sends a byte every few seconds. The production
+    # client ends the request itself at the deadline, so no thread or connection is left behind.
+    monkeypatch.setattr(openai_compat_provider, "CALL_DEADLINE_SECONDS", 0.3)
+    with SlowServer(TRICKLING_HEAD, b" ") as server:
+        provider = OpenAICompatProvider(_config(f"{server.url}/v1"))
+        started = time.monotonic()
+
+        with pytest.raises(LLMUnavailable, match="took too long"):
+            provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+
+        assert time.monotonic() - started < 3
+        assert server.hung_up.wait(timeout=2)
+
+
 def test_fallback_gets_only_the_time_left(
-    harness: OpenAIHarness, release: threading.Event, monkeypatch: pytest.MonkeyPatch
+    harness: OpenAIHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(openai_compat_provider, "CALL_DEADLINE_SECONDS", 1.0)
 
@@ -523,7 +532,7 @@ def test_fallback_gets_only_the_time_left(
         return _error(400, "invalid_request_error", "json_schema is not supported")
 
     harness.respond_slowly(slow_400)
-    harness.respond_slowly(_stalled(release))
+    harness.respond_slowly(_stalled(harness))
     started = time.monotonic()
 
     with pytest.raises(LLMUnavailable):
@@ -535,7 +544,7 @@ def test_fallback_gets_only_the_time_left(
 
 
 def test_corrective_retry_gets_only_the_time_left(
-    harness: OpenAIHarness, release: threading.Event, monkeypatch: pytest.MonkeyPatch
+    harness: OpenAIHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(openai_compat_provider, "CALL_DEADLINE_SECONDS", 1.0)
 
@@ -544,7 +553,7 @@ def test_corrective_retry_gets_only_the_time_left(
         return httpx2.Response(200, json=_completion(INVALID))
 
     harness.respond_slowly(slow_invalid)
-    harness.respond_slowly(_stalled(release))
+    harness.respond_slowly(_stalled(harness))
     started = time.monotonic()
 
     with pytest.raises(LLMUnavailable) as caught:
