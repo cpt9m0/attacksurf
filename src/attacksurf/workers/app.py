@@ -24,6 +24,7 @@ from attacksurf.scanners.dns import whois as _dns_whois  # noqa: F401
 from attacksurf.workers import runtime
 
 TASK_MODULES = (
+    "attacksurf.workers.tasks.ai",
     "attacksurf.workers.tasks.system",
     "attacksurf.workers.tasks.pipeline",
     "attacksurf.workers.tasks.verification",

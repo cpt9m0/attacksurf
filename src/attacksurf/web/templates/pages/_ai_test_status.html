@@ -1,0 +1,32 @@
+{#- Polled while an ai_test job is queued/running; stops once completed, failed, or stalled. -#}
+{%- from "components/form.html" import csrf_field -%}
+{%- from "components/time.html" import relative_time -%}
+<div id="ai-test-status" class="ai-test-status"
+     {%- if test_status.in_flight %} hx-get="{{ url_for('ui.ai_test_status') }}"
+     hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML" hx-sync="this:replace"{% endif %}
+     aria-busy="{{ 'true' if test_status.in_flight else 'false' }}">
+  {%- if can_manage_ai %}
+  <form method="post" action="{{ url_for('ui.test_ai_connection') }}"
+        hx-post="{{ url_for('ui.test_ai_connection') }}" hx-target="#ai-test-status"
+        hx-swap="outerHTML" hx-disabled-elt="find button">
+    {{ csrf_field() }}
+    <button type="submit" class="btn btn-secondary"{% if test_status.in_flight %} disabled{% endif %}>Test connection</button>
+  </form>
+  {%- endif %}
+  {%- if test_status.state == "queued" or test_status.state == "running" %}
+  <span class="pill pill-active" role="status">Testing…</span>
+  {%- elif test_status.state == "completed" %}
+  <span class="pill pill-good" role="status">{{ test_status.message or "Connection succeeded." }}</span>
+  {%- if test_status.updated_at %}<span class="muted">{{ relative_time(test_status.updated_at) }}</span>{% endif %}
+  {%- elif test_status.state == "stalled" %}
+  <span class="pill pill-bad" role="status">Stalled</span>
+  <p class="form-error" role="alert">
+    Queued {% if test_status.updated_at %}{{ relative_time(test_status.updated_at) }}{% else %}earlier{% endif %}
+    and no AI worker has picked it up, so the connection test has not run. Check that the AI worker
+    is running, then try again.
+  </p>
+  {%- elif test_status.state == "failed" %}
+  <span class="pill pill-bad" role="status">Test failed</span>
+  <p class="form-error" role="alert">{{ test_status.message }}</p>
+  {%- endif %}
+</div>

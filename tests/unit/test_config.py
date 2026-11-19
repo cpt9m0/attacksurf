@@ -1,3 +1,4 @@
+import base64
 from pathlib import Path
 
 import pytest
@@ -592,3 +593,60 @@ def test_sandbox_launcher_url_is_masked() -> None:
 
     assert "launcher-marker" not in repr(settings)
     assert "launcher-marker" not in settings.model_dump_json()
+
+
+OLD_KEY_1 = base64.urlsafe_b64encode(b"1" * 32).decode().rstrip("=")
+OLD_KEY_2 = base64.urlsafe_b64encode(b"2" * 32).decode().rstrip("=")
+
+
+def test_org_llm_settings_defaults() -> None:
+    settings = make_settings()
+
+    assert settings.llm_monthly_instance_token_budget == 500_000
+    assert settings.llm_allowed_base_hosts == ""
+    assert settings.llm_allowed_base_host_set == frozenset()
+    assert settings.app_encryption_old_keys is None
+    assert settings.app_encryption_old_key_bytes == ()
+
+
+def test_org_llm_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("LLM_MONTHLY_INSTANCE_TOKEN_BUDGET", "120000")
+    clean_env.setenv("LLM_ALLOWED_BASE_HOSTS", " localhost, Ollama.Internal. , [::1], 127.0.0.1 ")
+    clean_env.setenv("APP_ENCRYPTION_OLD_KEYS", f"{OLD_KEY_1}, {OLD_KEY_2}")
+
+    settings = settings_from_env()
+
+    assert settings.llm_monthly_instance_token_budget == 120_000
+    assert settings.llm_allowed_base_host_set == frozenset(
+        {"localhost", "ollama.internal", "::1", "127.0.0.1"}
+    )
+    assert len(settings.app_encryption_old_key_bytes) == 2
+    assert OLD_KEY_1 not in repr(settings)
+
+
+def test_llm_budget_accepts_zero_and_rejects_negative() -> None:
+    assert make_settings(llm_monthly_instance_token_budget=0).llm_monthly_instance_token_budget == 0
+    with pytest.raises(ValidationError):
+        make_settings(llm_monthly_instance_token_budget=-1)
+
+
+def test_malformed_old_encryption_key_is_rejected_without_echoing_it(
+    clean_env: pytest.MonkeyPatch,
+) -> None:
+    clean_env.setenv("APP_ENCRYPTION_OLD_KEYS", f"{OLD_KEY_1},bad-old-sentinel")
+
+    with pytest.raises(ValidationError, match="APP_ENCRYPTION_OLD_KEYS") as error:
+        settings_from_env()
+
+    assert "bad-old-sentinel" not in str(error.value)
+
+
+def test_whitespace_only_old_encryption_keys_treated_as_unset(
+    clean_env: pytest.MonkeyPatch,
+) -> None:
+    clean_env.setenv("APP_ENCRYPTION_OLD_KEYS", " , ")
+
+    settings = settings_from_env()
+
+    assert settings.app_encryption_old_keys is None
+    assert settings.app_encryption_old_key_bytes == ()

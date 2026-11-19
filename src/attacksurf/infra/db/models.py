@@ -417,3 +417,37 @@ class LLMUsage(TenantScoped, Base):
     success: Mapped[bool]
     error_type: Mapped[str | None] = mapped_column(String(50))  # error class name, no message
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class OrgSettings(TenantScoped, Timestamps, Base):
+    """Per-org LLM provider configuration and monthly token budget (#24).
+
+    `api_key_ciphertext` is encrypted with `SecretCipher` (`APP_ENCRYPTION_KEY`, purpose
+    `b"org_api_key"`, AAD = `org_id.bytes`); only the last 4 characters are stored alongside it
+    for masked display.
+    """
+
+    __tablename__ = "org_settings"
+    __table_args__ = (
+        UniqueConstraint("org_id"),
+        CheckConstraint(
+            "monthly_token_budget IS NULL OR monthly_token_budget >= 0",
+            name="monthly_token_budget_not_negative",
+        ),
+        CheckConstraint(
+            "(api_key_ciphertext IS NULL) = (api_key_last4 IS NULL)",
+            name="api_key_last4_matches",
+        ),
+    )
+
+    ai_enabled: Mapped[bool] = mapped_column(default=True, server_default=text("true"))
+    provider: Mapped[ProviderKind] = mapped_column(
+        _str_enum(ProviderKind, "llm_provider"),
+        default=ProviderKind.ANTHROPIC,
+        server_default=ProviderKind.ANTHROPIC.value,
+    )
+    model: Mapped[str | None] = mapped_column(String(200))
+    base_url: Mapped[str | None] = mapped_column(String(MAX_URL_LENGTH))
+    api_key_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary(512))
+    api_key_last4: Mapped[str | None] = mapped_column(String(4))
+    monthly_token_budget: Mapped[int | None] = mapped_column(BigInteger)

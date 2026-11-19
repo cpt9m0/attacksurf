@@ -44,14 +44,24 @@
 {%- endmacro %}
 
 {#- options: [(value, label)]; `selected` is compared as a string, so enums and UUIDs work. -#}
-{% macro select_field(name, label, options, selected="") -%}
+{% macro select_field(name, label, options, selected="", error=none, hint=none, autofocus=false) -%}
+{%- set described = (["f-" ~ name ~ "-hint"] if hint else []) + (["f-" ~ name ~ "-error"] if error else []) -%}
 <div class="field">
   <label for="f-{{ name }}">{{ label }}</label>
-  <select id="f-{{ name }}" name="{{ name }}">
+  <select id="f-{{ name }}" name="{{ name }}"
+          {%- if autofocus %} autofocus{% endif %}
+          {%- if described %} aria-describedby="{{ described | join(' ') }}"{% endif %}
+          {%- if error %} aria-invalid="true"{% endif %}>
     {%- for value, text in options %}
     <option value="{{ value }}"{% if value | string == selected | string %} selected{% endif %}>{{ text }}</option>
     {%- endfor %}
   </select>
+  {%- if hint %}
+  <p class="field-hint" id="f-{{ name }}-hint">{{ hint }}</p>
+  {%- endif %}
+  {%- if error %}
+  <p class="field-error" id="f-{{ name }}-error">{{ error }}</p>
+  {%- endif %}
 </div>
 {%- endmacro %}
 

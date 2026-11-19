@@ -41,7 +41,11 @@ class AnthropicProvider:
 
     def __init__(self, config: LLMConfig, *, http_client: httpx2.Client | None = None) -> None:
         if http_client is None:
-            http_client = anthropic.DefaultHttpxClient(transport=deadline_transport())
+            http_client = anthropic.DefaultHttpxClient(
+                transport=deadline_transport(block_private_ips=not config.allow_private_base_url),
+                follow_redirects=False,
+                trust_env=False,
+            )
         self._model = config.model
         self._client = anthropic.Anthropic(
             api_key=config.api_key.get_secret_value(),

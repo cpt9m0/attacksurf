@@ -5,7 +5,7 @@ import re
 import sys
 import time
 import uuid
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 from typing import Any
 
 import structlog
@@ -16,18 +16,44 @@ from attacksurf.config import Settings
 REQUEST_ID_HEADER = "X-Request-ID"
 # Client-supplied IDs are echoed into logs and headers; restrict them to prevent log injection.
 _VALID_REQUEST_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
-_SENSITIVE_KEY = re.compile(r"secret|token|password|passwd|api_?key|authorization|cookie", re.I)
+_SENSITIVE_KEY = re.compile(
+    r"secret|token|password|passwd|api[-_]?key|encryption[-_]?key|private[-_]?key|"
+    r"signing[-_]?key|old[-_]?keys|key_envelope|ciphertext|authorization|cookie|credential|"
+    r"base[-_]?url",
+    re.I,
+)
+# Redact credentials embedded inside URLs (e.g. https://user:pass@host/v1).
+_URL_CREDENTIALS = re.compile(r"([a-z][a-z0-9+.-]*://)([^/\s:@]+(?::[^@\s]*)?)@", re.I)
 REDACTED = "***"
 
 log = structlog.get_logger(__name__)
 
 
+def _scrub_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _URL_CREDENTIALS.sub(rf"\1{REDACTED}@", value)
+    if isinstance(value, Mapping):
+        return {
+            key: REDACTED
+            if isinstance(key, str) and _SENSITIVE_KEY.search(key)
+            else _scrub_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_scrub_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_scrub_value(item) for item in value)
+    return value
+
+
 def redact_secrets(
     _logger: Any, _method: str, event_dict: MutableMapping[str, Any]
 ) -> MutableMapping[str, Any]:
-    for key in event_dict:
+    for key in list(event_dict):
         if _SENSITIVE_KEY.search(key):
             event_dict[key] = REDACTED
+        else:
+            event_dict[key] = _scrub_value(event_dict[key])
     return event_dict
 
 

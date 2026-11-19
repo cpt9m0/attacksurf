@@ -7,7 +7,8 @@
 ## Status
 PR 3d (worker-side sandbox client) is done locally and not pushed; no PR is open. It was rebased
 onto `origin/main` (`022e53e`), which has PR 3c (#172, squash-merged); only the 3 PR 3d commits are
-on top. Unit tests for sandbox, config and workers pass; the full suite has not been re-run.
+on top. `origin/main` (including #24 / #182, org AI settings) was merged in afterwards; the merge
+touched `tests/unit/test_config.py` (kept both sides' tests) and the full suite has not been re-run.
 
 ## Last task
 - `infra/sandbox.py`: `LauncherSandboxRunner` (3 MiB capped, strictly validated reply; only 503 or

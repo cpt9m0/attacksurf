@@ -770,3 +770,54 @@ dl.meta dd {
   display: inline-block;
   overflow-wrap: anywhere;
 }
+
+/* Settings (#24) */
+.field-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.field-check input {
+  margin-top: var(--space-1);
+}
+
+.field-check label {
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+}
+
+.form-actions,
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.settings-actions {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+.notice-list {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ai-test-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.ai-test-status .form-error {
+  flex: 1 1 100%;
+  margin: 0;
+}

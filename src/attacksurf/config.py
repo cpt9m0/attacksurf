@@ -9,6 +9,7 @@ from pathlib import PurePosixPath
 from typing import Literal, Self
 from urllib.parse import urlsplit
 
+import idna
 from pydantic import Field, PrivateAttr, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -25,15 +26,37 @@ APP_ENCRYPTION_KEY_BYTES = 32
 ARTIFACT_MAX_BYTES_CEILING = 512 * 1024**2
 
 
-def _decode_app_key(value: str) -> bytes:
-    """Bytes of an `APP_ENCRYPTION_KEY`; the error never repeats the value."""
+def _decode_app_key(value: str, *, setting: str = "APP_ENCRYPTION_KEY") -> bytes:
+    """Bytes of an app encryption key; the error never repeats the value."""
     try:
         key = base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
     except (binascii.Error, ValueError):
         key = b""
     if len(key) != APP_ENCRYPTION_KEY_BYTES:
-        raise ValueError("APP_ENCRYPTION_KEY must be URL-safe base64 of exactly 32 bytes")
+        raise ValueError(f"{setting} must be URL-safe base64 of exactly 32 bytes")
     return key
+
+
+def _parse_old_app_keys(raw: str) -> tuple[bytes, ...]:
+    parts = [part.strip() for part in raw.split(",") if part.strip()]
+    return tuple(_decode_app_key(part, setting="APP_ENCRYPTION_OLD_KEYS") for part in parts)
+
+
+def _normalize_allowed_host(raw: str) -> str:
+    candidate = raw.strip()
+    if not candidate:
+        return ""
+    if candidate.startswith("[") and candidate.endswith("]"):
+        candidate = candidate[1:-1]
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        pass
+    stripped = candidate.removesuffix(".")
+    try:
+        return idna.encode(stripped, uts46=True).decode("ascii").removesuffix(".")
+    except idna.IDNAError:
+        return stripped.lower()
 
 
 class Settings(BaseSettings):
@@ -85,10 +108,16 @@ class Settings(BaseSettings):
     llm_model: str | None = None
     llm_base_url: SecretStr | None = None
     llm_api_key: SecretStr | None = None
+    llm_monthly_instance_token_budget: int = Field(default=500_000, ge=0)
+    # Comma-separated exact hostnames (e.g. localhost,ollama.internal) permitted for self-hosted
+    # org LLM base URLs, bypassing the public-HTTPS SSRF guard.
+    llm_allowed_base_hosts: str = ""
 
-    # Wraps data keys for encryption at rest (ADR 0028). Unset: artifact storage refuses to
-    # store or read (deleting still works). Losing it makes stored artifacts unreadable.
+    # Wraps data keys for encryption at rest (ADR 0028) and org LLM API keys (#24). Unset:
+    # artifact storage and org API key saving refuse to write/read (deleting still works).
     app_encryption_key: SecretStr | None = None
+    # Comma-separated rotated keys (URL-safe base64 of 32 bytes) kept for decrypting older keys.
+    app_encryption_old_keys: SecretStr | None = None
     artifact_max_bytes: int = Field(default=256 * 1024**2, ge=1, le=ARTIFACT_MAX_BYTES_CEILING)
     # 0: delete once analysis completes (never analysed: after 24 h).
     artifact_retention_hours: int = Field(default=0, ge=0, le=720)
@@ -129,6 +158,15 @@ class Settings(BaseSettings):
     def _check_app_encryption_key(cls, value: SecretStr | None) -> SecretStr | None:
         if value is not None:
             _decode_app_key(value.get_secret_value())
+        return value
+
+    @field_validator("app_encryption_old_keys")
+    @classmethod
+    def _check_app_encryption_old_keys(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
+        if not _parse_old_app_keys(value.get_secret_value()):
+            return None
         return value
 
     @model_validator(mode="after")
@@ -202,6 +240,21 @@ class Settings(BaseSettings):
         """The decoded key, or None when unset. Unwrap only where a cipher is built."""
         key = self.app_encryption_key
         return None if key is None else _decode_app_key(key.get_secret_value())
+
+    @property
+    def app_encryption_old_key_bytes(self) -> tuple[bytes, ...]:
+        """Previous app keys kept for rotation decryption; empty when unset."""
+        keys = self.app_encryption_old_keys
+        return () if keys is None else _parse_old_app_keys(keys.get_secret_value())
+
+    @property
+    def llm_allowed_base_host_set(self) -> frozenset[str]:
+        """Normalized hostnames explicitly permitted as self-hosted org LLM base URLs."""
+        return frozenset(
+            normalized
+            for part in self.llm_allowed_base_hosts.split(",")
+            if (normalized := _normalize_allowed_host(part))
+        )
 
     @property
     def secret_key_generated(self) -> bool:

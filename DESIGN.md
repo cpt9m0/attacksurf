@@ -98,7 +98,10 @@ Built in #6: `button`, `severity_badge` + `status_pill` (`badges.html`), `data_t
 `select_field` and `form_field(autofocus=)` (`form.html`), `confirm_dialog` (`confirm.html`),
 `relative_time` (`time.html`) and call-block cells for `data_table`. #14 added
 `ownership_badge` + `ownership_card` (`verification.html`) and `Alpine.data("copyField")`.
-#87 added `file_field` (`form.html`); #101 reuses it for the binary upload form.
+#87 added `file_field` (`form.html`); #101 reuses it for the binary upload form. #24 added
+`/settings` AI provider configuration (`_ai_settings_form.html`, `Alpine.data("aiSettingsForm")`
+replace-key `<dialog>`), `confirm_dialog` for removing a saved key, polled connection test status
+(`_ai_test_status.html`, `.ai-test-status`), a monthly token/cost `data_table`, and `.notice-list`.
 Specs (visuals) stay TBD.
 
 | Component | Notes | Spec |

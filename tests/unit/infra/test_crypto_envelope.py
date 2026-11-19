@@ -10,6 +10,7 @@ from attacksurf.infra.crypto import (
     CHUNK_BYTES,
     DecryptionError,
     EnvelopeCipher,
+    SecretCipher,
     decrypt_stream,
     encrypt_stream,
 )
@@ -209,3 +210,45 @@ def test_frames_from_another_blob_are_rejected() -> None:
 def test_wrong_data_key_is_rejected() -> None:
     with pytest.raises(DecryptionError):
         _decrypt(_encrypt(b"payload"), dek=b"e" * 32)
+
+
+def test_secret_cipher_round_trips_and_never_stores_plaintext() -> None:
+    cipher = SecretCipher(APP_KEY, purpose=b"org_api_key")
+    secret = "sk-ant-api03-very-secret-key-value-1234"
+
+    blob = cipher.encrypt_secret(secret, aad=b"org-1")
+
+    assert secret.encode() not in blob
+    assert cipher.encrypt_secret(secret, aad=b"org-1") != blob
+    assert cipher.decrypt_secret(blob, aad=b"org-1") == secret
+
+
+def test_secret_cipher_supports_key_rotation() -> None:
+    old_key = b"o" * 32
+    new_key = b"n" * 32
+    secret = "org-key-rotated-5678"
+    old_blob = SecretCipher(old_key, purpose=b"org_api_key").encrypt_secret(secret, aad=b"org-1")
+
+    rotated = SecretCipher(new_key, old_keys=(old_key,), purpose=b"org_api_key")
+
+    assert rotated.decrypt_secret(old_blob, aad=b"org-1") == secret
+    new_blob = rotated.encrypt_secret(secret, aad=b"org-1")
+    assert rotated.decrypt_secret(new_blob, aad=b"org-1") == secret
+    with pytest.raises(DecryptionError):
+        SecretCipher(old_key, purpose=b"org_api_key").decrypt_secret(new_blob, aad=b"org-1")
+    with pytest.raises(DecryptionError):
+        SecretCipher(new_key, purpose=b"org_api_key").decrypt_secret(old_blob, aad=b"org-1")
+
+
+def test_secret_cipher_rejects_wrong_aad_purpose_and_tampering() -> None:
+    cipher = SecretCipher(APP_KEY, purpose=b"org_api_key")
+    blob = cipher.encrypt_secret("sk-secret-9999", aad=b"org-a")
+
+    with pytest.raises(DecryptionError):
+        cipher.decrypt_secret(blob, aad=b"org-b")
+    with pytest.raises(DecryptionError):
+        SecretCipher(APP_KEY, purpose=b"other").decrypt_secret(blob, aad=b"org-a")
+    for mutated in (b"", blob[:20], b"\x02" + blob[1:], blob[:-1] + bytes([blob[-1] ^ 1])):
+        with pytest.raises(DecryptionError) as error:
+            cipher.decrypt_secret(mutated, aad=b"org-a")
+        assert str(error.value) == "Decryption failed."

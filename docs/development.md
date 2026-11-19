@@ -157,8 +157,13 @@ organisation details empty. Reverse DNS is always attempted for resolved address
 ### AI provider (instance key)
 
 `LLM_PROVIDER` (`anthropic` or `openai_compat`), `LLM_MODEL`, `LLM_BASE_URL` and `LLM_API_KEY`
-are the instance config: orgs without their own key use it (ADR 0019). The code has no default
-model; without a key and a model, AI is off and the app logs a warning saying so at startup.
+are the instance config: orgs without their own key use it (ADR 0019), capped per org by
+`LLM_MONTHLY_INSTANCE_TOKEN_BUDGET` (default `500000` tokens per UTC month). Orgs can configure
+their own provider, model, optional `base_url` and BYO API key under `/settings` when
+`APP_ENCRYPTION_KEY` is configured (`APP_ENCRYPTION_OLD_KEYS` accepts comma-separated prior keys
+for rotation decryption). Custom org `base_url` hosts must be HTTPS and resolve to public IPs
+unless listed in `LLM_ALLOWED_BASE_HOSTS` (e.g. `localhost` or `ollama` in dev). The code has no
+default model; without a key and a model, AI is off and the app logs a warning saying so at startup.
 For development we use Meta's Muse Spark, which speaks both API formats with one key (it starts
 with `LLM_`): put this configuration in your own `.env`, replacing the `LLM_*` values copied
 from `.env.example`:
