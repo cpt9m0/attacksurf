@@ -23,15 +23,24 @@ from attacksurf.domain.assets import (
     normalize_hostname,
 )
 from attacksurf.domain.ids import uuid7
+from attacksurf.domain.scans import ScanScheduleDefault
 from attacksurf.domain.scope import ScopeError, check_public_hostname
 from attacksurf.infra import public_suffix
 from attacksurf.infra.db.models import Asset, AssetRelation
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services.audit import audit
+from attacksurf.services.scan_schedules import seed_schedule
 from attacksurf.services.scans import cancel_root_scans
 
 
-def add_root_domain(session: Session, org_id: UUID, raw: str, *, actor_id: UUID | None) -> Asset:
+def add_root_domain(
+    session: Session,
+    org_id: UUID,
+    raw: str,
+    *,
+    actor_id: UUID | None,
+    scan_default_frequency: ScanScheduleDefault = "weekly",
+) -> Asset:
     """Register a domain the org owns as a scan root, and commit.
 
     Accepts any name ScopeGuard would scan: registrable (`example.com`) or a subdomain the org
@@ -47,6 +56,13 @@ def add_root_domain(session: Session, org_id: UUID, raw: str, *, actor_id: UUID 
         raise DomainAlreadyAdded(f"{name} is already in your assets.")
     restored = existing is not None and not existing.is_active
     asset = record_asset(session, org_id, AssetType.DOMAIN, name, source=AssetSource.USER)
+    seed_schedule(
+        session,
+        org_id=org_id,
+        root_asset_id=asset.id,
+        default=scan_default_frequency,
+        now=datetime.now(UTC),
+    )
     audit(
         session,
         org_id,

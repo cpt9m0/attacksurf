@@ -121,7 +121,11 @@ def add_domain() -> BaseResponse:
     value = request.form.get("value", "")
     try:
         asset = assets_service.add_root_domain(
-            get_session(), _org_id(), value, actor_id=current_user.session_user.user_id
+            get_session(),
+            _org_id(),
+            value,
+            actor_id=current_user.session_user.user_id,
+            scan_default_frequency=get_settings().scan_default_frequency,
         )
     except AssetError as exc:
         if is_htmx_request():

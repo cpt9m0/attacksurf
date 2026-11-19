@@ -1,6 +1,7 @@
 """Use cases: adding and archiving root domains."""
 
 import threading
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import Engine, delete, select, text
@@ -14,8 +15,8 @@ from attacksurf.domain.assets import (
     InvalidAssetValue,
 )
 from attacksurf.domain.ids import uuid7
-from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger
-from attacksurf.infra.db.models import Asset, AuditLog, Job, Org, Scan, User
+from attacksurf.domain.scans import JobStatus, ScanScheduleDefault, ScanStatus, ScanTrigger
+from attacksurf.infra.db.models import Asset, AuditLog, Job, Org, Scan, ScanSchedule, User
 from attacksurf.services.assets import add_root_domain, archive_root_domain, record_asset
 
 
@@ -81,6 +82,46 @@ def test_add_root_domain_stores_normalized_user_root(db_session: Session, org: O
     assert _audit(db_session, org) == [
         ("asset.root_added", str(asset.id), {"value": "example.com"})
     ]
+
+
+@pytest.mark.parametrize(("default", "days"), [("weekly", 7), ("daily", 1), ("off", None)])
+def test_root_registration_seeds_its_schedule(
+    db_session: Session, org: Org, default: ScanScheduleDefault, days: int | None
+) -> None:
+    before = datetime.now(UTC)
+
+    root = add_root_domain(
+        db_session, org.id, "example.com", actor_id=None, scan_default_frequency=default
+    )
+
+    schedule = db_session.scalars(
+        select(ScanSchedule).where(ScanSchedule.root_asset_id == root.id)
+    ).one()
+    assert schedule.profile == "dns_scheduled"
+    assert schedule.enabled is (days is not None)
+    if days is None:
+        assert schedule.next_run_at is None
+    else:
+        assert schedule.frequency == default
+        assert schedule.next_run_at is not None
+        assert before + timedelta(days=days) <= schedule.next_run_at
+        assert schedule.next_run_at < datetime.now(UTC) + timedelta(days=days, minutes=10)
+
+
+def test_restore_keeps_existing_root_schedule(db_session: Session, org: Org) -> None:
+    root_id = add_root_domain(db_session, org.id, "example.com", actor_id=None).id
+    original = db_session.scalars(
+        select(ScanSchedule).where(ScanSchedule.root_asset_id == root_id)
+    ).one()
+    old_due = original.next_run_at
+
+    archive_root_domain(db_session, org.id, root_id, actor_id=None)
+    add_root_domain(db_session, org.id, "example.com", actor_id=None, scan_default_frequency="off")
+
+    restored = db_session.scalars(
+        select(ScanSchedule).where(ScanSchedule.root_asset_id == root_id)
+    ).one()
+    assert (restored.enabled, restored.frequency, restored.next_run_at) == (True, "weekly", old_due)
 
 
 def test_root_domain_use_cases_record_the_actor(db_session: Session, org: Org, user: User) -> None:
