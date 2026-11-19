@@ -1,9 +1,70 @@
 {% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
+{% from "components/badges.html" import severity_badge, status_pill %}
 {% from "components/empty_state.html" import empty_state %}
+{% from "components/table.html" import data_table %}
+{% from "components/time.html" import relative_time %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
 <h1>Dashboard</h1>
+
+{% if not data.roots and not data.open_findings %}
 <div class="card">
   {{ empty_state("No data yet", "Add a domain to start mapping your attack surface. Your security overview will appear here.", icon_name="layout-dashboard") }}
 </div>
+{% else %}
+<div class="stat-grid">
+  <a class="stat card card-body" href="{{ url_for('ui.findings') }}">
+    <span class="stat-value">{{ data.open_findings }}</span>
+    <span class="stat-label">Open findings</span>
+  </a>
+  <a class="stat card card-body" href="{{ url_for('ui.assets') }}">
+    <span class="stat-value">{{ data.active_assets }}</span>
+    <span class="stat-label">Active assets</span>
+  </a>
+</div>
+
+<section class="card card-body" aria-labelledby="dashboard-severity">
+  <h2 id="dashboard-severity">Open findings by severity</h2>
+  <ul class="severity-counts">
+    {%- for item in data.by_severity %}
+    <li>
+      <a href="{{ url_for('ui.findings', severity=item.severity.value) }}">
+        {{ severity_badge(item.severity) }} <span class="severity-count">{{ item.count }}</span>
+      </a>
+    </li>
+    {%- endfor %}
+  </ul>
+</section>
+
+<section aria-labelledby="dashboard-newest">
+  <h2 id="dashboard-newest">Newest findings</h2>
+  <div class="card">
+    {% call(row, key) data_table([("severity", "Severity"), ("title", "Finding"), ("asset", "Asset"), ("first_seen", "First seen")],
+        data.newest, "Newest open findings", "No open findings", "Nothing to triage right now.") %}
+      {%- if key == "severity" -%}{{ severity_badge(row.severity) }}
+      {%- elif key == "title" -%}<a href="{{ url_for('ui.finding_detail', finding_id=row.id) }}">{{ row.title }}</a>
+      {%- elif key == "asset" -%}<a class="mono" href="{{ url_for('ui.asset_detail', asset_id=row.asset_id) }}">{{ row.asset_value }}</a>
+      {%- elif key == "first_seen" -%}{{ relative_time(row.first_seen) }}{% endif -%}
+    {% endcall %}
+  </div>
+</section>
+
+<section aria-labelledby="dashboard-roots">
+  <h2 id="dashboard-roots">Root domains</h2>
+  <div class="card">
+    {% call(row, key) data_table([("root", "Root domain"), ("scan", "Last scan"), ("status", "Status"), ("finished", "Finished")],
+        data.roots, "Root domains and their last scan", "No root domains", "Add a domain on the Assets page to start scanning.") %}
+      {%- if key == "root" -%}<a class="mono" href="{{ url_for('ui.asset_detail', asset_id=row.root_id) }}">{{ row.root_value }}</a>
+      {%- elif key == "scan" -%}
+        {%- if row.scan_id %}<a href="{{ url_for('ui.scan_detail', scan_id=row.scan_id) }}">{{ relative_time(row.scan_at) }}</a>
+        {%- else %}<span class="muted">Never scanned</span>{% endif %}
+      {%- elif key == "status" -%}
+        {%- if row.scan_status %}{{ status_pill(row.scan_status) }}{% else %}<span class="muted">—</span>{% endif %}
+      {%- elif key == "finished" -%}
+        {%- if row.scan_id %}{{ relative_time(row.scan_finished) }}{% else %}<span class="muted">—</span>{% endif %}
+      {%- endif -%}
+    {% endcall %}
+  </div>
+</section>
+{% endif %}
 {% endblock %}

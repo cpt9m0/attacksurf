@@ -7,6 +7,7 @@ from uuid import UUID
 
 FINGERPRINT_LENGTH = 64  # SHA-256 hex
 MAX_LOCATION_LENGTH = 500
+MAX_STATUS_COMMENT = 2_000
 _FINGERPRINT_VERSION = "v1"
 
 
@@ -46,6 +47,18 @@ class FindingStatus(StrEnum):
     REGRESSED = "regressed"  # a fixed finding that a later scan observed again
     ACCEPTED_RISK = "accepted_risk"
     FALSE_POSITIVE = "false_positive"
+
+
+class FindingError(ValueError):
+    """Invalid finding operation, safe for the web layer to display."""
+
+
+class InvalidFindingTransition(FindingError):
+    """The requested status change is not one a user may make (ADR 0027 owns the rest)."""
+
+
+class FindingNotFound(LookupError):
+    """No such finding in this org (or another org's finding: never says which)."""
 
 
 # Still a live issue for the tenant: counts as an open finding in views and may be fixed by a
