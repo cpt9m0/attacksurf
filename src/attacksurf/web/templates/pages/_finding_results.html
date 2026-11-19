@@ -21,6 +21,13 @@
   </div>
 </div>
 
+{% if result.total > export_limit %}
+<p id="finding-export-warning" class="muted" role="status">
+  Exports include only the first {{ '{:,}'.format(export_limit) }} of {{ '{:,}'.format(result.total) }} matching findings.
+  Narrow your filters to export all results.
+</p>
+{% endif %}
+
 {% if result.items %}
 <form class="bulk-form" method="post" action="{{ url_for('ui.bulk_change_finding_status', **filter_args) }}"
       aria-label="Bulk status change">

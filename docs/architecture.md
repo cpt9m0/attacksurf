@@ -540,8 +540,9 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
   `AuditLog` details) and reopen (`fixed_at` cleared); scans keep ownership of
   `fixed`/`regressed` (ADR 0027). Bulk actions are all-or-nothing, cap at 50 findings and
   audit each changed row in the same transaction. Reads live in
-  `services/finding_views.py` (frozen dataclasses, scoped joins, exports capped at 5000 and
-  CSV cells neutralized against formula injection); writes live in `services/findings.py`;
+  `services/finding_views.py` (frozen dataclasses, scoped joins, exports capped at 5000,
+  a warning in the filtered results when that cap is exceeded, and CSV cells neutralized
+  against formula injection); writes live in `services/findings.py`;
   filters are parsed by `web/finding_params.py`, shared with the API.
 - Dashboard (`/`): open findings by severity (zero-filled), the newest open findings, the
   active asset count and each root's latest scan, all from `finding_views.get_dashboard`.

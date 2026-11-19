@@ -682,6 +682,7 @@ def _findings_page(flt: FindingFilter, page: int, status: int = 200) -> Response
         "pages/findings.html",
         status=status,
         result=finding_views.list_findings(session, _org_id(), flt, page),
+        export_limit=finding_views.EXPORT_LIMIT,
         flt=flt,
         filtered=flt != FindingFilter(),
         # Non-default filters only, so pagination links and the bulk form stay short.
@@ -727,7 +728,7 @@ def _export_response(
     response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
     response.headers["Cache-Control"] = "no-store"
     if export.truncated:
-        # The file holds the first `EXPORT_LIMIT` matches; the UI says so too.
+        # Machine-readable flag for this download; the toolbar warns based on its list count.
         response.headers["X-Export-Truncated"] = "true"
     return response
 

@@ -7,8 +7,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 
 ### Added
 - Findings UI (#22): a filterable, sortable findings list with bulk status actions and
-  CSV/JSON export; a detail page with escaped evidence (DNS records, HTTP snippets, raw
-  JSON), remediation, references, timeline and an AI-triage placeholder; accept-risk /
+  CSV/JSON export that warns when the download cap is exceeded; a detail page with
+  escaped evidence (DNS records, HTTP snippets, raw JSON), remediation, references,
+  timeline and an AI-triage placeholder; accept-risk /
   false-positive decisions that require a comment and are audited, plus reopen; a dashboard
   with open findings by severity, the newest findings, the asset count and each root's last
   scan; and `/api/v1/findings` list/detail/status/bulk endpoints. Status comments live in

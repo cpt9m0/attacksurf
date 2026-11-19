@@ -20,6 +20,7 @@ from attacksurf.domain.findings import (
     Severity,
 )
 from attacksurf.infra.db.models import Asset, AuditLog, Finding, Membership, User
+from attacksurf.services import finding_views
 from attacksurf.services.assets import record_asset
 from tests.integration.factories import T0, make_finding
 
@@ -379,3 +380,31 @@ def test_finding_detail_shows_dns_resolver_address_and_chain(
     expected = "10.0.0.7\nCNAME chain: www.example.com → origin.example.com"
     assert response.status_code == 200
     assert f'<pre class="evidence-body">{expected}</pre>' in response.get_data(as_text=True)
+
+
+def test_findings_warns_when_filtered_exports_will_be_truncated(
+    alice: FlaskClient,
+    db_session: Session,
+    alice_org: UUID,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(finding_views, "EXPORT_LIMIT", 2)
+    root = _asset(db_session, alice_org)
+    _finding(db_session, alice_org, root.id, location="a")
+    _finding(db_session, alice_org, root.id, location="b")
+    _finding(db_session, alice_org, root.id, location="c", severity=Severity.LOW)
+
+    full = alice.get("/findings")
+    over = alice.get("/findings?status=open", headers=HTMX)
+    at_limit = alice.get("/findings?severity=high", headers=HTMX)
+    export = alice.get("/findings/export.csv?status=open")
+
+    assert full.status_code == over.status_code == at_limit.status_code == export.status_code == 200
+    warning = "Exports include only the first 2 of 3 matching findings."
+    assert warning in full.get_data(as_text=True)
+    over_html = over.get_data(as_text=True)
+    assert over_html.index('id="finding-results"') < over_html.index(warning)
+    assert 'id="finding-export-warning"' not in at_limit.get_data(as_text=True)
+    assert export.headers["X-Export-Truncated"] == "true"
+    rows = list(csv.reader(io.StringIO(export.get_data(as_text=True))))
+    assert len(rows[1:]) == 2
