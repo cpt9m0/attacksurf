@@ -1,4 +1,5 @@
-"""The production profile must name a registered plugin and carry the discovery cap."""
+"""Production profiles must name registered plugins, carry the discovery cap, and select no
+analysis scanner."""
 
 from attacksurf.scanners.dns import axfr as _axfr  # noqa: F401
 from attacksurf.scanners.dns import caa as _caa  # noqa: F401
@@ -37,3 +38,16 @@ def test_dns_passive_profile_is_valid_and_selects_the_ct_discovery_scanner() -> 
     scanner = registry.get(profile.discover[0])
     assert scanner.queue == "passive"
     assert not scanner.requires_verification
+
+
+def test_no_profile_selects_an_analysis_scanner() -> None:
+    for profile in PROFILES.values():
+        for name in profile.discover + profile.checks:
+            scanner = registry.get(name)
+
+            needs_analyzer = scanner.queue == "analysis" or bool(scanner.grant.sandbox_analyzers)
+
+            assert not needs_analyzer, (
+                f"profile {profile.name!r} selects {name!r}, which needs a sandbox analyzer; "
+                "no profile may until the first analyzer ships (ADR 0029 / #92)"
+            )
