@@ -19,6 +19,8 @@ from typing import Any, cast
 import httpcore2
 import httpx2
 
+from attacksurf.domain.scope import AddressError, check_addresses
+
 # The `monotonic()` time the call in progress must end by; None outside an `until` block.
 _deadline: ContextVar[float | None] = ContextVar("llm_call_deadline", default=None)
 
@@ -33,13 +35,17 @@ def until(deadline: float) -> Iterator[None]:
         _deadline.reset(token)
 
 
-def deadline_transport() -> httpx2.HTTPTransport:
-    """An HTTP transport whose every network operation respects the current `until` block."""
-    return _DeadlineTransport()
+def deadline_transport(*, block_private_ips: bool = False) -> httpx2.HTTPTransport:
+    """An HTTP transport whose every network operation respects the current `until` block.
+
+    When `block_private_ips` is True, every resolved IP is verified with ScopeGuard right before
+    TCP dialing to close DNS-rebinding TOCTOU windows for org-supplied base URLs.
+    """
+    return _DeadlineTransport(block_private_ips=block_private_ips)
 
 
 class _DeadlineTransport(httpx2.HTTPTransport):
-    def __init__(self) -> None:
+    def __init__(self, *, block_private_ips: bool = False) -> None:
         ssl_context = httpx2.create_ssl_context()
         super().__init__(verify=ssl_context)
         # HTTPTransport takes no network backend, so its pool is rebuilt on one, with
@@ -49,11 +55,15 @@ class _DeadlineTransport(httpx2.HTTPTransport):
             max_connections=100,
             max_keepalive_connections=20,
             keepalive_expiry=5.0,
-            network_backend=_DeadlineBackend(),
+            network_backend=_DeadlineBackend(block_private_ips=block_private_ips),
         )
 
 
 class _DeadlineBackend(httpcore2.SyncBackend):
+    def __init__(self, *, block_private_ips: bool = False) -> None:
+        super().__init__()
+        self._block_private_ips = block_private_ips
+
     def connect_tcp(
         self,
         host: str,
@@ -73,6 +83,12 @@ class _DeadlineBackend(httpcore2.SyncBackend):
             raise httpcore2.ConnectTimeout(exc) from exc
         except OSError as exc:
             raise httpcore2.ConnectError(exc) from exc
+        if self._block_private_ips and targets:
+            resolved = tuple(cast(str, sockaddr[0]) for _, _, _, _, sockaddr in targets)
+            try:
+                check_addresses(resolved)
+            except AddressError as exc:
+                raise httpcore2.ConnectError("Target address is blocked by ScopeGuard.") from exc
         error: httpcore2.ConnectError | httpcore2.ConnectTimeout | None = None
         for _, _, _, _, sockaddr in targets:
             # Recomputed per attempt: an earlier slow address must not extend the

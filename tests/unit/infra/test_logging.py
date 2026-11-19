@@ -49,21 +49,53 @@ def test_redact_secrets_masks_sensitive_keys() -> None:
     event = {
         "event": "x",
         "api_key": "sk-1",
+        "x-api-key": "sk-header",
         "llm_apikey": "sk-2",
+        "encryption_key": "enc-1",
+        "app_encryption_key": "enc-2",
+        "app_encryption_old_keys": "enc-old",
+        "base_url": "https://user:pass@llm.example/v1",
+        "llm_base_url": "https://llm.example/v1",
         "Authorization": "Bearer t",
         "password": "p",
         "session_token": "t",
+        "nested": {"api-key": "sk-nested", "endpoint": "https://u:p@host.example/v1"},
         "path": "/healthz",
     }
 
     result = redact_secrets(None, "info", event)
 
     assert result["api_key"] == REDACTED
+    assert result["x-api-key"] == REDACTED
     assert result["llm_apikey"] == REDACTED
+    assert result["encryption_key"] == REDACTED
+    assert result["app_encryption_key"] == REDACTED
+    assert result["app_encryption_old_keys"] == REDACTED
+    assert result["base_url"] == REDACTED
+    assert result["llm_base_url"] == REDACTED
     assert result["Authorization"] == REDACTED
     assert result["password"] == REDACTED
     assert result["session_token"] == REDACTED
+    assert result["nested"] == {
+        "api-key": REDACTED,
+        "endpoint": f"https://{REDACTED}@host.example/v1",
+    }
     assert result["path"] == "/healthz"
+
+
+def test_redact_secrets_masks_credentials_inside_urls() -> None:
+    event = {
+        "event": "connecting",
+        "url": "https://alice:hunter2@gateway.example/v1",
+        "db": "postgresql+psycopg://attacksurf:secret@db:5432/app",
+        "public_url": "https://api.openai.com/v1",
+    }
+
+    result = redact_secrets(None, "info", event)
+
+    assert result["url"] == f"https://{REDACTED}@gateway.example/v1"
+    assert result["db"] == f"postgresql+psycopg://{REDACTED}@db:5432/app"
+    assert result["public_url"] == "https://api.openai.com/v1"
 
 
 def test_request_is_logged_as_json_in_prod(capsys: pytest.CaptureFixture[str]) -> None:

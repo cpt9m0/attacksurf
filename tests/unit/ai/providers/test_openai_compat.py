@@ -39,13 +39,14 @@ from tests.unit.ai.providers.slow_server import TRICKLING_HEAD, SlowServer
 MODEL = "test-model"
 
 
-def _config(base_url: str | None = None) -> LLMConfig:
+def _config(base_url: str | None = None, *, allow_private_base_url: bool = True) -> LLMConfig:
     return LLMConfig(
         provider=ProviderKind.OPENAI_COMPAT,
         model=MODEL,
         api_key=SecretStr(API_KEY),
-        source=KeySource.INSTANCE,
+        source=KeySource.INSTANCE if allow_private_base_url else KeySource.ORG,
         base_url=SecretStr(base_url) if base_url else None,
+        allow_private_base_url=allow_private_base_url,
     )
 
 
@@ -589,3 +590,49 @@ def test_rate_limit_with_a_long_retry_after_fails_at_once(harness: OpenAIHarness
 
     assert time.monotonic() - started < 5
     assert len(harness.requests) == 1
+
+
+def test_redirects_and_env_proxies_are_disabled_and_private_ips_blocked_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ok_body = json.dumps(_completion(VALID)).encode()
+    ok_reply = (
+        b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n"
+        + f"content-length: {len(ok_body)}\r\n\r\n".encode()
+        + ok_body
+    )
+    redirect_reply = (
+        b"HTTP/1.1 307 Temporary Redirect\r\n"
+        b"location: http://169.254.169.254/latest/meta-data/\r\ncontent-length: 0\r\n\r\n"
+    )
+
+    with SlowServer(redirect_reply) as source, SlowServer(ok_reply) as target:
+        redirect_same_host = (
+            b"HTTP/1.1 307 Temporary Redirect\r\n"
+            + f"location: {target.url}/v1/chat/completions\r\ncontent-length: 0\r\n\r\n".encode()
+        )
+        with SlowServer(redirect_same_host) as hop1:
+            provider = OpenAICompatProvider(_config(hop1.url, allow_private_base_url=True))
+            with pytest.raises(LLMError):
+                provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+            assert hop1.connected.wait(timeout=1)
+            assert not target.connected.wait(timeout=0.15)
+
+        provider = OpenAICompatProvider(_config(source.url, allow_private_base_url=True))
+        with pytest.raises(LLMError):
+            provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+        assert source.connected.wait(timeout=1)
+
+    with SlowServer(ok_reply) as api, SlowServer(ok_reply) as proxy_trap:
+        monkeypatch.setenv("HTTP_PROXY", proxy_trap.url)
+        monkeypatch.setenv("HTTPS_PROXY", proxy_trap.url)
+        provider = OpenAICompatProvider(_config(api.url, allow_private_base_url=True))
+        res = provider.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+        assert res.parsed.severity == "high"
+        assert not proxy_trap.connected.wait(timeout=0.15)
+
+    with SlowServer(ok_reply) as private_server:
+        blocked = OpenAICompatProvider(_config(private_server.url, allow_private_base_url=False))
+        with pytest.raises(LLMUnavailable):
+            blocked.complete(CONVERSATION, schema=Verdict, max_tokens=256)
+        assert not private_server.connected.wait(timeout=0.15)

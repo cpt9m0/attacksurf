@@ -40,13 +40,16 @@ class OrgLLMConfig:
     """An org's own provider settings (#24 loads them, with the key decrypted).
 
     `base_url` is org-supplied, so #24 must validate it through ScopeGuard (SSRF) when it is
-    saved and when connecting; nothing here checks it.
+    saved and when connecting; `allow_private_base_url` stays False unless the host is
+    explicitly allowlisted by the operator.
     """
 
     provider: ProviderKind
     model: str
     api_key: SecretStr | None
     base_url: SecretStr | None = None
+    ai_enabled: bool = True
+    allow_private_base_url: bool = False
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,7 @@ class LLMConfig:
     api_key: SecretStr
     source: KeySource
     base_url: SecretStr | None = None
+    allow_private_base_url: bool = False
 
 
 @dataclass(frozen=True)

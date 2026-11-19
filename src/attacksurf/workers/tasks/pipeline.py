@@ -12,7 +12,7 @@ from attacksurf.infra.events import dispatcher
 from attacksurf.infra.queue import CeleryTaskQueue
 from attacksurf.scanners.profiles import PROFILES
 from attacksurf.scanners.registry import registry
-from attacksurf.services import jobs, scan_diff, scans
+from attacksurf.services import jobs, org_settings, scan_diff, scans
 from attacksurf.services.scanner_jobs import run_check
 from attacksurf.workers import runtime
 from attacksurf.workers.app import app
@@ -101,7 +101,15 @@ def diff(*, org_id: str, job_id: str) -> None:
 
 @app.task(base=PipelineTask, name="passive.triage")
 def triage(*, org_id: str, job_id: str) -> None:
-    """AI triage belongs to #25; no provider calls in this issue."""
+    """Check AI settings and monthly token budget (#24); actual AI triage belongs to #25."""
+    with runtime.session_factory()() as session:
+        org_settings.enforce_triage_budget(
+            session,
+            UUID(org_id),
+            UUID(job_id),
+            runtime.settings(),
+            resolver=runtime.dns_resolver(),
+        )
 
 
 @app.task(base=PipelineTask, name="passive.finalize")

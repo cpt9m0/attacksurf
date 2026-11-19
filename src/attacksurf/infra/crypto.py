@@ -1,7 +1,7 @@
 """Password hashing (argon2id) and envelope encryption for data at rest (ADR 0028)."""
 
 import secrets
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Protocol
 
 from argon2 import PasswordHasher as _Argon2
@@ -19,6 +19,7 @@ _BLOB_MAGIC = b"ASAF\x01"  # format name + version; authenticated with every fra
 _PREFIX_BYTES = 7  # random per blob; with the 4-byte counter and final flag: a 12-byte nonce
 _NONCE_BYTES = 12
 _TAG_BYTES = 16
+_WRAPPED_KEY_BYTES = 1 + _NONCE_BYTES + KEY_BYTES + _TAG_BYTES
 
 
 class Argon2PasswordHasher:
@@ -80,6 +81,63 @@ class EnvelopeCipher:
             return self._kek.decrypt(nonce, wrapped, aad)
         except InvalidTag:
             raise DecryptionError from None
+
+
+class SecretCipher:
+    """Encrypts small secrets (e.g. org API keys) under `APP_ENCRYPTION_KEY` with key rotation.
+
+    Wraps a per-secret 256-bit DEK with `EnvelopeCipher` (HKDF purpose separation + AAD binding)
+    and seals the secret with AES-256-GCM under that DEK. Encryption uses `primary_key`;
+    decryption accepts `primary_key` or any key in `old_keys` for zero-downtime key rotation.
+    """
+
+    def __init__(
+        self,
+        primary_key: bytes,
+        *,
+        old_keys: Sequence[bytes] = (),
+        purpose: bytes = b"org_api_key",
+    ) -> None:
+        self._primary = EnvelopeCipher(primary_key, purpose=purpose)
+        self._ciphers = (
+            self._primary,
+            *(EnvelopeCipher(key, purpose=purpose) for key in old_keys),
+        )
+
+    def encrypt_secret(self, plaintext: str, *, aad: bytes) -> bytes:
+        try:
+            raw = plaintext.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ValueError("Secret contains invalid characters.") from None
+        dek = secrets.token_bytes(KEY_BYTES)
+        wrapped_dek = self._primary.wrap(dek, aad=aad)
+        nonce = secrets.token_bytes(_NONCE_BYTES)
+        ciphertext = AESGCM(dek).encrypt(nonce, raw, aad)
+        return _ENVELOPE_VERSION + wrapped_dek + nonce + ciphertext
+
+    def decrypt_secret(self, ciphertext: bytes, *, aad: bytes) -> str:
+        min_len = 1 + _WRAPPED_KEY_BYTES + _NONCE_BYTES + _TAG_BYTES
+        if len(ciphertext) < min_len or ciphertext[:1] != _ENVELOPE_VERSION:
+            raise DecryptionError
+        wrapped_end = 1 + _WRAPPED_KEY_BYTES
+        nonce_end = wrapped_end + _NONCE_BYTES
+        wrapped_dek = ciphertext[1:wrapped_end]
+        nonce = ciphertext[wrapped_end:nonce_end]
+        sealed = ciphertext[nonce_end:]
+        dek = self._unwrap_any(wrapped_dek, aad=aad)
+        try:
+            raw = AESGCM(dek).decrypt(nonce, sealed, aad)
+            return raw.decode("utf-8")
+        except (InvalidTag, UnicodeDecodeError):
+            raise DecryptionError from None
+
+    def _unwrap_any(self, wrapped_dek: bytes, *, aad: bytes) -> bytes:
+        for cipher in self._ciphers:
+            try:
+                return cipher.unwrap(wrapped_dek, aad=aad)
+            except DecryptionError:
+                continue
+        raise DecryptionError
 
 
 def _read_full(source: ByteSource, size: int) -> bytes:

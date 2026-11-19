@@ -187,7 +187,7 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 | `Finding`, `Evidence` | normalized result, one row per issue across scans: unique `(org_id, fingerprint)`, with `fingerprint = domain.findings.finding_fingerprint(org_id, asset_id, rule_id, location)` (SHA-256 of a versioned JSON array; `location` tells apart several issues of one rule on one asset). `rule_id` points into the rule catalog (`domain.rules`: title, default severity, remediation template, references). `scanner` is the `Job.scanner` that last observed it (`NULL` before #20: never auto-fixed), and `evidence_digest` is the SHA-256 of the last observed evidence set (empty included) for material-change checks. Status `open → fixed → regressed → fixed` (the diff stage `services.scan_diff` owns those transitions, ADR 0027), plus the user's `accepted_risk`/`false_positive`, which reopen to `open` only on a material change; `fixed_at` is set exactly when `fixed`. `FindingObservation` records one row per `(scan, finding)` with the severity at observation time: it is what a scan's own stats and fix/regress decisions use, so they never depend on the mutable `last_seen_scan_id`; rows cascade with their scan and finding. Deleting a scan keeps its findings (scan references become NULL); evidence (`dns_record`/`http_response`/`raw`) goes with its finding |
 | `Artifact` | an uploaded or fetched repo/binary of an asset, stored encrypted (#85, ADR 0028): `kind` (`repo`/`binary`), plaintext `sha256` + `size_bytes`, `storage_key` (`{org_id}/{artifact_id}`), `key_envelope` (the per-artifact AES key wrapped by `APP_ENCRYPTION_KEY`; NULL exactly when `deleted_at` is set, enforced by a CHECK), `delete_after`. `services.artifacts`: `store_artifact` (streams through the `domain.artifacts.ArtifactStore` port, per-artifact limit and per-org quota, audited), `open_artifact`, `stage_artifact`, `delete_artifact` (file removed, key erased, row kept), `purge_expired` (beat, every 10 min; a failed deletion keeps the key and is retried behind everything still waiting). `infra.storage.LocalArtifactStore` writes ciphertext to `ARTIFACT_STORE_ROOT/{org}/{artifact}` (0700/0600, temp file + `os.replace`; staging and deletion of one artifact are serialised by a `flock` on `{artifact}.lock` there) and stages plaintext for one sandbox run at `SANDBOX_ARTIFACT_ROOT/{artifact}/artifact`; the two roots may not overlap. Deleting the asset or org cascades the row, which erases the key. Nothing stages yet: the caller is #84's decision |
 | `LLMUsage` | one row per finished LLM call, successful or not: provider, model, `purpose`, `key_source` (`org`/`instance`), input/output tokens, `usage_reported`, `estimated_cost_usd` (snapshotted from `ai/pricing.py` list prices; NULL for an unpriced model or unreported usage), latency (NULL on failure), `success` + `error_type` (class name only). Append-only; indexed by `(org_id, created_at)` for #24's monthly instance-key cap. Written by `services.llm_usage.record_llm_usage` |
-| `OrgSettings` *(#24)* | per-org LLM provider config (encrypted keys) |
+| `OrgSettings` | one row per org (`UniqueConstraint("org_id")`): `ai_enabled`, `provider`, `model`, `base_url`, AES-256-GCM encrypted API key (`SecretCipher`, AAD `org_id`) + `api_key_last4`, optional `monthly_token_budget`. Written by `services.org_settings` |
 | `ScanSchedule`, `AuditLog` | continuous monitoring and an append-only audit trail (`services.audit.audit()`, written in the same transaction as the change) |
 
 ## Scan pipeline
@@ -379,13 +379,22 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   configurable `base_url`). Official
   SDKs, no meta-library; only `ai/providers/` imports one (an import-linter contract). No
   sampling settings: models run with their defaults (ADR 0024).
-- A provider is built from one `LLMConfig` chosen by `ai/config.resolve_llm_config`: the org's
-  own key (and its provider/model/base URL), else the instance `LLM_*` config (capped per org,
-  #24), else AI off. Sources never mix; no failover between keys. Model names only from config.
-- Call path: `resolve_llm_config(org, settings)` (None: AI off, skip), then
+- A provider is built from one `LLMConfig` chosen by `ai/config.resolve_llm_config` (via
+  `services.org_settings.resolve_org_llm_config`): when `OrgSettings.ai_enabled` is false AI is
+  off; otherwise the org's decrypted key (and its provider/model/SSRF-validated base URL), else
+  the instance `LLM_*` config, else AI off. Sources never mix; no failover between keys (a broken
+  or undecryptable org config fails closed instead of falling back to the instance key). Model
+  names only from config.
+- Call path: `resolve_org_llm_config(session, org_id, settings)` (single-query org check +
+  decryption) + `check_llm_budget(...)` (or `enforce_triage_budget(...)` in
+  `workers/tasks/pipeline.py`, which marks `passive.triage` `SKIPPED` with a reason when AI is
+  off/over budget while allowing `finalize` to complete the scan), then
   `ai/factory.build_provider(config).complete(...)`, then `services.llm_usage.record_llm_usage`.
-  The factory is the only place that picks an adapter; its `assert_never` makes pyright flag a
-  `ProviderKind` without one.
+  Connection probes enqueue `ai.test_connection` (`workers/tasks/ai.py`) via
+  `services.org_settings.queue_ai_connection_test` and execute in `run_ai_connection_test`.
+  Monthly usage and cost summaries come from `services.llm_usage.get_usage_summary`. The factory
+  is the only place that picks an adapter; its `assert_never` makes pyright flag a `ProviderKind`
+  without one.
 - Structured output via each API's JSON-schema format (`OpenAICompatProvider` falls back on HTTP
   400 to `json_object` mode with the schema in the system message, then plain text); validation
   plus one corrective retry is
@@ -503,6 +512,17 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
   go through `services/scan_views.py` (frozen dataclasses; the JSONB `stats` parse
   defensively, so anything unexpected means "no diff yet"); filters are parsed by
   `web/scan_params.py` (400 on bad values), shared with the API.
+- Settings UI (`/settings`, `POST /settings/ai`, `POST /settings/ai/clear-key`,
+  `GET/POST /settings/ai/test`): admins configure `ai_enabled`, `provider`, `model`, custom
+  `base_url` (SSRF-guarded), BYO API key (never rendered back, masked as `••••last4` or
+  `••••****` when under 8 chars, confirm modal on replace via `aiSettingsForm` and on remove via
+  `confirm_dialog`), and optional monthly token budget (`422` inline `_ai_settings_form.html`
+  HTMX swaps on validation errors); non-admins see a read-only summary, data-sharing notice, and
+  monthly usage breakdown. `POST /settings/ai/test` validates config/budget synchronously and
+  enqueues `ai.test_connection` (`stage="ai_test"`) on the `ai` queue, returning
+  `_ai_test_status.html` which polls `GET /settings/ai/test` every 2 s until completion, non-retryable
+  failure, or queue stall, while persisting an `LLMUsage` row (`purpose="connection_test"`) even
+  on provider failure.
 - `/api/v1/assets` (session auth, writes need `X-CSRFToken`): `GET` list, `POST {"value"}` adds a
   root domain (201 / 422 / 409), `GET /<id>` detail with relations, `GET /<id>/findings`,
   `GET /<id>/scans`, `POST /<id>/archive` (admin). Errors are `{"error", "message"}`.
@@ -525,8 +545,9 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
 
 Single VPS: Cloudflare Tunnel → Caddy → gunicorn (web), plus PostgreSQL and Redis, all in Docker
 Compose (`compose.prod.yaml`); no inbound ports (ADR 0020, `docs/deployment.md`). Celery
-`worker-passive` (`-Q passive -c 2`) and `beat` run in production (#174); `worker-ai` is not
-part of the stack yet, so AI jobs stay queued. Nightly `pg_dump` off-box. See issue #29.
+`worker-passive` (`-Q passive -c 2`), `worker-ai` (`-Q ai -c 2`, Settings connection tests),
+and `beat` run in production. Both workers use targeted `inspect ping` healthchecks with the
+Redis password substituted from the mounted secret. Backups and monitoring remain in issue #29.
 
 The `Dockerfile` has two targets: `dev` (dev deps, Flask debug server, source bind-mounted by
 `compose.yaml` for hot reload) and `prod` (no dev deps, gunicorn, non-root uid 10001). Base and

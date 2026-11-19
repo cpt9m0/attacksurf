@@ -7,7 +7,14 @@ import pytest
 
 from attacksurf.domain.assets import AssetType
 from attacksurf.domain.cache import NullCache
-from attacksurf.domain.net import DnsLookup, DnsQuery, DnsRecordType, HttpBody, ScannerRuntime
+from attacksurf.domain.net import (
+    DnsError,
+    DnsLookup,
+    DnsQuery,
+    DnsRecordType,
+    HttpBody,
+    ScannerRuntime,
+)
 from attacksurf.domain.sandbox import SandboxError
 from attacksurf.domain.scanners import (
     AssetRef,
@@ -26,6 +33,7 @@ from attacksurf.infra.scope_guard import (
     _GuardedDns,
     _GuardedHttp,
     request_host,
+    validate_llm_base_url,
 )
 from tests.fakes import FakeCache
 from tests.scanner_fixtures import FakeCheck, FakeSandboxRunner
@@ -634,3 +642,121 @@ def test_rdap_grant_needs_a_dns_budget() -> None:
     busy = scanner(grant=ScannerGrant(rdap=True, dns_lookups=1))
     with pytest.raises(ScopePolicyError, match="DNS lookup"):
         make_guard()[0].check(context(), target(), busy)
+
+
+# --- Custom LLM base_url SSRF guard (#24) --------------------------------------------------
+
+
+def test_llm_base_url_accepts_public_https_and_normalizes_default_port() -> None:
+    dns = StubDns({"api.openai.com": ("93.184.216.34",)})
+
+    assert validate_llm_base_url(" https://API.OpenAI.COM:443/v1 ", resolver=dns) == (
+        "https://api.openai.com/v1"
+    )
+    assert validate_llm_base_url("https://llm.example.com:8443/v1", resolver=dns) == (
+        "https://llm.example.com:8443/v1"
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "",
+        "http://api.openai.com/v1",  # plain http refused unless allowlisted
+        "ftp://api.openai.com/v1",
+        "file:///etc/passwd",
+        "https://user:hunter2@api.openai.com/v1",
+        "https://user@api.openai.com/v1",
+        "https://api.openai.com/v1?token=x",
+        "https://api.openai.com/v1?",
+        "https://api.openai.com/v1#frag",
+        "https://localhost/v1",
+        "https://127.0.0.1/v1",
+        "https://[::1]/v1",
+        "https://169.254.169.254/latest/meta-data/",
+        "https://10.0.0.1/v1",
+        "https://8.8.8.8/v1",  # IP literals refused unless allowlisted
+        "https://ollama.internal/v1",
+        "https://printer.local/v1",
+        "https://ollama/v1",  # single-label
+        "https://2130706433/v1",
+        "https://0177.0.0.1/v1",
+        "https://bad\\host.example.com/v1",
+        "https://api.openai.com:0/v1",
+        "https://api.openai.com:99999/v1",
+        "https://api.openai.com/v1\nX-Inject: 1",
+    ],
+)
+def test_llm_base_url_rejects_unsafe_or_ssrf_urls(bad_url: str) -> None:
+    dns = StubDns({"api.openai.com": ("93.184.216.34",)})
+
+    with pytest.raises(ScopeError) as exc_info:
+        validate_llm_base_url(bad_url, resolver=dns)
+
+    assert "hunter2" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "resolved_ips",
+    [
+        ("127.0.0.1",),
+        ("10.0.0.5",),
+        ("172.16.0.1",),
+        ("192.168.1.10",),
+        ("169.254.169.254",),
+        ("100.64.0.1",),
+        ("::1",),
+        ("fe80::1",),
+        ("::ffff:127.0.0.1",),
+        ("93.184.216.34", "10.0.0.1"),  # one private IP invalidates the whole set
+        (),
+    ],
+)
+def test_llm_base_url_rejects_public_names_resolving_to_non_public_ips(
+    resolved_ips: tuple[str, ...],
+) -> None:
+    dns = StubDns({"rebind.example.com": resolved_ips})
+
+    with pytest.raises(ScopeError):
+        validate_llm_base_url("https://rebind.example.com/v1", resolver=dns)
+
+
+def test_llm_base_url_rejects_dns_lookup_failure() -> None:
+    class FailingDns(StubDns):
+        def resolve_name(self, host: str) -> tuple[str, ...]:
+            raise DnsError("timeout")
+
+    with pytest.raises(ScopeError, match="resolved"):
+        validate_llm_base_url("https://api.openai.com/v1", resolver=FailingDns())
+
+
+def test_llm_base_url_allows_allowlisted_self_hosted_hosts_including_http() -> None:
+    dns = StubDns()
+    allowed = frozenset({"localhost", "127.0.0.1", "::1", "ollama.internal"})
+
+    assert (
+        validate_llm_base_url("http://localhost:11434/v1", allowed_hosts=allowed, resolver=dns)
+        == "http://localhost:11434/v1"
+    )
+    assert (
+        validate_llm_base_url("http://127.0.0.1:8000/v1", allowed_hosts=allowed, resolver=dns)
+        == "http://127.0.0.1:8000/v1"
+    )
+    assert (
+        validate_llm_base_url("http://[::1]:8000/v1", allowed_hosts=allowed, resolver=dns)
+        == "http://[::1]:8000/v1"
+    )
+    assert (
+        validate_llm_base_url("http://ollama.internal/v1", allowed_hosts=allowed, resolver=dns)
+        == "http://ollama.internal/v1"
+    )
+    assert dns.calls == []  # allowlisted hosts skip public DNS resolution
+
+    # Allowlist is exact-match and never bypasses credential/query/fragment rules.
+    for blocked in (
+        "http://sub.ollama.internal/v1",
+        "http://user:pass@localhost:11434/v1",
+        "http://localhost:11434/v1?x=1",
+    ):
+        with pytest.raises(ScopeError):
+            validate_llm_base_url(blocked, allowed_hosts=allowed, resolver=dns)
