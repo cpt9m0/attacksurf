@@ -59,7 +59,7 @@ def real_pipeline(monkeypatch: pytest.MonkeyPatch) -> Iterator[Session]:
     runtime.session_factory.cache_clear()
     monkeypatch.setattr(runtime, "scanner_gate", FixtureGate)
     monkeypatch.setattr(pipeline, "registry", fixture_registry())
-    monkeypatch.setattr(pipeline, "PROFILES", PROFILES)
+    monkeypatch.setattr(pipeline, "WORKER_PROFILES", PROFILES)
     monkeypatch.setattr(pipeline, "RULES", {RULE.id: RULE})
     try:
         with (
