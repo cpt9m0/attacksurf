@@ -19,7 +19,7 @@ from attacksurf.domain.accounts import Role
 from attacksurf.domain.assets import AssetSource, AssetType, RelationKind
 from attacksurf.domain.findings import Confidence, Severity, finding_fingerprint
 from attacksurf.domain.scans import ScanStatus, ScanTrigger
-from attacksurf.infra.db.models import Asset, Finding, Membership, Scan, User
+from attacksurf.infra.db.models import Asset, Finding, Membership, Scan, ScanSchedule, User
 from attacksurf.services import asset_views
 from attacksurf.services.assets import record_asset, record_relation
 
@@ -126,6 +126,87 @@ def test_htmx_add_navigates_with_hx_redirect(alice: FlaskClient, db_session: Ses
 
     assert response.status_code == 200
     assert response.headers["HX-Redirect"] == f"/assets/{_root_id(db_session)}"
+
+
+def test_root_admin_can_turn_off_recurring_scans(alice: FlaskClient, db_session: Session) -> None:
+    _add(alice, "example.com")
+    root_id = _root_id(db_session)
+    page = f"/assets/{root_id}"
+    assert "Scheduled rescans" in _html(alice, page)
+
+    response = alice.post(
+        f"{page}/schedule", data={"csrf_token": _csrf(alice, page), "frequency": "daily"}
+    )
+
+    assert (response.status_code, response.headers["Location"]) == (303, page)
+    row = db_session.scalars(
+        select(ScanSchedule).where(ScanSchedule.root_asset_id == root_id)
+    ).one()
+    assert (row.enabled, row.next_run_at, row.frequency) == (False, None, "daily")
+    assert "Scheduling is off." in _html(alice, page)
+
+    response = alice.post(
+        f"{page}/schedule",
+        data={"csrf_token": _csrf(alice, page), "frequency": "daily", "enabled": "1"},
+    )
+
+    assert response.status_code == 303
+    changed = db_session.scalars(
+        select(ScanSchedule).where(ScanSchedule.root_asset_id == root_id)
+    ).one()
+    assert changed.enabled
+    assert changed.next_run_at is not None
+
+
+def test_foreign_root_schedule_returns_404(
+    alice: FlaskClient, db_app: Flask, db_session: Session
+) -> None:
+    bob = _signup(db_app, "bob@example.com")
+    _add(bob, "example.org")
+    root_id = _root_id(db_session, "example.org")
+
+    response = alice.post(
+        f"/assets/{root_id}/schedule",
+        data={"csrf_token": _csrf(alice), "frequency": "weekly"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_member_sees_schedule_but_cannot_edit(alice: FlaskClient, db_session: Session) -> None:
+    _add(alice, "example.com")
+    root_id = _root_id(db_session)
+    membership = db_session.scalars(
+        select(Membership).join(User).where(User.email == "alice@example.com")
+    ).one()
+    membership.role = Role.MEMBER
+    db_session.commit()
+    path = f"/assets/{root_id}"
+
+    html = _html(alice, path)
+
+    assert "Scheduled rescans" in html
+    assert "Save schedule" not in html
+    assert (
+        alice.post(
+            f"{path}/schedule", data={"csrf_token": _csrf(alice), "frequency": "daily"}
+        ).status_code
+        == 403
+    )
+
+
+def test_schedule_form_requires_csrf_and_known_frequency(
+    alice: FlaskClient, db_session: Session
+) -> None:
+    _add(alice, "example.com")
+    root_id = _root_id(db_session)
+    path = f"/assets/{root_id}/schedule"
+
+    assert alice.post(path, data={"frequency": "weekly"}).status_code == 400
+    assert (
+        alice.post(path, data={"csrf_token": _csrf(alice), "frequency": "monthly"}).status_code
+        == 422
+    )
 
 
 def test_htmx_add_with_invalid_name_returns_the_form_with_an_inline_error(

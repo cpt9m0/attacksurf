@@ -29,6 +29,7 @@ from attacksurf.domain.scans import (
     ScanNotQueued,
     ScanRateLimited,
     ScanStatus,
+    ScheduleFrequency,
 )
 from attacksurf.domain.scope import ScopeError
 from attacksurf.infra.dns import DnsPythonResolver
@@ -40,6 +41,7 @@ from attacksurf.services import (
     llm_usage,
     org_settings,
     repos,
+    scan_schedules,
     scan_views,
     verifications,
 )
@@ -172,6 +174,7 @@ def asset_detail(asset_id: UUID) -> Response:
         abort(404)
     asset = detail.asset
     can_scan = asset.is_active and asset.type == AssetType.DOMAIN and asset.root_id is None
+    show_schedule = can_scan and tab == "overview"
     return render_page(
         "pages/asset_detail.html",
         detail=detail,
@@ -181,6 +184,11 @@ def asset_detail(asset_id: UUID) -> Response:
         findings=findings,
         scans=scans,
         can_scan=can_scan,
+        show_schedule=show_schedule,
+        schedule=(
+            scan_schedules.get_schedule(session, _org_id(), asset.id) if show_schedule else None
+        ),
+        can_manage_schedule=show_schedule and has_role(current_user.role, Role.ADMIN),
         active_scan=(
             scan_views.active_scan_for_root(get_session(), _org_id(), asset.id)
             if can_scan
@@ -193,6 +201,33 @@ def asset_detail(asset_id: UUID) -> Response:
         # Only roots carry a proof; a subdomain shows its root's, read-only.
         **(dict(ownership_context) if ownership_context else {}),
     )
+
+
+@bp.post("/assets/<uuid:asset_id>/schedule")
+@require_role(Role.ADMIN)
+def update_schedule(asset_id: UUID) -> BaseResponse:
+    """Save a root's recurring-scan preference, then return to its overview."""
+    try:
+        frequency = ScheduleFrequency(request.form.get("frequency", ""))
+    except ValueError:
+        abort(422)
+    enabled_values = request.form.getlist("enabled")
+    if enabled_values not in ([], ["1"]):
+        abort(422)
+    try:
+        scan_schedules.save_schedule(
+            get_session(),
+            org_id=_org_id(),
+            root_asset_id=asset_id,
+            actor_id=current_user.session_user.user_id,
+            frequency=frequency,
+            enabled=bool(enabled_values),
+            now=datetime.now(UTC),
+        )
+    except AssetNotFound:
+        abort(404)
+    flash("Scan schedule saved.", "success")
+    return redirect(url_for("ui.asset_detail", asset_id=asset_id), 303)
 
 
 @bp.post("/assets/<uuid:asset_id>/archive")
