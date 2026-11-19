@@ -5,7 +5,7 @@
 **Updated:** 2026-11-19 · **Branch:** `25-ai-triage` · **Issue:** #25 (AI triage stage)
 
 ## Status
-In progress: commit 3 of 9 on `25-ai-triage`; draft PR #186 (commits 1-2 pushed).
+In progress: commit 4 of 9 on `25-ai-triage`; draft PR #186 (commits 1-3 pushed).
 
 ## Last task
 - Plan: one PR per issue (Angela: #25 now; sten-ctrl: #26 after #25 merges), kept in the Claude
@@ -15,16 +15,19 @@ In progress: commit 3 of 9 on `25-ai-triage`; draft PR #186 (commits 1-2 pushed)
   are `<!-- system -->` + `<!-- user -->` parts) and `ai/untrusted.py` (`scan_data_block`,
   `cap`). AGENTS.md rule 8, the `llm-prompt` skill, `docs/security.md` and
   `docs/architecture.md` now name both.
+- Commit 4: prompt `ai/prompts/triage/v1.md` (hash pinned in `tests/unit/ai/test_prompts.py`)
+  and `build_triage_messages`, `triage_batch`, `match_results` in `ai/triage.py` (5 evidence
+  items per finding, strings capped at 2,000 characters; `docs/security.md` lists what's sent).
 
 ## Next step
-Commit 4: `ai/prompts/triage/v1.md` (pin its hash in `tests/unit/ai/test_prompts.py`), and in
-`ai/triage.py` `build_triage_messages`, `triage_batch`, `match_results` (signatures in ADR 0029),
-plus an injection fixture and the "data sent" entry in `docs/security.md`.
+Commit 5: triage runs after the scan finishes. `dispatch_stage`'s tail drops `triage`;
+`finalize_scan` queues an `ai.triage` job (`TrackedTask`, `workers/tasks/ai.py`) after its
+commit; `passive.triage` becomes a no-op for one release; `enforce_triage_budget` returns
+`LLMConfig | None`. Test list: the old plan's "B1 commits" tab.
 
 ## Open threads
 - How a batch job finds its chunk when an asset has more than 20 findings (`Job` has no
   parameters column): decide in commit 7.
-- Evidence cap per finding (proposed: 5 items of 2,000 characters) lands in commit 4.
 - #22 (findings UI) is unowned; the AI panel goes on the scan page first.
 
 ## Notes for the next agent

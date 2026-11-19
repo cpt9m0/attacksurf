@@ -63,8 +63,9 @@ The forces:
   is reached; the overshoot is bounded by one batch per `ai` worker.
 - **What is sent.** Per batch: the asset's name and type. Per finding: a batch-local reference
   (`F1`, `F2`, ...), the rule ID, title, description, scanner severity and confidence, the
-  location, and up to 5 evidence items of at most 2,000 characters each. Never sent: database
-  IDs, org or user data, other assets' or other orgs' data, credentials, API keys or base URLs.
+  location, and up to 5 evidence items, each string in them capped at 2,000 characters. Never
+  sent: database IDs, org or user data, other assets' or other orgs' data, credentials, API keys
+  or base URLs.
 - **Scan data is delimited, escaped and capped.** Everything scan-derived is serialized as one
   JSON object inside a `<scan_data>` block, with `<` and `>` escaped as `<` and `>`, so
   no value can close the block. Capped fields carry a truncation marker. The system prompt says

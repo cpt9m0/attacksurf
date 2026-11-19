@@ -176,7 +176,14 @@ already registered (rate-limited); login never does.
 Only normalized findings (rule, severity, asset name, trimmed evidence) and aggregate stats.
 When an admin clicks "Test connection" on `/settings`, a minimal structured health-check probe
 (`{"ok": true}`) is sent with no tenant data. Never sent: credentials, API keys, raw uploads.
-Each AI feature documents its payload here as it is added. Orgs can disable AI or bring their own
+Each AI feature documents its payload here as it is added:
+
+- **Triage** (#25, ADR 0029, prompt `triage/v1`), one call per asset batch of at most 20
+  findings: the asset's name and type; per finding a batch-local reference (`F1`, `F2`, ...), the
+  rule ID, title, description, scanner severity and confidence, location, and up to 5 evidence
+  items, each string capped at 2,000 characters. All of it goes inside one escaped `<scan_data>`
+  block. Never sent: database IDs, org or user data, other assets' findings.
+ Orgs can disable AI or bring their own
 provider key; monthly UTC token budgets (`LLM_MONTHLY_INSTANCE_TOKEN_BUDGET` for the instance key
 and optional per-org caps) skip AI triage gracefully once reached.
 

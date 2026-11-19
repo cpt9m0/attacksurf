@@ -13,7 +13,9 @@ from attacksurf.domain.llm import Message
 
 # Every prompt file in `ai/prompts/` and its SHA-256. A released prompt is never edited: change
 # it by adding v<N+1> (and its hash here) and switching its callers.
-RELEASED: dict[str, str] = {}
+RELEASED: dict[str, str] = {
+    "triage/v1": "b4c7de8853fcb56f8597cb0d66d9e45c23a492f2936d0c494ae516988a9b493d",
+}
 
 VALID = "<!-- system -->\nYou judge findings.\n\n<!-- user -->\nJudge these:\n$scan_data\n"
 

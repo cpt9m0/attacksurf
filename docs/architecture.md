@@ -433,9 +433,12 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   auto-closes findings.
 - Triage (#25, ADR 0029) is being built: its reply models live in `ai/schemas.py`
   (`TriageReply` of `FindingTriage`, P1 to P4; stored in `Finding.ai_triage` as `StoredTriage`)
-  and its input in `ai/triage.py` (`TriageBatch`: one asset's findings under batch-local refs
-  `F1` to `F99`, never database IDs; `triage_cache_key`). Reply models' docstrings and field
-  descriptions are sent to the model with the schema, so they are written for it.
+  and its calls in `ai/triage.py`: `TriageBatch` (one asset's findings under batch-local refs
+  `F1` to `F99`, never database IDs), `triage_batch(provider, batch)` (one call with prompt
+  `triage/v1`; `build_triage_messages` puts the batch in one `scan_data_block`),
+  `match_results` (drops refs outside the batch and refs judged twice) and `triage_cache_key`.
+  Reply models' docstrings and field descriptions are sent to the model with the schema, so they
+  are written for it.
 - Prompts are versioned files `ai/prompts/<purpose>/v<N>.md` (system part, then user part with
   `$placeholders`), loaded by `ai.prompts.load_prompt`; a test pins each file's SHA-256. Scan data
   enters a prompt only through `ai/untrusted.scan_data_block`.
