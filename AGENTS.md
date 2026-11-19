@@ -117,8 +117,9 @@ sync" rule below is satisfied**. Do not claim done without running them.
    `Asset.details["wildcard"] = true`.
 7. **LLMs judge, scanners detect.** AI never invents findings, never auto-closes them, and only
    sees normalized findings. All LLM output is schema-validated (pydantic).
-8. **Scan-derived content is untrusted:** escape in templates (never `|safe` on it), and wrap it as
-   delimited data in prompts (prompt-injection defense).
+8. **Scan-derived content is untrusted:** escape in templates (never `|safe` on it), and put it in
+   prompts only through `ai/untrusted.scan_data_block` (escaped, capped JSON in `<scan_data>`;
+   prompt-injection defense).
 9. **UI under a strict CSP:** no inline `<script>`, `style=`, `on*=` handlers or Alpine inline
    expressions; JS goes in `static/js/app.js` (`Alpine.data`), styles use `tokens.css` variables.
    Routes render with `web.rendering.render_page()`; reusable markup is a macro in

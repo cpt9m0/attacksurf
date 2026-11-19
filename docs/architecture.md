@@ -436,6 +436,9 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   and its input in `ai/triage.py` (`TriageBatch`: one asset's findings under batch-local refs
   `F1` to `F99`, never database IDs; `triage_cache_key`). Reply models' docstrings and field
   descriptions are sent to the model with the schema, so they are written for it.
+- Prompts are versioned files `ai/prompts/<purpose>/v<N>.md` (system part, then user part with
+  `$placeholders`), loaded by `ai.prompts.load_prompt`; a test pins each file's SHA-256. Scan data
+  enters a prompt only through `ai/untrusted.scan_data_block`.
 
 ## Queues
 

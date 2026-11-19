@@ -5,22 +5,21 @@
 **Updated:** 2026-11-19 · **Branch:** `25-ai-triage` · **Issue:** #25 (AI triage stage)
 
 ## Status
-In progress: commits 1 and 2 of 9 are on `25-ai-triage`, not pushed; no PR yet.
+In progress: commit 3 of 9 on `25-ai-triage`; draft PR #186 (commits 1-2 pushed).
 
 ## Last task
 - Plan: one PR per issue (Angela: #25 now; sten-ctrl: #26 after #25 merges), kept in the Claude
-  Doc "#25 + #26: one PR per issue" (not in the repo). cpt9m0 approved going over the ~400-line
-  PR guideline.
-- `docs/adr/0029-ai-triage-stage.md`: triage runs after the scan as `ai.*` jobs, one LLM call
-  per job; cache on `Finding.ai_triage`; what is and isn't sent; prompt files; opt-in evals.
-- `ai/schemas.py` (`FindingTriage`, `TriageReply`, `StoredTriage`, `TriagePriority`) and
-  `ai/triage.py` (`TriageBatch`, `triage_cache_key`), tested in
-  `tests/unit/ai/test_triage_contract.py` with the snapshot `tests/fixtures/ai/triage_reply_schema.json`.
+  Doc "#25 + #26: one PR per issue" (not in the repo). cpt9m0 approved the oversized PR.
+- Commits 1-2: ADR 0029 (triage design) and the contract (`ai/schemas.py`, `ai/triage.py`).
+- Commit 3: `ai/prompts/__init__.py` (`load_prompt`, `parse_prompt`, `Prompt.messages`; files
+  are `<!-- system -->` + `<!-- user -->` parts) and `ai/untrusted.py` (`scan_data_block`,
+  `cap`). AGENTS.md rule 8, the `llm-prompt` skill, `docs/security.md` and
+  `docs/architecture.md` now name both.
 
 ## Next step
-Push `25-ai-triage`, open the draft PR (`feat(ai): add the ai triage stage`, `Closes #25`,
-oversized-PR note under "Notable"), then commit 3: `ai/prompts/__init__.py` (`load_prompt`,
-pinned file hashes) and `ai/untrusted.py` (`scan_data_block`).
+Commit 4: `ai/prompts/triage/v1.md` (pin its hash in `tests/unit/ai/test_prompts.py`), and in
+`ai/triage.py` `build_triage_messages`, `triage_batch`, `match_results` (signatures in ADR 0029),
+plus an injection fixture and the "data sent" entry in `docs/security.md`.
 
 ## Open threads
 - How a batch job finds its chunk when an asset has more than 20 findings (`Job` has no
@@ -34,10 +33,10 @@ pinned file hashes) and `ai/untrusted.py` (`scan_data_block`).
   snapshot and needs a new prompt version.
 - `anthropic.transform_schema` moves unsupported limits (`maxLength`, `pattern`) into
   descriptions; pydantic still enforces them locally, and the corrective retry covers misses.
+- Write invisible or non-ASCII test characters with `chr(...)`: ruff rejects them raw (PLE2515).
 - On this laptop Postgres listens on `127.0.0.1:5433` (local `compose.override.yaml`, excluded
-  from git): `docker compose up -d --wait postgres`, then
+  from git): start Docker Desktop, `docker compose up -d --wait postgres`, then
   `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@127.0.0.1:5433/attacksurf_test`.
 - Commits here need `UV_CACHE_DIR=/tmp/uv-cache-ubuntu PRE_COMMIT_HOME=/tmp/pre-commit-cache`;
   git identity is set repo-locally (GitHub no-reply address).
 - ADR numbers move fast: check `origin/main` and open branches before taking the next number.
-- The ruff format hook strips imports that aren't used yet: add imports with their first use.
