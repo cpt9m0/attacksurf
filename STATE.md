@@ -6,8 +6,9 @@
 
 ## Status
 PR #184 addresses the three Codex review threads. The P1 browser-fixture finding was already
-fixed in `d6b3789`; two new commits (`3994f9a`, `9f73477`) preserve DNS resolver evidence and
-warn when exports are capped. They are not pushed yet; the previous head `792feab` had green CI.
+fixed in `d6b3789`; `3994f9a` preserves DNS resolver evidence and `9f73477` warns when exports
+are capped. Head `e355e39` is pushed; all eight CI checks pass and the PR is mergeable. Replies
+are posted on all three review threads; they stay unresolved for the reviewer.
 
 ## Last task
 - `finding_views._evidence_row`: DNS evidence now falls back to the resolver's singular `value`
@@ -19,8 +20,8 @@ warn when exports are capped. They are not pushed yet; the previous head `792fea
 - Docs updated (`DESIGN.md`, `docs/architecture.md`, `CHANGELOG.md`, this file).
 
 ## Next step
-Push `22-findings-ui`, confirm the new SHA's CI is green, then reply on the three Codex threads
-(IDs `4632776570`, `4632776559`, `4632776563`) and leave thread resolution to the reviewer.
+Reviewer resolves the three threads and merges PR #184; then pick the next unblocked issue
+(AI triage #25 builds on the finding detail's AI panel).
 
 ## Open threads
 - P1 is fixed but unresolved on GitHub: cite `d6b3789` and the database-free layout run
@@ -33,7 +34,7 @@ Push `22-findings-ui`, confirm the new SHA's CI is green, then reply on the thre
 ## Notes for the next agent
 - Local checks after the fixes: full suite 3033 passed / 20 skipped, coverage 95.74%;
   ruff/pyright/import-linter/pre-commit clean; browser layout 14 passed with
-  `env -u TEST_DATABASE_URL RUN_WEB_E2E=1`.
+  `env -u TEST_DATABASE_URL RUN_WEB_E2E=1`. Remote CI on `e355e39` is green.
 - DB tests need `TEST_DATABASE_URL`; the throwaway `attacksurf-test-db` on port 5433 is running.
 - `uv run ruff format --check .` also sees untracked `.hermes/plans/*.md` code blocks; CI and
   pre-commit only see tracked files. Use `ruff format --check src tests` locally.
