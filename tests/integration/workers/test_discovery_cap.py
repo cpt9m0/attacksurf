@@ -14,7 +14,10 @@ from attacksurf.services.assets import record_asset
 from attacksurf.workers.tasks import pipeline
 from tests.fakes import FakeQueue
 from tests.integration.factories import make_scan
-from tests.integration.workers.test_pipeline import pipeline_env  # noqa: F401 - fixture
+from tests.integration.workers.test_pipeline import (  # noqa: F401 - fixtures
+    pipeline_env,
+    sent_tasks,
+)
 from tests.scanner_fixtures import PROFILES, capped_registry
 
 pytestmark = pytest.mark.usefixtures("pipeline_env")

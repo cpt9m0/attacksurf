@@ -1,4 +1,7 @@
-"""AI worker tasks (#24). Thin: one service call, IDs in, no secrets or prompts out."""
+"""AI worker tasks. Thin: one service call, IDs in, no secrets or prompts out.
+
+They use `TrackedTask`, never `PipelineTask`: an AI failure fails its own job, never a scan.
+"""
 
 from uuid import UUID
 
@@ -13,6 +16,20 @@ def test_connection(*, org_id: str, job_id: str) -> None:
     """Run a tiny structured completion probe against the org's active LLM config."""
     with runtime.session_factory()() as session:
         org_settings.run_ai_connection_test(
+            session,
+            UUID(org_id),
+            UUID(job_id),
+            runtime.settings(),
+            resolver=runtime.dns_resolver(),
+        )
+
+
+@app.task(base=TrackedTask, name="ai.triage")
+def triage(*, org_id: str, job_id: str) -> None:
+    """A completed scan's AI triage (ADR 0029); skipped with a notice when AI is off or over
+    budget."""
+    with runtime.session_factory()() as session:
+        org_settings.enforce_triage_budget(
             session,
             UUID(org_id),
             UUID(job_id),

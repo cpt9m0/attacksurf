@@ -92,6 +92,8 @@ sync" rule below is satisfied**. Do not claim done without running them.
    `services.jobs.enqueue_workflow` + `PipelineQueue` (also commit before publish).
    Raise `TransientJobError` to retry
    (ADR 0010). Only `JobError` messages are stored/shown, so keep them free of secrets/evidence.
+   AI tasks (`ai.*`) use `TrackedTask`, never `PipelineTask`, and are queued after the scan
+   completes, so an AI failure never fails a scan (ADR 0029).
 3. **Never run scans or LLM calls inside a web request.** Enqueue a Celery task, return a job ID,
    poll with HTMX.
 4. **Every tenant-owned row has `org_id`** (model inherits `TenantScoped`), and every query is

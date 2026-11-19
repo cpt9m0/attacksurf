@@ -4,7 +4,6 @@ from uuid import UUID, uuid4
 
 import pytest
 from celery.backends.cache import CacheBackend
-from pydantic import SecretStr
 from sqlalchemy import update
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -12,7 +11,6 @@ from attacksurf.domain.assets import AssetNotFound
 from attacksurf.domain.events import FindingCreated, FindingFixed, ScanCompleted
 from attacksurf.domain.findings import FindingStatus
 from attacksurf.domain.jobs import JobNotFound, JobTask, TransientJobError
-from attacksurf.domain.llm import KeySource, ProviderKind
 from attacksurf.domain.scanners import (
     AssetRef,
     ClosedGate,
@@ -22,9 +20,10 @@ from attacksurf.domain.scanners import (
     ScanProfile,
 )
 from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger
-from attacksurf.infra.db.models import Asset, AssetRelation, Evidence, Finding, Job, LLMUsage, Scan
+from attacksurf.infra.db.models import Asset, AssetRelation, Evidence, Finding, Job, Scan
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.infra.events import InProcessDispatcher
+from attacksurf.infra.queue import CeleryTaskQueue
 from attacksurf.services import assets as assets_service
 from attacksurf.services import jobs, scanner_jobs, scans
 from attacksurf.services.scan_results import persist_scan_output
@@ -32,13 +31,28 @@ from attacksurf.workers import runtime
 from attacksurf.workers.app import app
 from attacksurf.workers.tasks import pipeline
 from tests.fakes import FakeQueue
-from tests.helpers import make_settings
 from tests.integration.factories import make_scan
 from tests.scanner_fixtures import PROFILES, RULE, FakeCheck, FixtureGate, fixture_registry
 
 
 @pytest.fixture
-def pipeline_env(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> InProcessDispatcher:
+def sent_tasks() -> list[str]:
+    """Names of the single tasks the pipeline sent (chords still run eagerly)."""
+    return []
+
+
+@pytest.fixture
+def pipeline_env(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch, sent_tasks: list[str]
+) -> InProcessDispatcher:
+    class RecordingQueue(CeleryTaskQueue):
+        # `send_task` ignores eager mode and would dial the broker, so single tasks (the triage
+        # job `finalize` queues) are recorded instead; `enqueue_workflow` stays real.
+        def enqueue(self, task_name: str, *, org_id: UUID, job_id: UUID) -> str:
+            sent_tasks.append(task_name)
+            return "task-1"
+
+    monkeypatch.setattr(pipeline, "CeleryTaskQueue", RecordingQueue)
     factory = sessionmaker(
         bind=db_session.connection(),
         join_transaction_mode="create_savepoint",
@@ -331,7 +345,109 @@ def test_unexpected_orchestration_failure_fails_scan_without_leaking_messages(
 def test_finalize_refuses_pending_work(db_session: Session) -> None:
     job = _check_job(db_session)
     with pytest.raises(ValueError, match="pending"):
-        scans.finalize_scan(db_session, job.org_id, job.id, InProcessDispatcher())
+        scans.finalize_scan(
+            db_session, FakeQueue(db_session), job.org_id, job.id, InProcessDispatcher()
+        )
+
+
+def _finalize_job(session: Session) -> Job:
+    scan = make_scan(session)
+    return jobs.record_job(session, org_id=scan.org_id, scan_id=scan.id, stage="finalize")
+
+
+def _triage_jobs(session: Session, job: Job) -> list[Job]:
+    return list(
+        session.scalars(
+            scoped(Job, job.org_id).where(Job.scan_id == job.scan_id, Job.stage == "triage")
+        )
+    )
+
+
+def test_finalize_completes_the_scan_then_queues_triage(db_session: Session) -> None:
+    job = _finalize_job(db_session)
+    queue = FakeQueue(db_session)
+
+    scans.finalize_scan(db_session, queue, job.org_id, job.id, InProcessDispatcher())
+
+    scan = db_session.get(Scan, job.scan_id)
+    assert scan is not None
+    assert scan.status is ScanStatus.COMPLETED
+    [triage] = _triage_jobs(db_session, job)
+    assert triage.status is JobStatus.QUEUED
+    # Sent after the scan's completion committed: a worker always finds both rows.
+    assert queue.sent == [("ai.triage", job.org_id, triage.id, True)]
+
+
+def test_finalizing_twice_queues_one_triage_job(db_session: Session) -> None:
+    job = _finalize_job(db_session)
+    queue = FakeQueue(db_session)
+
+    scans.finalize_scan(db_session, queue, job.org_id, job.id, InProcessDispatcher())
+    scans.finalize_scan(db_session, queue, job.org_id, job.id, InProcessDispatcher())
+
+    assert len(_triage_jobs(db_session, job)) == 1
+    assert len(queue.sent) == 1
+
+
+def test_finalize_queues_no_triage_for_an_archived_root(db_session: Session) -> None:
+    job = _finalize_job(db_session)
+    scan = db_session.get(Scan, job.scan_id)
+    assert scan is not None
+    db_session.execute(
+        update(Asset)
+        .where(Asset.id == scan.root_asset_id)
+        .values(is_active=False, deactivated_at=datetime.now(UTC))
+    )
+    queue = FakeQueue(db_session)
+
+    scans.finalize_scan(db_session, queue, job.org_id, job.id, InProcessDispatcher())
+
+    assert _triage_jobs(db_session, job) == []
+    assert queue.sent == []
+
+
+def test_a_broker_failure_leaves_the_scan_completed(db_session: Session) -> None:
+    job = _finalize_job(db_session)
+
+    scans.finalize_scan(
+        db_session, FakeQueue(db_session, fail=True), job.org_id, job.id, InProcessDispatcher()
+    )
+
+    db_session.expire_all()
+    scan = db_session.get(Scan, job.scan_id)
+    assert scan is not None
+    assert scan.status is ScanStatus.COMPLETED
+    [triage] = _triage_jobs(db_session, job)
+    assert triage.status is JobStatus.FAILED
+    assert triage.error == "ConnectionError"
+
+
+def test_the_scan_chain_ends_at_finalize_and_triage_follows(
+    db_session: Session, pipeline_env: InProcessDispatcher, sent_tasks: list[str]
+) -> None:
+    root_scan = make_scan(db_session)
+    root_scan.status = ScanStatus.COMPLETED
+    scan = scans.start_scan(
+        db_session,
+        FakeQueue(db_session),
+        org_id=root_scan.org_id,
+        root_asset_id=root_scan.root_asset_id,
+        profile="fixture",
+        registry=fixture_registry(),
+        profiles=PROFILES,
+    )
+    kickoff = db_session.scalars(scoped(Job, scan.org_id).where(Job.scan_id == scan.id)).one()
+
+    pipeline.discover.apply(kwargs={"org_id": str(scan.org_id), "job_id": str(kickoff.id)})
+
+    db_session.expire_all()
+    assert scan.status is ScanStatus.COMPLETED
+    stages = [
+        job.stage
+        for job in db_session.scalars(scoped(Job, scan.org_id).where(Job.scan_id == scan.id))
+    ]
+    assert stages.count("triage") == 1
+    assert sent_tasks == ["ai.triage"]
 
 
 def test_scanner_timeout_fails_only_job_and_discards_late_findings(
@@ -584,35 +700,14 @@ def test_dispatch_of_a_scan_the_archive_missed_does_not_leave_it_queued(
     assert kickoff.status == JobStatus.SKIPPED
 
 
-def test_triage_stage_is_skipped_with_notice_when_monthly_budget_exceeded(
+def test_a_legacy_triage_stage_completes_and_the_scan_finishes(
     db_session: Session,
     pipeline_env: InProcessDispatcher,
-    monkeypatch: pytest.MonkeyPatch,
+    sent_tasks: list[str],
 ) -> None:
-    configured = make_settings(
-        env="test",
-        secret_key=SecretStr("test-secret-key"),
-        llm_api_key=SecretStr("instance-key"),
-        llm_model="muse-spark-1.3",
-        llm_monthly_instance_token_budget=1_000,
-    )
-    monkeypatch.setattr(runtime, "settings", lambda: configured)
+    # Chains published before ADR 0029 still name `passive.triage`: it must end its job so
+    # `finalize` can run, without gating or calling anything.
     scan = make_scan(db_session)
-    db_session.add(
-        LLMUsage(
-            org_id=scan.org_id,
-            provider=ProviderKind.ANTHROPIC,
-            model="muse-spark-1.3",
-            purpose="triage",
-            key_source=KeySource.INSTANCE,
-            input_tokens=700,
-            output_tokens=300,
-            usage_reported=True,
-            estimated_cost_usd=None,
-            latency_ms=100,
-            success=True,
-        )
-    )
     triage_job = jobs.create_job(
         db_session,
         FakeQueue(db_session),
@@ -634,6 +729,6 @@ def test_triage_stage_is_skipped_with_notice_when_monthly_budget_exceeded(
     pipeline.finalize.apply(kwargs={"org_id": str(scan.org_id), "job_id": str(finalize_job.id)})
 
     db_session.expire_all()
-    assert triage_job.status is JobStatus.SKIPPED
-    assert "budget exceeded" in (triage_job.error or "").lower()
+    assert triage_job.status is JobStatus.COMPLETED
     assert scan.status is ScanStatus.COMPLETED
+    assert sent_tasks == ["ai.triage"]  # the new triage job, queued by `finalize`

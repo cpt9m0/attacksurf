@@ -12,7 +12,7 @@ from attacksurf.infra.events import dispatcher
 from attacksurf.infra.queue import CeleryTaskQueue
 from attacksurf.scanners.profiles import WORKER_PROFILES
 from attacksurf.scanners.registry import registry
-from attacksurf.services import jobs, org_settings, scan_diff, scans
+from attacksurf.services import jobs, scan_diff, scans
 from attacksurf.services.scanner_jobs import run_check
 from attacksurf.workers import runtime
 from attacksurf.workers.app import app
@@ -101,21 +101,17 @@ def diff(*, org_id: str, job_id: str) -> None:
 
 @app.task(base=PipelineTask, name="passive.triage")
 def triage(*, org_id: str, job_id: str) -> None:
-    """Check AI settings and monthly token budget (#24); actual AI triage belongs to #25."""
-    with runtime.session_factory()() as session:
-        org_settings.enforce_triage_budget(
-            session,
-            UUID(org_id),
-            UUID(job_id),
-            runtime.settings(),
-            resolver=runtime.dns_resolver(),
-        )
+    """No-op kept for one release: chains published before ADR 0029 still name this stage.
+
+    Triage now runs after the scan as `ai.triage`; completing this job lets `finalize` run.
+    Delete it once no chain from before that release can still be queued.
+    """
 
 
 @app.task(base=PipelineTask, name="passive.finalize")
 def finalize(*, org_id: str, job_id: str) -> None:
     with runtime.session_factory()() as session:
-        scans.finalize_scan(session, UUID(org_id), UUID(job_id), dispatcher)
+        scans.finalize_scan(session, CeleryTaskQueue(app), UUID(org_id), UUID(job_id), dispatcher)
 
 
 @app.task(base=PipelineTask, name="passive.fail_scan")

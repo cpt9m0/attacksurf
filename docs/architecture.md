@@ -209,8 +209,12 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 ## Scan pipeline
 
 ```
-discover ─► per-asset checks (parallel group) ─► persist/normalize ─► dedupe + diff ─► AI triage ─► AI summary ─► notify
+discover ─► per-asset checks (parallel group) ─► persist/normalize ─► dedupe + diff ─► finalize
+                                                                   (scan complete) ─► AI triage ─► AI summary ─► notify
 ```
+
+- AI work starts only after `finalize` commits the scan as completed (ADR 0029): `finalize_scan`
+  queues one `ai.triage` job, so an LLM outage or a spent budget never delays or fails a scan.
 
 - Implemented as a Celery `chain`/`chord`; each stage is idempotent and tracked as a `Job`.
 - **Scanners are plugins** (`@register_scanner`) returning normalized pydantic `ScanOutput`.
@@ -313,7 +317,8 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   read a below-limit count. Two waves use Celery chords:
   discovery on the root, then checks on the active root and its known direct children, filtered
   by each plugin's supported asset types. Continuations use immutable signatures and tracked
-  jobs: `checks`, then `persist → diff → triage → finalize`. Batch rows commit before messages.
+  jobs: `checks`, then `persist → diff → finalize`. Batch rows commit before messages.
+  `passive.triage` stays one release as a no-op so chains published before ADR 0029 finish.
 - **Recurring scans (#27):** `passive.enqueue_due_scans` runs every minute from beat.
   `services.scan_schedules.enqueue_due_scans` reads due rows one org at a time (tenant-scoped
   queries), keeps the globally oldest 20 per delivery, and for each locks the root and then the
@@ -416,9 +421,9 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   or undecryptable org config fails closed instead of falling back to the instance key). Model
   names only from config.
 - Call path: `resolve_org_llm_config(session, org_id, settings)` (single-query org check +
-  decryption) + `check_llm_budget(...)` (or `enforce_triage_budget(...)` in
-  `workers/tasks/pipeline.py`, which marks `passive.triage` `SKIPPED` with a reason when AI is
-  off/over budget while allowing `finalize` to complete the scan), then
+  decryption) + `check_llm_budget(...)` (or `enforce_triage_budget(...)` in the `ai.triage`
+  task, `workers/tasks/ai.py`, which marks that job `SKIPPED` with a reason when AI is
+  off/over budget; the scan completed before the job was queued), then
   `ai/factory.build_provider(config).complete(...)`, then `services.llm_usage.record_llm_usage`.
   Connection probes enqueue `ai.test_connection` (`workers/tasks/ai.py`) via
   `services.org_settings.queue_ai_connection_test` and execute in `run_ai_connection_test`.

@@ -1,6 +1,6 @@
 # 0011. Scanner contracts, pipeline receipts and bounded execution
 
-- Status: accepted
+- Status: accepted; the `triage` chain stage superseded by ADR 0029 (triage runs after the scan)
 - Date: 2026-10-26
 
 ## Context

@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from uuid import UUID
 
+import structlog
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
@@ -26,6 +27,8 @@ from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.scanners.registry import ScannerRegistry
 from attacksurf.services import jobs
 from attacksurf.services.audit import audit
+
+log = structlog.get_logger(__name__)
 
 TERMINAL = {ScanStatus.COMPLETED, ScanStatus.FAILED, ScanStatus.CANCELLED}
 _ACTIVE = (ScanStatus.QUEUED, ScanStatus.RUNNING)
@@ -268,7 +271,8 @@ def dispatch_stage(
         for asset in targets
         if asset.type in scanner.asset_types
     )
-    stages = ("checks",) if discovery else ("persist", "diff", "triage", "finalize")
+    # AI triage is not scan work: `finalize_scan` queues it once the scan is complete.
+    stages = ("checks",) if discovery else ("persist", "diff", "finalize")
     tail = tuple(_task(session, scan, stage, f"passive.{stage}") for stage in stages)
     error = _task(session, scan, "failure", "passive.fail_scan")
     scan_id = scan.id
@@ -355,7 +359,14 @@ def load_job_scan(session: Session, org_id: UUID, job_id: UUID) -> tuple[Job, Sc
     return job, scan
 
 
-def finalize_scan(session: Session, org_id: UUID, job_id: UUID, events: EventDispatcher) -> None:
+def finalize_scan(
+    session: Session, queue: TaskQueue, org_id: UUID, job_id: UUID, events: EventDispatcher
+) -> None:
+    """Complete the scan, then queue its AI triage job (ADR 0029).
+
+    Triage starts only after the completion committed, so nothing it does can change the scan.
+    A broker failure fails just the triage job (`create_job` records it) and is logged here.
+    """
     _, scan = load_job_scan(session, org_id, job_id)
     if scan.status in TERMINAL or not root_is_active(session, org_id, scan):
         session.rollback()
@@ -363,6 +374,8 @@ def finalize_scan(session: Session, org_id: UUID, job_id: UUID, events: EventDis
     pending = session.scalars(
         scoped(Job, org_id).where(
             Job.scan_id == scan.id,
+            # `triage` stays for chains published before ADR 0029; that stage now completes
+            # at once, ahead of `finalize`.
             Job.stage.in_(("discovery", "check", "persist", "diff", "triage")),
             Job.status.in_((JobStatus.QUEUED, JobStatus.RUNNING)),
         )
@@ -384,6 +397,23 @@ def finalize_scan(session: Session, org_id: UUID, job_id: UUID, events: EventDis
     audit(session, org_id, "scan.completed", target_type="scan", target_id=str(scan.id))
     session.commit()
     events.publish(event)
+    try:
+        jobs.create_job(
+            session,
+            queue,
+            org_id=org_id,
+            scan_id=event.scan_id,
+            stage="triage",
+            task_name="ai.triage",
+        )
+    except Exception as exc:
+        # The scan is already complete; nothing about triage may fail the `finalize` task.
+        log.warning(
+            "triage not queued",
+            org_id=str(org_id),
+            scan_id=str(event.scan_id),
+            error=jobs.describe_error(exc),
+        )
 
 
 def fail_scan(session: Session, org_id: UUID, scan_id: UUID) -> None:

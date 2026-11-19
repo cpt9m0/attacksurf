@@ -1,7 +1,8 @@
 """AI Celery task tests: connection test runs asynchronously with TrackedTask lifecycle."""
 
 import base64
-from uuid import uuid4
+from typing import Any
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import SecretStr
@@ -9,15 +10,16 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from attacksurf.domain.accounts import Role
 from attacksurf.domain.llm import KeySource, LLMUnavailable, ProviderKind, TokenUsage
-from attacksurf.domain.scans import JobStatus
-from attacksurf.infra.db.models import Job, LLMUsage, Membership, Org, User
+from attacksurf.domain.scans import JobStatus, ScanStatus
+from attacksurf.infra.db.models import Job, LLMUsage, Membership, Org, Scan, User
 from attacksurf.infra.db.tenancy import scoped
-from attacksurf.services import org_settings
+from attacksurf.services import jobs, org_settings
 from attacksurf.workers import runtime
 from attacksurf.workers.app import app
 from attacksurf.workers.tasks import ai as ai_tasks
 from tests.fakes import FakeLLMProvider, FakeQueue
 from tests.helpers import make_settings
+from tests.integration.factories import make_scan
 
 APP_KEY = base64.urlsafe_b64encode(b"3" * 32).decode().rstrip("=")
 
@@ -132,3 +134,127 @@ def test_ai_connection_test_task_fails_without_retrying_on_transient_llm_error(
     assert usage.error_type == "LLMUnavailable"
     assert usage.input_tokens == 10
     assert usage.output_tokens == 5
+
+
+# --- ai.triage: runs after the scan, never changes it (ADR 0029) ---------------------------
+
+
+def _ai_on(monkeypatch: pytest.MonkeyPatch, *, budget: int = 500_000) -> None:
+    configured = make_settings(
+        env="test",
+        secret_key=SecretStr("test-secret-key"),
+        llm_api_key=SecretStr("instance-key"),
+        llm_model="muse-spark-1.3",
+        llm_monthly_instance_token_budget=budget,
+    )
+    monkeypatch.setattr(runtime, "settings", lambda: configured)
+
+
+def _triage_job(db_session: Session) -> Job:
+    scan = make_scan(db_session)
+    scan.status = ScanStatus.COMPLETED
+    return jobs.create_job(
+        db_session,
+        FakeQueue(db_session),
+        org_id=scan.org_id,
+        scan_id=scan.id,
+        stage="triage",
+        task_name="ai.triage",
+    )
+
+
+def _run_triage(job: Job, org_id: UUID | None = None) -> Any:
+    return ai_tasks.triage.apply(
+        kwargs={"org_id": str(org_id or job.org_id), "job_id": str(job.id)}
+    )
+
+
+def _scan_status(db_session: Session, job: Job) -> ScanStatus:
+    scan = db_session.get(Scan, job.scan_id)
+    assert scan is not None
+    return scan.status
+
+
+def test_triage_task_is_skipped_with_a_notice_when_ai_is_off(
+    worker_env: sessionmaker[Session], db_session: Session
+) -> None:
+    job = _triage_job(db_session)  # worker_env has no LLM key or model
+
+    _run_triage(job)
+
+    db_session.expire_all()
+    assert job.status is JobStatus.SKIPPED
+    assert job.error == "AI is disabled or not configured."
+
+
+def test_triage_task_is_skipped_with_a_notice_when_the_budget_is_spent(
+    worker_env: sessionmaker[Session], db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ai_on(monkeypatch, budget=1_000)
+    job = _triage_job(db_session)
+    db_session.add(
+        LLMUsage(
+            org_id=job.org_id,
+            provider=ProviderKind.ANTHROPIC,
+            model="muse-spark-1.3",
+            purpose="triage",
+            key_source=KeySource.INSTANCE,
+            input_tokens=700,
+            output_tokens=300,
+            usage_reported=True,
+            estimated_cost_usd=None,
+            latency_ms=100,
+            success=True,
+        )
+    )
+    db_session.commit()
+
+    _run_triage(job)
+
+    db_session.expire_all()
+    assert job.status is JobStatus.SKIPPED
+    assert "budget exceeded" in (job.error or "").lower()
+    assert _scan_status(db_session, job) is ScanStatus.COMPLETED
+
+
+def test_triage_task_completes_when_ai_is_on(
+    worker_env: sessionmaker[Session], db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ai_on(monkeypatch)
+    job = _triage_job(db_session)
+
+    result = _run_triage(job)
+
+    assert result.successful()
+    db_session.expire_all()
+    assert job.status is JobStatus.COMPLETED
+
+
+def test_a_failing_triage_task_fails_only_its_job(
+    worker_env: sessionmaker[Session], db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("secret driver detail")
+
+    monkeypatch.setattr(org_settings, "enforce_triage_budget", fail)
+    job = _triage_job(db_session)
+
+    result = _run_triage(job)
+
+    assert not result.successful()
+    db_session.expire_all()
+    assert job.status is JobStatus.FAILED
+    assert job.error == "RuntimeError"  # the message never reaches the job row
+    assert _scan_status(db_session, job) is ScanStatus.COMPLETED
+
+
+def test_triage_task_never_touches_another_orgs_job(
+    worker_env: sessionmaker[Session], db_session: Session
+) -> None:
+    job = _triage_job(db_session)
+    other = make_scan(db_session, "other")
+
+    _run_triage(job, org_id=other.org_id)
+
+    db_session.expire_all()
+    assert job.status is JobStatus.QUEUED
