@@ -527,6 +527,25 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
   go through `services/scan_views.py` (frozen dataclasses; the JSONB `stats` parse
   defensively, so anything unexpected means "no diff yet"); filters are parsed by
   `web/scan_params.py` (400 on bad values), shared with the API.
+- Findings UI (`/findings`, `/findings/<id>`, `POST /findings/<id>/status`,
+  `POST /findings/bulk-status`, `GET /findings/export.csv|.json`): a paginated list filtered
+  by severity, status (`active` = open + regressed by default), rule, asset substring and root
+  domain, with an optional "new since last scan" restriction (the root's or the org's latest
+  completed scan, matched on `Finding.first_seen_scan_id`, never the mutable
+  `last_seen_scan_id`). Sorting is severity-first or last-seen-first, both with deterministic
+  tie-breakers. The detail page shows rule description/remediation/references, bounded and
+  normalized evidence (`dns_record`/`http_response`/`raw`, each capped), the timeline
+  (first/last seen, fixed, plus audited user decisions) and an AI-triage placeholder until
+  #25. Users may accept risk or mark false positive (a comment is required and stored in the
+  `AuditLog` details) and reopen (`fixed_at` cleared); scans keep ownership of
+  `fixed`/`regressed` (ADR 0027). Bulk actions are all-or-nothing, cap at 50 findings and
+  audit each changed row in the same transaction. Reads live in
+  `services/finding_views.py` (frozen dataclasses, scoped joins, exports capped at 5000,
+  a warning in the filtered results when that cap is exceeded, and CSV cells neutralized
+  against formula injection); writes live in `services/findings.py`;
+  filters are parsed by `web/finding_params.py`, shared with the API.
+- Dashboard (`/`): open findings by severity (zero-filled), the newest open findings, the
+  active asset count and each root's latest scan, all from `finding_views.get_dashboard`.
 - Settings UI (`/settings`, `POST /settings/ai`, `POST /settings/ai/clear-key`,
   `GET/POST /settings/ai/test`): admins configure `ai_enabled`, `provider`, `model`, custom
   `base_url` (SSRF-guarded), BYO API key (never rendered back, masked as `••••last4` or
@@ -541,6 +560,11 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
 - `/api/v1/assets` (session auth, writes need `X-CSRFToken`): `GET` list, `POST {"value"}` adds a
   root domain (201 / 422 / 409), `GET /<id>` detail with relations, `GET /<id>/findings`,
   `GET /<id>/scans`, `POST /<id>/archive` (admin). Errors are `{"error", "message"}`.
+- `/api/v1/findings` (same auth): `GET` lists with the UI's filters/sort/pagination (the
+  `latest_scan_id` used by "new since last scan" is included), `GET /<id>` returns the detail
+  (bounded evidence), `POST /<id>/status` and `POST /bulk-status` apply the user decisions
+  (404 for missing/foreign findings, 409 for an invalid transition, 422 for a malformed body,
+  a missing required comment or more than 50 selected findings).
 - `/api/v1/scans` (same auth): `POST {"root_asset_id", "profile"?}` (`dns_passive` default)
   queues a scan (201 with `Location`, 404 for a foreign root, 409 with the running scan's id,
   429 past the hourly quota, 422 for an unknown profile, 503 when the broker is down),

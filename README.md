@@ -51,6 +51,11 @@ own key) **triages, prioritizes, and explains** them in plain language with fix 
   (filters, search, open findings per asset) and the asset graph: domain → subdomain → CNAME → IP
 - **Scan control**: start a scan from the UI or the API, watch its progress live, cancel it,
   and review what changed (new / fixed / regressed findings, new and disappeared assets)
+- **Findings triage**: the findings list filtered by severity, status, rule, asset and root
+  domain (or only what the latest scan found), a detail page with the escaped evidence,
+  remediation and timeline, accept-risk / false-positive decisions with a required comment,
+  bulk actions, CSV/JSON export, and a dashboard with open findings by severity, the newest
+  ones and each root's last scan
 
 ### Platform
 - **AI triage**: severity adjustment, false-positive likelihood, remediation steps, exposure summaries

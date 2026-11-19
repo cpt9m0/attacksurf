@@ -1,0 +1,84 @@
+{% from "components/badges.html" import severity_badge, status_pill %}
+{% from "components/empty_state.html" import empty_state %}
+{% from "components/form.html" import csrf_field %}
+{% from "components/table.html" import data_table, pagination %}
+{% from "components/time.html" import relative_time %}
+{#- The results region of the findings list: swapped alone on filter changes, so the export
+    links and the bulk form's filter args always match what is on screen. #}
+<div class="results-toolbar">
+  <p class="results-summary" role="status">
+    {{ result.total }} finding{{ "" if result.total == 1 else "s" }}
+    {%- if flt.new_since_last_scan and result.latest_scan_id %}
+    new in <a href="{{ url_for('ui.scan_detail', scan_id=result.latest_scan_id) }}">the latest scan</a>{% if result.latest_scan_at %} ({{ relative_time(result.latest_scan_at) }}){% endif %}
+    {%- elif flt.new_since_last_scan %}
+    · no completed scan yet
+    {%- endif %}
+    {%- if filtered %} {{ "matches" if result.total == 1 else "match" }} these filters · <a href="{{ url_for('ui.findings') }}">Clear filters</a>{% endif %}
+  </p>
+  <div class="page-actions">
+    <a class="btn btn-secondary" href="{{ url_for('ui.export_findings_csv', **filter_args) }}">Export CSV</a>
+    <a class="btn btn-secondary" href="{{ url_for('ui.export_findings_json', **filter_args) }}">Export JSON</a>
+  </div>
+</div>
+
+{% if result.total > export_limit %}
+<p id="finding-export-warning" class="muted" role="status">
+  Exports include only the first {{ '{:,}'.format(export_limit) }} of {{ '{:,}'.format(result.total) }} matching findings.
+  Narrow your filters to export all results.
+</p>
+{% endif %}
+
+{% if result.items %}
+<form class="bulk-form" method="post" action="{{ url_for('ui.bulk_change_finding_status', **filter_args) }}"
+      aria-label="Bulk status change">
+  {{ csrf_field() }}
+  <div class="bulk-bar card card-body">
+    <label class="check"><input type="checkbox" data-bulk-all> Select all</label>
+    <span class="muted" role="status" data-bulk-count>None selected</span>
+    <label class="visually-hidden" for="f-bulk-status">Status change</label>
+    <select id="f-bulk-status" name="status" required>
+      <option value="">Change status…</option>
+      <option value="accepted_risk">Accept risk</option>
+      <option value="false_positive">Mark false positive</option>
+      <option value="open">Reopen</option>
+    </select>
+    <input name="comment" type="text" maxlength="2000" placeholder="Comment (required to suppress)"
+           aria-label="Comment for the status change">
+    <button type="submit" class="btn btn-secondary">Apply to selected</button>
+  </div>
+  <div class="card">
+    {% call(row, key) data_table([("select", "Select"), ("severity", "Severity"), ("title", "Finding"), ("asset", "Asset"), ("root", "Root"), ("status", "Status"), ("first_seen", "First seen"), ("last_seen", "Last seen")],
+        result.items, "Findings", "No findings", "") %}
+      {%- if key == "select" -%}
+        <input type="checkbox" name="finding_ids" value="{{ row.id }}" data-bulk-item
+               aria-label="Select {{ row.title }} on {{ row.asset_value }}">
+      {%- elif key == "severity" -%}
+        {{ severity_badge(row.severity) }}
+      {%- elif key == "title" -%}
+        <a href="{{ url_for('ui.finding_detail', finding_id=row.id) }}">{{ row.title }}</a>
+        <span class="mono muted">{{ row.rule_id }}</span>
+        {%- if row.location %} <span class="mono muted">{{ row.location }}</span>{% endif %}
+      {%- elif key == "asset" -%}
+        <a class="mono" href="{{ url_for('ui.asset_detail', asset_id=row.asset_id) }}">{{ row.asset_value }}</a>
+      {%- elif key == "root" -%}
+        {%- if row.root_id %}<a class="mono" href="{{ url_for('ui.asset_detail', asset_id=row.root_id) }}">{{ row.root_value }}</a>{% else %}<span class="muted">Root</span>{% endif %}
+      {%- elif key == "status" -%}
+        {{ status_pill(row.status) }}
+      {%- elif key == "first_seen" -%}
+        {{ relative_time(row.first_seen) }}
+      {%- elif key == "last_seen" -%}
+        {{ relative_time(row.last_seen) }}
+      {%- endif -%}
+    {% endcall %}
+  </div>
+</form>
+{{ pagination(result.page, result.pages, "ui.findings", **filter_args) }}
+{% else %}
+<div class="card">
+  {%- if filtered %}
+  {{ empty_state("No matching findings", "Try other filters, or clear them to see every finding.", icon_name="bug") }}
+  {%- else %}
+  {{ empty_state("No findings yet", "Findings are security issues detected by scans, triaged by AI and ranked by severity.", icon_name="bug") }}
+  {%- endif %}
+</div>
+{% endif %}

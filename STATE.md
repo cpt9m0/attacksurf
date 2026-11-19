@@ -2,52 +2,44 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-18 · **Branch:** `84-sandbox-runner-client` · **Issue:** #84 (analysis sandbox)
+**Updated:** 2026-11-19 · **Branch:** `22-findings-ui` · **Issue:** #22 / PR #184
 
 ## Status
-PR 3d (worker-side sandbox client) is done locally and not pushed; no PR is open. It was rebased
-onto `origin/main` (`022e53e`), which has PR 3c (#172, squash-merged); only the 3 PR 3d commits are
-on top. `origin/main` (including #24 / #182, org AI settings) was merged in afterwards; the merge
-touched `tests/unit/test_config.py` (kept both sides' tests) and the full suite has not been re-run.
+PR #184 addresses the three Codex review threads. The P1 browser-fixture finding was already
+fixed in `d6b3789`; `3994f9a` preserves DNS resolver evidence and `9f73477` warns when exports
+are capped. Head `e355e39` is pushed; all eight CI checks pass and the PR is mergeable. Replies
+are posted on all three review threads; they stay unresolved for the reviewer.
 
 ## Last task
-- `infra/sandbox.py`: `LauncherSandboxRunner` (3 MiB capped, strictly validated reply; only 503 or
-  unreachable is retried; fixed error text).
-- `SANDBOX_LAUNCHER_URL` setting (`SecretStr`, plain `http://host[:port]`), `compose.yaml` and
-  `.env.example` entries, `workers.runtime.sandbox_runner()` wired into `scanner_gate()`.
-- 3c fix: a proxy 403 (ownership denial) is unconfirmed cleanup, so `sandbox_cleanup_failed`
-  fires instead of being suppressed.
-- Docs, CHANGELOG and this file synced, including the tenant-safety note.
+- `finding_views._evidence_row`: DNS evidence now falls back to the resolver's singular `value`
+  and appends its ordered `cname_chain`, so HTML and `/api/v1/findings/<id>` keep the address.
+- `web/ui._findings_page` passes `EXPORT_LIMIT`; `pages/_finding_results.html` warns when the
+  filtered `result.total` exceeds it. The download keeps its `X-Export-Truncated` header.
+- Regression tests cover A/AAAA API bodies, the HTML evidence block, the exact-limit boundary,
+  HTMX results and a truncated CSV.
+- Docs updated (`DESIGN.md`, `docs/architecture.md`, `CHANGELOG.md`, this file).
 
 ## Next step
-1. Check the `.env.example` line: it says port 8080, the launcher's default is 8791.
-2. Run `pre-pr-check`, push 3d, open its draft PR ("Merge order: 3d of #84"; 3c is merged).
-3. Then PR 4/5: the analysis worker and the first analyzer image (`sandbox-images.lock`).
+Reviewer resolves the three threads and merges PR #184; then pick the next unblocked issue
+(AI triage #25 builds on the finding detail's AI panel).
 
 ## Open threads
-- Nothing enforces "the artifact belongs to the job's org" before `SandboxRunner.run`: the scope
-  guard only checks the analyzer allowlist. The first analysis scanner must `get_scoped` the
-  artifact first and add a tenant-isolation test (docs/security.md, Sandbox launcher).
-- After a real proxy restart a stray container is alerted on but not removed. Propose a follow-up
-  issue: sweep leftover `attacksurf-*` containers after a launcher or proxy crash (before #92).
-- `http.client` timeouts in the launcher's proxy client apply per socket operation, not per run.
-- The full test suite has not been run on this branch; `stash@{0}` and the
-  `backup-3d-pre-rebase` branch are leftovers from the 3d rebase and can be deleted.
-- The #84 plans are in `docs/plans/84-analysis-sandbox/` (PR #180); issue #84 is the source of
-  truth for the PR split.
+- P1 is fixed but unresolved on GitHub: cite `d6b3789` and the database-free layout run
+  (14 passed) rather than changing `web-e2e` or adding PostgreSQL.
+- The export warning is a render-time hint; the download-time header/JSON flag stays
+  authoritative if the set changes before download.
+- A per-finding mutable status note still needs a migration + ADR; comments remain audit history.
+- The PR is larger than the ~400-line guideline; the Codex plan proposed four slices.
 
 ## Notes for the next agent
-- The launcher copies proxy constants and `domain.scanners.MAX_OUTPUT_BYTES` on purpose (it may
-  not import them); a parity test guards each copy. Don't "fix" that by importing.
-- `sandbox-images.lock` does not exist yet (the first analyzer PR adds it); the catalog is empty,
-  so every `POST /runs` is a 404 and local runs need a `{}` lock file.
-- The 3 MiB reply cap assumes stdout is at most 2 MiB (base64 about 2.67 MiB).
-- Compose has no launcher or proxy service yet (ADR 0016); `SANDBOX_LAUNCHER_URL` stays empty there.
-- ADR numbers move fast: check `origin/main` and open branches for the next free number first.
-- Production plugins are registered explicitly in `src/attacksurf/app.py` and
-  `src/attacksurf/workers/app.py`; a new plugin needs both imports.
-- Tests that need Redis behavior use `tests.fakes.FakeCache`.
-- DB tests need `TEST_DATABASE_URL`; the dev Compose stack exposes PostgreSQL on
-  `127.0.0.1:5432` with an `attacksurf_test` database (`make test` runs them in `web`).
-- The ruff format hook strips imports that aren't used yet: add imports together with their
-  first use.
+- Local checks after the fixes: full suite 3033 passed / 20 skipped, coverage 95.74%;
+  ruff/pyright/import-linter/pre-commit clean; browser layout 14 passed with
+  `env -u TEST_DATABASE_URL RUN_WEB_E2E=1`. Remote CI on `e355e39` is green.
+- DB tests need `TEST_DATABASE_URL`; the throwaway `attacksurf-test-db` on port 5433 is running.
+- `uv run ruff format --check .` also sees untracked `.hermes/plans/*.md` code blocks; CI and
+  pre-commit only see tracked files. Use `ruff format --check src tests` locally.
+- Unit and browser-layout tests stub `finding_views`; new DB-backed pages need stubs in both
+  `tests/unit/web/conftest.py` and `tests/e2e/web/conftest.py`.
+- `EXPORT_LIMIT` (5000), `MAX_EVIDENCE` (20), `MAX_STATUS_COMMENT` (2000); CSV cells starting
+  with `= + - @` (and tab/CR) get an apostrophe prefix.
+- AI triage is still a placeholder (#25); nothing calls an LLM from a web request.
