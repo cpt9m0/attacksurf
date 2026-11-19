@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Recurring scans (#27): one per-root schedule (`0012_add_scan_schedules`), weekly by default
+  for new domains (`SCAN_DEFAULT_FREQUENCY`), a minute beat tick that claims due rows with
+  `FOR UPDATE SKIP LOCKED` and starts the read-only `dns_scheduled` profile through
+  `start_scan`, and an admin-only card on the root's overview to change or turn it off.
 - Findings UI (#22): a filterable, sortable findings list with bulk status actions and
   CSV/JSON export that warns when the download cap is exceeded; a detail page with
   escaped evidence (DNS records, HTTP snippets, raw JSON), remediation, references,

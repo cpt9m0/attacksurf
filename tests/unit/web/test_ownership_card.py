@@ -15,7 +15,7 @@ from attacksurf.domain.verification import (
     VerificationMethod,
     VerificationStatus,
 )
-from attacksurf.services import asset_views, verifications
+from attacksurf.services import asset_views, scan_schedules, verifications
 from attacksurf.web import ui
 from tests.unit.web.conftest import make_session_user
 
@@ -50,6 +50,7 @@ def stubs(monkeypatch: pytest.MonkeyPatch, asset_id: object) -> dict[str, list[d
         "get_asset_detail",
         lambda *_a, **_k: asset_views.AssetDetail(row, (), (), 0),
     )
+    monkeypatch.setattr(scan_schedules, "get_schedule", lambda *_a, **_k: None)
     monkeypatch.setattr(verifications, "read_verification", lambda *_a, **_k: None)
     monkeypatch.setattr(
         verifications,

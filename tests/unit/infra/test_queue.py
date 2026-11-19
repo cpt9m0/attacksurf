@@ -138,6 +138,16 @@ def test_beat_schedules_the_artifact_purge_every_ten_minutes() -> None:
     assert len(entry["schedule"].hour) == 24
 
 
+def test_beat_dispatches_recurring_scans_every_minute() -> None:
+    app = create_celery(make_settings(redis_url=SecretStr("redis://redis.test:6379/2")))
+
+    entry = app.conf.beat_schedule["enqueue-due-scans"]
+
+    assert entry["task"] == "passive.enqueue_due_scans"
+    assert entry["schedule"].minute == set(range(60))
+    assert entry["schedule"].hour == set(range(24))
+
+
 def test_every_beat_entry_names_a_registered_task_on_a_consumed_queue() -> None:
     worker_app.loader.import_default_modules()
 

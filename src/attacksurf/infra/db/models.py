@@ -37,7 +37,7 @@ from attacksurf.domain.findings import (
 )
 from attacksurf.domain.llm import KeySource, ProviderKind
 from attacksurf.domain.rules import MAX_RULE_ID_LENGTH
-from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger
+from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger, ScheduleFrequency
 from attacksurf.domain.verification import MAX_TOKEN_LENGTH, VerificationMethod, VerificationStatus
 from attacksurf.infra.db.base import Base, TenantScoped, Timestamps, UUIDPrimaryKey
 
@@ -252,6 +252,25 @@ class Artifact(TenantScoped, Timestamps, Base):
     key_envelope: Mapped[bytes | None] = mapped_column(LargeBinary(61))
     delete_after: Mapped[datetime]
     deleted_at: Mapped[datetime | None]
+
+
+class ScanSchedule(TenantScoped, Timestamps, Base):
+    """When to next scan one root on its own; `enabled=False` keeps the saved preference."""
+
+    __tablename__ = "scan_schedules"
+    __table_args__ = (
+        UniqueConstraint("org_id", "root_asset_id"),
+        _same_org_fk("root_asset_id", "assets"),
+        CheckConstraint("enabled = (next_run_at IS NOT NULL)", name="enabled_matches_due"),
+        # The minute tick's partial scan: only enabled rows carry a due time.
+        Index("ix_scan_schedules_due", "next_run_at", "id", postgresql_where=text("enabled")),
+    )
+
+    root_asset_id: Mapped[UUID]
+    profile: Mapped[str] = mapped_column(String(50))  # validated in code, like Scan.profile
+    frequency: Mapped[ScheduleFrequency] = mapped_column(_str_enum(ScheduleFrequency, "frequency"))
+    next_run_at: Mapped[datetime | None]
+    enabled: Mapped[bool]
 
 
 class Scan(TenantScoped, Timestamps, Base):

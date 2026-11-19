@@ -65,7 +65,11 @@ def add_asset() -> Response:
     session = get_session()
     try:
         asset = assets_service.add_root_domain(
-            session, _org_id(), value, actor_id=current_user.session_user.user_id
+            session,
+            _org_id(),
+            value,
+            actor_id=current_user.session_user.user_id,
+            scan_default_frequency=get_settings().scan_default_frequency,
         )
     except AssetError as exc:
         return _asset_error(exc)
