@@ -116,11 +116,15 @@ Specs (visuals) stay TBD.
 | Flash / toast | success / error / info | TBD |
 | Progress | scan stage progress (`pages/_scan_progress.html`, polled via HTMX): a "N of M jobs finished" line with `role="status"`, a native `<progress>` element, a per-job table (stage, scanner, asset, status pill, sanitized error, finished time), the new/fixed/regressed/observed finding counts by severity with new/disappeared asset links (each bucket capped at 100 rows with a "Showing N of M" notice). The section polls itself (`hx-get` to `ui.scan_progress`, `hx-trigger="every 2s"`, `hx-target="this"`, `hx-swap="outerHTML"`, `hx-sync="this:replace"`, `aria-busy`); once the scan is terminal the attributes are gone, so polling stops and the final swap reveals the diff. The same response carries out-of-band swaps (`hx-swap-oob`) for the status pill, the meta block and the cancel action outside the section; the cancel action (behind `confirm_dialog`, secondary variant) lives outside the polled subtree, so a poll never closes the dialog mid-read. The scan detail page includes the same fragment for first paint | Implemented in #21 (visual spec TBD) |
 | Code / evidence block | monospace, escaped, copy button, size-capped with "show more" | TBD |
-| AI panel | AI triage output, clearly labeled as AI-generated, shows model + prompt version | TBD |
+| Findings list | filter bar (severity, status, root, rule, asset substring, sort, "new since last scan") swapping only the results region; columns select / severity / finding (title + rule + location) / asset / root / status / first seen / last seen; export CSV/JSON links live in the swapped region so they always match the filters. The results region warns next to the export actions when the current filtered total exceeds the download cap. #22 | Implemented in #22 (visual spec TBD) |
+| Finding detail | breadcrumb, severity + status, meta (`dl.meta`: asset, root, rule, location, confidence, scanner, dates, scan count), description, evidence cards (one per record: structured fields + `<pre class="evidence-body">`, visibly truncated when capped), remediation, references, AI panel, timeline, status form. Every scan-derived value stays autoescaped. #22 | Implemented in #22 (visual spec TBD) |
+| Bulk action bar | checkbox selection inside a form wrapping the table, a "Select all" checkbox and live count (progressive enhancement in `static/js/app.js`, event delegation on `.bulk-form`; the strict CSP build does not run Alpine handlers on the swapped table), status select, comment input and submit. The server owns the 50-item cap and all-or-nothing semantics; a filter swap clears the selection. #22 | Implemented in #22 (visual spec TBD) |
+| AI panel | AI triage output, clearly labeled as AI-generated, shows model + prompt version; until #25 the finding page shows a muted placeholder and never calls an LLM in a request | TBD |
 | Empty state | illustration/icon + one-line explanation + primary action | TBD |
 | Modal / confirm | destructive actions (archive asset, accept risk): `confirm_dialog(id, trigger_label, title, message, action, confirm_label, trigger_variant="danger", confirm_variant="danger")`, a native `<dialog>` opened by `Alpine.data("confirmDialog")`; focus starts on Cancel, Escape closes, confirm POSTs with CSRF. Keep the danger variant for anything that removes data; reversible or recoverable actions (rotate a token) use `secondary` | TBD |
 | DNS chain / records | monospace `asset → CNAME → IP` chain with `overflow-wrap:anywhere`, then a data table of record type → values; non-public addresses called out in muted text. All values are scan data and stay autoescaped | TBD |
 | Ownership card | proof of domain control: status badge, the exact TXT record in a `.copy-field` with a copy button (`Alpine.data("copyField")`, the code block stays selectable without the Clipboard API), and admin-only actions (start / verify now / rotate behind a confirm). Subdomains show their root's record read-only. A check queued past the grace with no consumer renders `Stalled` with a queue (not record) explanation and stops polling (#174) | TBD |
+| Scheduled rescans card | overview card on an active root: status line (`Weekly. Next run: <exact UTC time>` or `Scheduling is off.`), and for admins a plain POST form with a labeled `enabled` checkbox, a `Daily`/`Weekly` `select_field`, and a `Save schedule` secondary button. Members see the status only; no JS, no polling. Absolute times use `<time datetime>` plus the `exact_time` filter because a future due date reads as "just now" in the relative macro (#27) | TBD |
 
 ## 6. Interaction patterns (HTMX)
 
@@ -140,7 +144,14 @@ Specs (visuals) stay TBD.
   inputs keep focus while typing; search fires on `input changed delay:300ms`. Without JS it
   is a plain GET form. Put `hx-sync="this:replace"` on the form: the search box sends its own
   requests and inherits it (`this` resolves to the form), so an older response can't overwrite
-  newer results. Same on tab bars.
+  newer results. Same on tab bars. The findings list's export links and bulk form live inside
+  the swapped region for the same reason: they must carry the filters currently on screen.
+- Bulk actions (findings): a form wraps the results table; checkboxes are `name="finding_ids"`
+  with `data-bulk-item`, the bar posts one status plus an optional comment to a URL carrying the
+  current filters. "Select all" and the live count are plain event delegation in
+  `static/js/app.js` (not Alpine: the CSP build does not reliably run handlers on the swapped
+  table), and they are only a convenience; the server enforces the cap, the required
+  suppression comment and all-or-nothing application.
 - Tabs on detail pages are links (`?tab=…`, `aria-current="page"`); the tab bar lives inside the
   swapped region so its state updates with the content.
 - Inline-validated forms swap themselves (`hx-target="this"`, 422 with the field error) and set

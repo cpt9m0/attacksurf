@@ -1,7 +1,7 @@
 {% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
 {% from "components/badges.html" import severity_badge, status_pill %}
 {% from "components/confirm.html" import confirm_dialog %}
-{% from "components/form.html" import csrf_field %}
+{% from "components/form.html" import csrf_field, select_field %}
 {% from "components/table.html" import data_table %}
 {% from "components/time.html" import relative_time %}
 {% from "components/verification.html" import ownership_badge, ownership_card %}
@@ -79,6 +79,32 @@
   {#- Only roots hold a proof; on a subdomain this shows the root's proof, read-only. -#}
   {%- if asset.type in ("domain", "subdomain") %}
   {{ ownership_card(view_id, proof_root_value, ownership, can_manage_ownership, checking, stalled_since) }}
+  {%- endif %}
+  {%- if show_schedule %}
+  <section class="card" aria-labelledby="schedule-title">
+    <h2 class="card-title" id="schedule-title">Scheduled rescans</h2>
+    <div class="card-body">
+      <p class="muted">Recurring scans run read-only DNS configuration checks.</p>
+      {%- if schedule and schedule.enabled %}
+      <p>{{ schedule.frequency | capitalize }}. Next run:
+        <time datetime="{{ schedule.next_run_at.isoformat() }}">{{ schedule.next_run_at | exact_time }}</time>.
+      </p>
+      {%- else %}
+      <p>Scheduling is off.</p>
+      {%- endif %}
+      {%- if can_manage_schedule %}
+      <form method="post" action="{{ url_for('ui.update_schedule', asset_id=asset.id) }}">
+        {{ csrf_field() }}
+        <div class="field">
+          <label><input type="checkbox" name="enabled" value="1"{% if schedule and schedule.enabled %} checked{% endif %}> Enable scheduled rescans</label>
+        </div>
+        {{ select_field("frequency", "Frequency", [("daily", "Daily"), ("weekly", "Weekly")],
+                        selected=schedule.frequency if schedule else "weekly") }}
+        <button type="submit" class="btn btn-secondary">Save schedule</button>
+      </form>
+      {%- endif %}
+    </div>
+  </section>
   {%- endif %}
   {%- if detail.dns %}
   <section class="card" aria-labelledby="dns-title">

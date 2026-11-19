@@ -142,6 +142,11 @@ Scans (#21): `SCAN_MAX_STARTS_PER_HOUR` caps scan starts per organization per pr
 trailing hour (default 10); failed starts count too. Upload scans (`code`, `binary_static`)
 have their own profiles and limiter.
 
+Recurring scans (#27): `SCAN_DEFAULT_FREQUENCY` seeds a schedule for **new** root domains
+only: `weekly` (default), `daily`, or `off`. Existing roots keep their saved setting; an
+admin turns it on or off on the root's overview, and the default does not change domains
+that already exist.
+
 ### DNS resolution (#16)
 
 `DNS_RESOLVERS` is a comma-separated list of public recursive resolvers (default

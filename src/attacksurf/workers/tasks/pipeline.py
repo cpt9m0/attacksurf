@@ -10,7 +10,7 @@ from attacksurf.domain.rules import RULES
 from attacksurf.domain.scanners import ScannerError
 from attacksurf.infra.events import dispatcher
 from attacksurf.infra.queue import CeleryTaskQueue
-from attacksurf.scanners.profiles import PROFILES
+from attacksurf.scanners.profiles import WORKER_PROFILES
 from attacksurf.scanners.registry import registry
 from attacksurf.services import jobs, org_settings, scan_diff, scans
 from attacksurf.services.scanner_jobs import run_check
@@ -67,7 +67,7 @@ def _dispatch(org_id: str, job_id: str) -> None:
             UUID(org_id),
             UUID(job_id),
             registry=registry,
-            profiles=PROFILES,
+            profiles=WORKER_PROFILES,
         )
 
 
@@ -83,7 +83,7 @@ def scan(self: PipelineTask, *, org_id: str, job_id: str) -> None:
             events=dispatcher,
             catalog=RULES,
             retry_allowed=self.request.retries < (self.max_retries or 0),
-            profiles=PROFILES,
+            profiles=WORKER_PROFILES,
         )
 
 

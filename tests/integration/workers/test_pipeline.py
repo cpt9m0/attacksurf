@@ -47,7 +47,7 @@ def pipeline_env(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> InProc
     monkeypatch.setattr(runtime, "session_factory", lambda: factory)
     monkeypatch.setattr(runtime, "scanner_gate", FixtureGate)
     monkeypatch.setattr(pipeline, "registry", fixture_registry())
-    monkeypatch.setattr(pipeline, "PROFILES", PROFILES)
+    monkeypatch.setattr(pipeline, "WORKER_PROFILES", PROFILES)
     monkeypatch.setattr(pipeline, "RULES", {RULE.id: RULE})
     events = InProcessDispatcher()
     monkeypatch.setattr(pipeline, "dispatcher", events)

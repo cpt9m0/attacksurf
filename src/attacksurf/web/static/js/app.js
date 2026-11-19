@@ -109,3 +109,33 @@ document.addEventListener("alpine:init", function () {
     };
   });
 });
+
+// pages/_finding_results.html: bulk selection count and "select all". This is deliberately
+// plain DOM code, not an Alpine component: the strict CSP build does not reliably run event
+// handlers on the re-rendered table, and selection is only a progressive enhancement (the server
+// owns the cap, the required comment and all-or-nothing application).
+document.addEventListener("change", function (event) {
+  "use strict";
+  var target = event.target;
+  if (!(target instanceof HTMLInputElement) || target.type !== "checkbox") return;
+  var form = target.closest(".bulk-form");
+  if (!form) return;
+  var items = form.querySelectorAll("input[data-bulk-item]");
+  if (target.matches("[data-bulk-all]")) {
+    for (var i = 0; i < items.length; i++) {
+      items[i].checked = target.checked;
+    }
+  }
+  var selected = form.querySelectorAll("input[data-bulk-item]:checked").length;
+  var count = form.querySelector("[data-bulk-count]");
+  if (count) {
+    count.textContent =
+      selected === 0
+        ? "None selected"
+        : selected + (selected === 1 ? " finding selected" : " findings selected");
+  }
+  var all = form.querySelector("[data-bulk-all]");
+  if (all) {
+    all.checked = items.length > 0 && selected === items.length;
+  }
+});

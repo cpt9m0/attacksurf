@@ -203,7 +203,8 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 | `Artifact` | an uploaded or fetched repo/binary of an asset, stored encrypted (#85, ADR 0028): `kind` (`repo`/`binary`), plaintext `sha256` + `size_bytes`, `storage_key` (`{org_id}/{artifact_id}`), `key_envelope` (the per-artifact AES key wrapped by `APP_ENCRYPTION_KEY`; NULL exactly when `deleted_at` is set, enforced by a CHECK), `delete_after`. `services.artifacts`: `store_artifact` (streams through the `domain.artifacts.ArtifactStore` port, per-artifact limit and per-org quota, audited), `open_artifact`, `stage_artifact`, `delete_artifact` (file removed, key erased, row kept), `purge_expired` (beat, every 10 min; a failed deletion keeps the key and is retried behind everything still waiting). `infra.storage.LocalArtifactStore` writes ciphertext to `ARTIFACT_STORE_ROOT/{org}/{artifact}` (0700/0600, temp file + `os.replace`; staging and deletion of one artifact are serialised by a `flock` on `{artifact}.lock` there) and stages plaintext for one sandbox run at `SANDBOX_ARTIFACT_ROOT/{artifact}/artifact`; the two roots may not overlap. Deleting the asset or org cascades the row, which erases the key. Nothing stages yet: the caller is #84's decision |
 | `LLMUsage` | one row per finished LLM call, successful or not: provider, model, `purpose`, `key_source` (`org`/`instance`), input/output tokens, `usage_reported`, `estimated_cost_usd` (snapshotted from `ai/pricing.py` list prices; NULL for an unpriced model or unreported usage), latency (NULL on failure), `success` + `error_type` (class name only). Append-only; indexed by `(org_id, created_at)` for #24's monthly instance-key cap. Written by `services.llm_usage.record_llm_usage` |
 | `OrgSettings` | one row per org (`UniqueConstraint("org_id")`): `ai_enabled`, `provider`, `model`, `base_url`, AES-256-GCM encrypted API key (`SecretCipher`, AAD `org_id`) + `api_key_last4`, optional `monthly_token_budget`. Written by `services.org_settings` |
-| `ScanSchedule`, `AuditLog` | continuous monitoring and an append-only audit trail (`services.audit.audit()`, written in the same transaction as the change) |
+| `ScanSchedule` | one recurring-scan preference per root (`UniqueConstraint("org_id", "root_asset_id")`, same-org FK): `profile` (only `dns_scheduled`), `frequency` (`daily`/`weekly`), `enabled` + `next_run_at` (a CHECK keeps them consistent), indexed for the minute tick. `services.scan_schedules.seed_schedule` inserts the registration default (`SCAN_DEFAULT_FREQUENCY`, weekly unless configured otherwise) without overwriting a restored root's saved preference; `save_schedule`/`get_schedule` are the tenant-scoped read/write use cases. Not a history table: scans keep the trigger (`schedule`) and outcome |
+| `AuditLog` | append-only trail of security-relevant actions (`services.audit.audit()`, written in the same transaction as the change) |
 
 ## Scan pipeline
 
@@ -232,7 +233,11 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   selects discovery/check plugins by name. `dns_passive` runs `dns.discovery.ct` for discovery
   and `dns.resolve`, `dns.email`, `dns.takeover`, `dns.takeover.http`, `dns.dnssec`, `dns.ns`,
   `dns.mx`, `dns.caa`, `dns.whois` and `dns.axfr` for checks, with `max_discovered_assets=1000`;
-  empty/unknown profiles are rejected. Profiles cannot route to
+  empty/unknown profiles are rejected. `WORKER_PROFILES` also carries the background-only
+  `dns_scheduled` profile (`dns.resolve`, `dns.email`, `dns.dnssec`) for recurring scans,
+  with the same `MAX_DISCOVERED_ASSETS` cap as `dns_passive` because `dns.resolve` still emits
+  new IP/CNAME assets; it is deliberately absent from `PROFILES`, so no UI/API route can select
+  it. Profiles cannot route to
   the reserved `active`/`analysis` queues before those workers are implemented.
 - **CT discovery (#15, ADR 0022):** `dns.discovery.ct` queries crt.sh's JSON endpoint and falls
   back to Cert Spotter when crt.sh fails, times out or truncates. Names are normalized, filtered
@@ -309,6 +314,16 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   discovery on the root, then checks on the active root and its known direct children, filtered
   by each plugin's supported asset types. Continuations use immutable signatures and tracked
   jobs: `checks`, then `persist → diff → triage → finalize`. Batch rows commit before messages.
+- **Recurring scans (#27):** `passive.enqueue_due_scans` runs every minute from beat.
+  `services.scan_schedules.enqueue_due_scans` reads due rows one org at a time (tenant-scoped
+  queries), keeps the globally oldest 20 per delivery, and for each locks the root and then the
+  schedule with `FOR UPDATE SKIP LOCKED`. It advances `next_run_at` in the same transaction as
+  `start_scan` (`triggered_by=schedule`), so a redelivered tick starts one occurrence at most.
+  A root with a queued/running scan consumes its occurrence without starting another; a root
+  over the hourly quota defers the occurrence by an hour. Archiving suspends the schedule (the
+  root is inactive); re-adding restores it with its saved preference, and a due root then runs
+  on the next tick. The first run is one interval plus a stable 0–599 s per-root jitter after
+  registration or an actual preference change; re-saving the same preference keeps the clock.
 - Each scanner task normalizes/persists before its chord receipt: discovery assets are ready
   for fan-out, and Redis sees only IDs/`None`, not scan evidence. The `persist` stage is a
   barrier. `services.scan_results.persist_scan_output` composes asset/relation upserts, rule
@@ -538,6 +553,25 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
   go through `services/scan_views.py` (frozen dataclasses; the JSONB `stats` parse
   defensively, so anything unexpected means "no diff yet"); filters are parsed by
   `web/scan_params.py` (400 on bad values), shared with the API.
+- Findings UI (`/findings`, `/findings/<id>`, `POST /findings/<id>/status`,
+  `POST /findings/bulk-status`, `GET /findings/export.csv|.json`): a paginated list filtered
+  by severity, status (`active` = open + regressed by default), rule, asset substring and root
+  domain, with an optional "new since last scan" restriction (the root's or the org's latest
+  completed scan, matched on `Finding.first_seen_scan_id`, never the mutable
+  `last_seen_scan_id`). Sorting is severity-first or last-seen-first, both with deterministic
+  tie-breakers. The detail page shows rule description/remediation/references, bounded and
+  normalized evidence (`dns_record`/`http_response`/`raw`, each capped), the timeline
+  (first/last seen, fixed, plus audited user decisions) and an AI-triage placeholder until
+  #25. Users may accept risk or mark false positive (a comment is required and stored in the
+  `AuditLog` details) and reopen (`fixed_at` cleared); scans keep ownership of
+  `fixed`/`regressed` (ADR 0027). Bulk actions are all-or-nothing, cap at 50 findings and
+  audit each changed row in the same transaction. Reads live in
+  `services/finding_views.py` (frozen dataclasses, scoped joins, exports capped at 5000,
+  a warning in the filtered results when that cap is exceeded, and CSV cells neutralized
+  against formula injection); writes live in `services/findings.py`;
+  filters are parsed by `web/finding_params.py`, shared with the API.
+- Dashboard (`/`): open findings by severity (zero-filled), the newest open findings, the
+  active asset count and each root's latest scan, all from `finding_views.get_dashboard`.
 - Settings UI (`/settings`, `POST /settings/ai`, `POST /settings/ai/clear-key`,
   `GET/POST /settings/ai/test`): admins configure `ai_enabled`, `provider`, `model`, custom
   `base_url` (SSRF-guarded), BYO API key (never rendered back, masked as `••••last4` or
@@ -552,6 +586,11 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
 - `/api/v1/assets` (session auth, writes need `X-CSRFToken`): `GET` list, `POST {"value"}` adds a
   root domain (201 / 422 / 409), `GET /<id>` detail with relations, `GET /<id>/findings`,
   `GET /<id>/scans`, `POST /<id>/archive` (admin). Errors are `{"error", "message"}`.
+- `/api/v1/findings` (same auth): `GET` lists with the UI's filters/sort/pagination (the
+  `latest_scan_id` used by "new since last scan" is included), `GET /<id>` returns the detail
+  (bounded evidence), `POST /<id>/status` and `POST /bulk-status` apply the user decisions
+  (404 for missing/foreign findings, 409 for an invalid transition, 422 for a malformed body,
+  a missing required comment or more than 50 selected findings).
 - `/api/v1/scans` (same auth): `POST {"root_asset_id", "profile"?}` (`dns_passive` default)
   queues a scan (201 with `Location`, 404 for a foreign root, 409 with the running scan's id,
   429 past the hourly quota, 422 for an unknown profile, 503 when the broker is down),
@@ -580,7 +619,8 @@ The `Dockerfile` has two targets: `dev` (dev deps, Flask debug server, source bi
 service images are pinned by digest and updated by Dependabot. The dev `compose.yaml` runs `web`,
 `postgres`, `redis`, the Celery workers `worker-passive` (`-Q passive -c 4`) and `worker-ai`
 (`-Q ai -c 2`) with `inspect ping` healthchecks, and `beat` (broker-connection healthcheck;
-schedules: ownership re-verification hourly, artifact purge every 10 minutes). Encrypted
+schedules: ownership re-verification hourly, artifact purge every 10 minutes, due scan
+schedules every minute). Encrypted
 artifacts live in the `artifact-store` volume. Each queue has its own exchange and routing key.
 Dev `make up` builds images, waits for PostgreSQL/Redis, runs `make migrate`, then starts
 application services (ADR 0012). Migration failure stops startup; application processes never
