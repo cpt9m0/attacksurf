@@ -113,6 +113,8 @@ class Settings(BaseSettings):
     llm_base_url: SecretStr | None = None
     llm_api_key: SecretStr | None = None
     llm_monthly_instance_token_budget: int = Field(default=500_000, ge=0)
+    # Also send `info` findings to AI triage (#25, ADR 0029); off to save tokens.
+    llm_triage_include_info: bool = False
     # Comma-separated exact hostnames (e.g. localhost,ollama.internal) permitted for self-hosted
     # org LLM base URLs, bypassing the public-HTTPS SSRF guard.
     llm_allowed_base_hosts: str = ""

@@ -43,14 +43,17 @@ The forces:
   never the scan.
 - **One LLM call per job.** `ai.triage` coordinates: it runs the budget gate
   (`enforce_triage_budget`, which returns the resolved `LLMConfig`, or `None` after skipping
-  the job), selects the batches, and starts a workflow (`jobs.enqueue_workflow`) of one
-  `ai.triage_batch` job per batch with an `ai.triage_done` tail. Each batch job makes one
-  `complete()` call, so it fits the task time limit, and a Celery retry repeats only that call.
-  Batch jobs return a chord receipt even when they fail, as scanner jobs do, so one failed batch
-  never blocks the tail. Redis carries IDs only (ADR 0011): a batch job loads its findings from
-  the database.
-- **Batches are per asset.** A batch holds one asset's findings, at most
-  `MAX_FINDINGS_PER_BATCH = 20`; larger sets are split. Triage selects the active findings
+  the job), lists the assets with untriaged findings, and starts a workflow
+  (`jobs.enqueue_workflow`) of one `ai.triage_batch` job per asset with an `ai.triage_done`
+  tail. Each batch job makes one `complete()` call, so it fits the task time limit, and a
+  Celery retry repeats only that call. Batch jobs return a chord receipt even when they fail, as
+  scanner jobs do, so one failed batch never blocks the tail. Redis carries IDs only
+  (ADR 0011): a batch job names its asset in `Job.asset_id` and loads the findings from the
+  database.
+- **One batch per asset per scan.** A batch holds one asset's most severe untriaged findings,
+  at most `MAX_FINDINGS_PER_BATCH = 20`. Findings past the cap are sent by a later scan, when
+  the ones judged now are cache hits; a job has no field to name a chunk, and with 25 DNS rules
+  an asset rarely has more than 20 findings. Triage selects the active findings
   (`open`, `regressed`) this scan observed, from its `finding_observations` rows and never from
   `Finding.last_seen_scan_id`. `info` findings are included only when the instance setting
   `LLM_TRIAGE_INCLUDE_INFO` is true (default false).

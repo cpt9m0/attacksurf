@@ -163,7 +163,8 @@ organisation details empty. Reverse DNS is always attempted for resolved address
 
 `LLM_PROVIDER` (`anthropic` or `openai_compat`), `LLM_MODEL`, `LLM_BASE_URL` and `LLM_API_KEY`
 are the instance config: orgs without their own key use it (ADR 0019), capped per org by
-`LLM_MONTHLY_INSTANCE_TOKEN_BUDGET` (default `500000` tokens per UTC month). Orgs can configure
+`LLM_MONTHLY_INSTANCE_TOKEN_BUDGET` (default `500000` tokens per UTC month). AI triage skips
+`info` findings unless `LLM_TRIAGE_INCLUDE_INFO=true` (ADR 0029). Orgs can configure
 their own provider, model, optional `base_url` and BYO API key under `/settings` when
 `APP_ENCRYPTION_KEY` is configured (`APP_ENCRYPTION_OLD_KEYS` accepts comma-separated prior keys
 for rotation decryption). Custom org `base_url` hosts must be HTTPS and resolve to public IPs

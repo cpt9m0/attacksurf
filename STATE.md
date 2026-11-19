@@ -5,7 +5,7 @@
 **Updated:** 2026-11-19 · **Branch:** `25-ai-triage` · **Issue:** #25 (AI triage stage)
 
 ## Status
-In progress: commits 1-5 of 9 on draft PR #186 (CI green through commit 4 and the merge of
+In progress: commits 1-6 of 9 on draft PR #186 (CI green through commit 4 and the merge of
 `origin/main` with #22 findings UI and #27 scheduled rescans).
 
 ## Last task
@@ -15,23 +15,22 @@ In progress: commits 1-5 of 9 on draft PR #186 (CI green through commit 4 and th
   (`load_prompt`, pinned hashes) and `ai/untrusted.scan_data_block`; prompt `triage/v1` with
   `build_triage_messages`, `triage_batch`, `match_results` (5 evidence items per finding, strings
   capped at 2,000 characters; `docs/security.md` lists what's sent).
-
-- Commit 5: the chain tail is `persist`, `diff`, `finalize`;
-  `finalize_scan(session, queue, ...)` queues an `ai.triage` job (`TrackedTask`) after the scan's
-  completion commits (broker errors only fail that job); `passive.triage` is a no-op for one
-  release. Tests: `test_pipeline.py` (finalize + `RecordingQueue` in `pipeline_env`) and
-  `test_ai_task.py` (`ai.triage` skip, budget, completion, failure, tenant isolation).
+- Commit 5: the chain tail is `persist`, `diff`, `finalize`; `finalize_scan(session, queue,
+  ...)` queues an `ai.triage` job (`TrackedTask`) after the scan's completion commits;
+  `passive.triage` is a no-op for one release.
+- Commit 6: `services/triage.py` (`assets_to_triage`, `build_asset_batch` returning
+  `AssetTriage`, `store_triage`, `stored_triage`) and the `LLM_TRIAGE_INCLUDE_INFO` setting. One
+  batch per asset per scan (at most 20 findings, most severe first; the rest come with a later
+  scan as cache hits pile up): ADR 0029 updated.
 
 ## Next step
-Commit 6: `services/triage.py` with `select_triage_batches` (active findings this scan
-observed, from `finding_observations`; `info` only with the new `LLM_TRIAGE_INCLUDE_INFO`
-setting; cache hits skipped; per asset, split at 20) and `store_triage` (writes
-`StoredTriage` JSON to `Finding.ai_triage`, never `status` or `severity`).
-`enforce_triage_budget` changes to return `LLMConfig | None` in commit 7, where it's used.
+Commit 7: `ai.triage` becomes the coordinator (`enforce_triage_budget` returns `LLMConfig |
+None`; `assets_to_triage`; `jobs.enqueue_workflow` with one `ai.triage_batch` job per asset in
+`Job.asset_id`, plus an `ai.triage_done` tail). Each batch job: budget check, `build_asset_batch`,
+`triage_batch`, `record_llm_usage`, `match_results`, `store_triage`, commit; it always returns a
+chord receipt. Look at `services/scanner_jobs.run_check` for the receipt pattern.
 
 ## Open threads
-- How a batch job finds its chunk when an asset has more than 20 findings (`Job` has no
-  parameters column): decide in commit 7.
 - #22 shipped an "AI triage" placeholder on the finding page (`finding_detail.html`, raw JSON of
   `ai_triage`): commit 8 replaces it with the AI panel and adds the scan page section.
 - #27 took migration `0012`: #26's `Scan.ai_summary` migration is `0013`.

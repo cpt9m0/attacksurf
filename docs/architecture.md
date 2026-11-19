@@ -458,7 +458,11 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   `triage/v1`; `build_triage_messages` puts the batch in one `scan_data_block`),
   `match_results` (drops refs outside the batch and refs judged twice) and `triage_cache_key`.
   Reply models' docstrings and field descriptions are sent to the model with the schema, so they
-  are written for it.
+  are written for it. `services/triage.py` picks what a scan sends: `assets_to_triage` and
+  `build_asset_batch` (active findings this scan observed, from `finding_observations`; `info`
+  only with `LLM_TRIAGE_INCLUDE_INFO`; current cache keys skipped; at most 20 per asset per
+  scan, most severe first, 5 latest evidence items each). `store_triage` writes judgments to
+  `Finding.ai_triage` and nothing else.
 - Prompts are versioned files `ai/prompts/<purpose>/v<N>.md` (system part, then user part with
   `$placeholders`), loaded by `ai.prompts.load_prompt`; a test pins each file's SHA-256. Scan data
   enters a prompt only through `ai/untrusted.scan_data_block`.

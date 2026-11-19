@@ -648,6 +648,16 @@ def test_llm_budget_accepts_zero_and_rejects_negative() -> None:
         make_settings(llm_monthly_instance_token_budget=-1)
 
 
+def test_triage_skips_info_findings_by_default() -> None:
+    assert make_settings().llm_triage_include_info is False
+
+
+def test_triage_info_findings_can_be_switched_on(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("LLM_TRIAGE_INCLUDE_INFO", "true")
+
+    assert settings_from_env().llm_triage_include_info is True
+
+
 def test_malformed_old_encryption_key_is_rejected_without_echoing_it(
     clean_env: pytest.MonkeyPatch,
 ) -> None:
