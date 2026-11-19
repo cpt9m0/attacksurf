@@ -234,8 +234,10 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   and `dns.resolve`, `dns.email`, `dns.takeover`, `dns.takeover.http`, `dns.dnssec`, `dns.ns`,
   `dns.mx`, `dns.caa`, `dns.whois` and `dns.axfr` for checks, with `max_discovered_assets=1000`;
   empty/unknown profiles are rejected. `WORKER_PROFILES` also carries the background-only
-  `dns_scheduled` profile (`dns.resolve`, `dns.email`, `dns.dnssec`) for recurring scans; it
-  is deliberately absent from `PROFILES`, so no UI/API route can select it. Profiles cannot route to
+  `dns_scheduled` profile (`dns.resolve`, `dns.email`, `dns.dnssec`) for recurring scans,
+  with the same `MAX_DISCOVERED_ASSETS` cap as `dns_passive` because `dns.resolve` still emits
+  new IP/CNAME assets; it is deliberately absent from `PROFILES`, so no UI/API route can select
+  it. Profiles cannot route to
   the reserved `active`/`analysis` queues before those workers are implemented.
 - **CT discovery (#15, ADR 0022):** `dns.discovery.ct` queries crt.sh's JSON endpoint and falls
   back to Cert Spotter when crt.sh fails, times out or truncates. Names are normalized, filtered

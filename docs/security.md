@@ -24,8 +24,9 @@ their security data. Both make it a target. These rules apply to all code.
   number of records in the first response is kept — zone content is never stored. RDAP is
   queried only for the scanned domain's registration, through IANA's bootstrap registry.
 - **Scheduled rescans (#27)** run only the internal `dns_scheduled` profile: read-only
-  `dns.resolve`, `dns.email` and `dns.dnssec` through ScopeGuard. There is no discovery, no
-  target HTTP, no zone transfer and no sandbox analysis, and the profile is absent from the
+  `dns.resolve`, `dns.email` and `dns.dnssec` through ScopeGuard. There is no CT discovery, no
+  target HTTP, no zone transfer and no sandbox analysis, and resolution still obeys the same
+  per-root `MAX_DISCOVERED_ASSETS` cap as `dns_passive`. The profile is absent from the
   user-selectable `PROFILES`, so neither the UI nor `/api/v1` can ask for it. Schedules are
   tenant-scoped and only an org admin can change one.
 - **Out of scope, always:** exploitation, brute forcing, credential attacks, DoS, actually

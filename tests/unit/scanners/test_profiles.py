@@ -47,6 +47,8 @@ def test_scheduled_profile_is_dns_only_and_not_public() -> None:
     assert "dns_scheduled" not in PROFILES
     assert not profile.discover
     assert profile.checks == ("dns.resolve", "dns.email", "dns.dnssec")
+    # `dns.resolve` still emits new IP/CNAME assets: keep the same admission cap as `dns_passive`.
+    assert profile.max_discovered_assets == MAX_DISCOVERED_ASSETS
     for name in profile.checks:
         scanner = registry.get(name)
         assert scanner.queue == "passive"

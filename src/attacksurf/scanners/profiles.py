@@ -37,5 +37,8 @@ WORKER_PROFILES = PROFILES | {
     SCHEDULED_DNS_PROFILE: ScanProfile(
         name=SCHEDULED_DNS_PROFILE,
         checks=("dns.resolve", "dns.email", "dns.dnssec"),
+        # `dns.resolve` still emits new IP/CNAME assets, so keep the same per-root admission
+        # cap as `dns_passive`: None would disable it in `persist_scan_output`.
+        max_discovered_assets=MAX_DISCOVERED_ASSETS,
     ),
 }
