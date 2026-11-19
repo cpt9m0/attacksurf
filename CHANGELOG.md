@@ -33,6 +33,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   starts for different roots cannot both slip under the quota). Cancellation is database-only
   like archiving (ADR 0021): queued work drains without writing, nothing is revoked in
   Celery (#21).
+- Worker-side sandbox client: `infra.sandbox.LauncherSandboxRunner` calls `sandbox-launcher`, and
+  the worker gate uses it when the new `SANDBOX_LAUNCHER_URL` setting is set (plain
+  `http://host[:port]` only; unset, the workers refuse every sandbox request). The reply is
+  size-capped and strictly validated, only a busy or unreachable launcher is retried, and no
+  reply text reaches a log or a stored job error (ADR 0016, #84).
 - `sandbox-launcher` service (`python -m attacksurf.sandbox_launcher`): `POST /runs` takes an
   analyzer name and artifact ID and runs the analyzer in one proxy-approved sandbox, killing it
   at the wall time or past 2 MiB of stdout and always removing the container. It refuses to

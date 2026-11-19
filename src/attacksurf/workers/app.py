@@ -49,5 +49,7 @@ def _setup_logging(**_kwargs: Any) -> None:
 def _fresh_db_pool(**_kwargs: Any) -> None:
     # A pool inherited from the parent would share sockets between processes.
     runtime.session_factory.cache_clear()
-    # The Redis client (and its connection pool) must also be created after the fork.
+    # The Redis and launcher clients (and their connection pools) must also be created after
+    # the fork.
     runtime.scan_cache.cache_clear()
+    runtime.sandbox_runner.cache_clear()

@@ -3,20 +3,26 @@ import logging
 import os
 import subprocess
 import sys
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
 import pytest
 from celery.signals import setup_logging, worker_process_init
 from pydantic import SecretStr
 
 from attacksurf.domain.artifacts import ArtifactPolicy, ArtifactStorageUnavailable
+from attacksurf.domain.sandbox import SandboxError, UnconfiguredSandboxRunner
+from attacksurf.domain.scope import ScopePolicyError
 from attacksurf.infra.cache import RedisScanCache
+from attacksurf.infra.sandbox import LauncherSandboxRunner
 from attacksurf.infra.scope_guard import ScopeGuard
 from attacksurf.services.ownership import DbOwnershipChecker
 from attacksurf.workers import app as worker_app
 from attacksurf.workers import runtime
 from tests.helpers import make_settings
+from tests.unit.infra.test_scope_guard import context, scanner, target
 
 
 def test_session_factory_is_cached_per_process() -> None:
@@ -73,6 +79,93 @@ def test_production_gate_checks_ownership_in_the_database() -> None:
     assert callable(runtime.dns_resolver().lookup_many)
     assert runtime.ip_intel() is runtime.ip_intel()
     assert runtime.http_client() is not runtime.http_client()
+
+
+LAUNCHER_URL = "http://sandbox-launcher:8791"
+
+
+@pytest.fixture
+def configure_sandbox(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[str | None], None]]:
+    """Point the worker's settings at a launcher URL (or none), with a fresh cached runner."""
+
+    def configure(url: str | None) -> None:
+        settings = make_settings(
+            env="test",
+            secret_key=SecretStr("test-secret-key"),
+            sandbox_launcher_url=SecretStr(url) if url else None,
+        )
+        monkeypatch.setattr(runtime, "settings", lambda: settings)
+        cached_runner.cache_clear()
+
+    # Held by reference: a test may replace `runtime.sandbox_runner` before this teardown runs.
+    cached_runner = runtime.sandbox_runner
+    cached_runner.cache_clear()
+    yield configure
+    cached_runner.cache_clear()
+
+
+def test_gate_refuses_sandbox_runs_without_a_launcher_url(
+    configure_sandbox: Callable[[str | None], None],
+) -> None:
+    configure_sandbox(None)
+
+    gate = runtime.scanner_gate()
+
+    assert isinstance(gate, ScopeGuard)
+    assert isinstance(gate._sandbox, UnconfiguredSandboxRunner)
+    with pytest.raises(SandboxError):
+        gate._sandbox.run("fixture.echo", uuid4())
+
+
+def test_gate_uses_the_launcher_client_when_configured(
+    configure_sandbox: Callable[[str | None], None],
+) -> None:
+    configure_sandbox(LAUNCHER_URL)
+
+    gate = runtime.scanner_gate()
+
+    assert isinstance(gate, ScopeGuard)
+    assert isinstance(gate._sandbox, LauncherSandboxRunner)
+
+
+def test_sandbox_runner_is_cached_per_process_and_rebuilt_after_fork(
+    configure_sandbox: Callable[[str | None], None],
+) -> None:
+    configure_sandbox(LAUNCHER_URL)
+    before = runtime.sandbox_runner()
+
+    assert runtime.sandbox_runner() is before
+    worker_process_init.send(sender=None)
+    assert runtime.sandbox_runner() is not before
+
+
+def test_gate_still_enforces_the_analyzer_allowlist(
+    configure_sandbox: Callable[[str | None], None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configure_sandbox(LAUNCHER_URL)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(500)
+
+    client = LauncherSandboxRunner(LAUNCHER_URL, transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(runtime, "sandbox_runner", lambda: client)
+    scanner_runtime = runtime.scanner_gate().check(context(), target(), scanner())
+
+    with pytest.raises(ScopePolicyError, match="analyzer"):
+        scanner_runtime.sandbox.run("fixture.echo", uuid4())
+    assert requests == []
+
+
+@pytest.mark.parametrize(
+    "url", ["http://sandbox-launcher:8791", "http://10.0.0.5:8791/", "http://launcher"]
+)
+def test_every_valid_setting_builds_a_runner(url: str) -> None:
+    settings = make_settings(sandbox_launcher_url=SecretStr(url))
+
+    assert settings.sandbox_launcher_url is not None
+    LauncherSandboxRunner(settings.sandbox_launcher_url.get_secret_value())
 
 
 PROBE_MODULE = """

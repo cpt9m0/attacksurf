@@ -33,7 +33,7 @@ src/attacksurf/   application code (src layout, import name `attacksurf`)
   scanners/       scanner plugins grouped by target type (dns/, ip/, web/, code/, binary/)
   ai/             providers/, prompts/ (versioned templates), triage, summaries
   infra/          logging (structlog + request IDs), db, queue (Celery), storage, scope_guard,
-                  dns, public_suffix, safe http client, crypto
+                  dns, public_suffix, safe http client, crypto, sandbox (launcher client)
   workers/        Celery task entrypoints (thin, call services)
   sandbox_proxy/  Docker socket guard (ADR 0016); isolated from the app by import-linter
   sandbox_launcher/  sandbox launcher service (ADR 0016): API (`server.py`), run supervision

@@ -530,6 +530,71 @@ def test_sandbox_services_never_receive_the_app_encryption_key() -> None:
         assert not hasattr(settings, "artifact_store_root")
 
 
+def test_sandbox_launcher_url_defaults_to_none() -> None:
+    assert make_settings().sandbox_launcher_url is None
+
+
+def test_sandbox_launcher_url_reads_from_environment(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("SANDBOX_LAUNCHER_URL", "http://sandbox-launcher:8791")
+
+    url = settings_from_env().sandbox_launcher_url
+
+    assert isinstance(url, SecretStr)
+    assert url.get_secret_value() == "http://sandbox-launcher:8791"
+
+
+def test_empty_sandbox_launcher_url_means_off(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("SANDBOX_LAUNCHER_URL", "")
+
+    assert settings_from_env().sandbox_launcher_url is None
+
+
+@pytest.mark.parametrize(
+    "url", ["http://sandbox-launcher:8791", "http://10.0.0.5:8791/", "http://launcher"]
+)
+def test_sandbox_launcher_url_accepts_plain_http(url: str) -> None:
+    settings = make_settings(sandbox_launcher_url=SecretStr(url))
+
+    assert settings.sandbox_launcher_url is not None
+    assert settings.sandbox_launcher_url.get_secret_value() == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://l:1",
+        "ftp://l",
+        "l:8791",
+        "http://",
+        "http://u:hunter2@l:1",
+        "http://u@l:1",
+        "http://l:1/api",
+        "http://l:1?x=1",
+        "http://l:1#f",
+        "http://l:99999",
+        "http://[::1",
+        "",
+    ],
+)
+def test_sandbox_launcher_url_refuses_other_shapes(url: str) -> None:
+    with pytest.raises(ValidationError, match="SANDBOX_LAUNCHER_URL"):
+        make_settings(sandbox_launcher_url=SecretStr(url))
+
+
+def test_sandbox_launcher_url_error_does_not_echo_credentials() -> None:
+    with pytest.raises(ValidationError, match="SANDBOX_LAUNCHER_URL") as excinfo:
+        make_settings(sandbox_launcher_url=SecretStr("ftp://user:hunter2@launcher"))
+
+    assert "hunter2" not in str(excinfo.value)
+
+
+def test_sandbox_launcher_url_is_masked() -> None:
+    settings = make_settings(sandbox_launcher_url=SecretStr("http://launcher-marker.internal:8791"))
+
+    assert "launcher-marker" not in repr(settings)
+    assert "launcher-marker" not in settings.model_dump_json()
+
+
 OLD_KEY_1 = base64.urlsafe_b64encode(b"1" * 32).decode().rstrip("=")
 OLD_KEY_2 = base64.urlsafe_b64encode(b"2" * 32).decode().rstrip("=")
 

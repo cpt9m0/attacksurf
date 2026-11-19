@@ -149,6 +149,21 @@ must confirm the artifact belongs to the org before asking. What it guarantees:
 - **Known limit.** A container that exits and is removed before Docker registers the removed-wait
   makes the wait fail, so the run fails (503) instead of reporting an unconfirmed exit code.
 
+#### Worker-side client and tenant safety
+
+The launcher knows nothing about orgs: any caller that can reach it can name any artifact ID. The
+worker is the only barrier, so **the caller of `SandboxRunner.run` must confirm that the artifact
+belongs to the job's org (`get_scoped`) before calling it.** `LauncherSandboxRunner` and the scope
+guard don't check this (the guard only limits which analyzers a scanner may name); the analysis
+scanner that first calls `run` must, with a tenant-isolation test.
+
+- The launcher URL is operator config (`SANDBOX_LAUNCHER_URL`, a `SecretStr`, plain
+  `http://host[:port]` only), so the client skips the SSRF guard that would refuse an internal
+  address. It ignores proxy environment variables and `.netrc` and never follows a redirect.
+- The reply is untrusted: size-capped at 3 MiB, never inflated, exact keys and types, strict
+  decoding. No reply text, URL or artifact ID reaches a log line or a stored `JobError`.
+- Unset, the workers refuse every sandbox request.
+
 ## Accounts
 
 Signup is open by default (`ALLOW_SIGNUP=true`). With `ALLOW_SIGNUP=false` only the first user
