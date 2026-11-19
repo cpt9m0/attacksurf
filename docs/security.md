@@ -23,6 +23,11 @@ their security data. Both make it a target. These rules apply to all code.
   only active check is one AXFR request per nameserver of a **verified** zone apex, and only the
   number of records in the first response is kept — zone content is never stored. RDAP is
   queried only for the scanned domain's registration, through IANA's bootstrap registry.
+- **Scheduled rescans (#27)** run only the internal `dns_scheduled` profile: read-only
+  `dns.resolve`, `dns.email` and `dns.dnssec` through ScopeGuard. There is no discovery, no
+  target HTTP, no zone transfer and no sandbox analysis, and the profile is absent from the
+  user-selectable `PROFILES`, so neither the UI nor `/api/v1` can ask for it. Schedules are
+  tenant-scoped and only an org admin can change one.
 - **Out of scope, always:** exploitation, brute forcing, credential attacks, DoS, actually
   claiming takeover-able resources, and scanning of third-party targets.
 

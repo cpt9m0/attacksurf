@@ -54,7 +54,8 @@ own key) **triages, prioritizes, and explains** them in plain language with fix 
 
 ### Platform
 - **AI triage**: severity adjustment, false-positive likelihood, remediation steps, exposure summaries
-- **Continuous monitoring**: scheduled rescans with new / fixed / regressed diffs and email alerts
+- **Continuous monitoring**: per-domain daily or weekly rescans of read-only DNS configuration
+  checks, with an admin opt-out and the same new / fixed / regressed diffs
 - **Bring your own LLM**: Anthropic or any OpenAI-compatible endpoint (OpenAI, OpenRouter, vLLM, ...)
 - **Safe by design**: ownership verification before any active check, SSRF protection, no exploitation
 - **Self-hosted**: one `docker compose up` on a single VPS; your data stays with you
