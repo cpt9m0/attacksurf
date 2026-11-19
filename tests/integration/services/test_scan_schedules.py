@@ -7,12 +7,12 @@ import pytest
 from sqlalchemy import Engine, delete, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from attacksurf.domain.assets import AssetNotFound
+from attacksurf.domain.assets import AssetNotFound, AssetSource, AssetType
 from attacksurf.domain.scans import ScanStatus, ScanTrigger, ScheduleFrequency
 from attacksurf.infra.db.models import Org, Scan, ScanSchedule
 from attacksurf.scanners.registry import registry
 from attacksurf.services import scan_schedules
-from attacksurf.services.assets import add_root_domain, archive_root_domain
+from attacksurf.services.assets import add_root_domain, archive_root_domain, record_asset
 from attacksurf.workers.app import app as _worker_app  # noqa: F401 - registers production plugins
 from tests.fakes import FakeQueue
 
@@ -68,6 +68,37 @@ def test_foreign_org_cannot_read_or_save_schedule(db_session: Session) -> None:
             enabled=False,
             now=NOW,
         )
+
+
+def test_saving_creates_a_schedule_for_a_root_registered_before_this_feature(
+    db_session: Session,
+) -> None:
+    org = Org(name="legacy", slug="legacy")
+    db_session.add(org)
+    db_session.flush()
+    root = record_asset(
+        db_session, org.id, AssetType.DOMAIN, "legacy.example.com", source=AssetSource.USER
+    )
+    db_session.commit()
+    assert scan_schedules.get_schedule(db_session, org.id, root.id) is None
+
+    scan_schedules.save_schedule(
+        db_session,
+        org_id=org.id,
+        root_asset_id=root.id,
+        actor_id=None,
+        frequency=ScheduleFrequency.WEEKLY,
+        enabled=False,
+        now=NOW,
+    )
+
+    created = scan_schedules.get_schedule(db_session, org.id, root.id)
+    assert created is not None
+    assert (created.enabled, created.next_run_at, created.profile) == (
+        False,
+        None,
+        "dns_scheduled",
+    )
 
 
 def _due(db_session: Session, org_id: UUID, root_id: UUID, when: datetime = NOW) -> None:
@@ -170,6 +201,35 @@ def test_publish_failure_keeps_failed_scan_and_does_not_repeat_slot(db_session: 
     db_session.commit()
     assert _tick(db_session, queue) == 0
     assert len(queue.sent) == 1
+
+
+def test_quota_refusal_defers_the_occurrence_by_an_hour(db_session: Session) -> None:
+    org_id, root_id = _root(db_session)
+    _due(db_session, org_id, root_id)
+    db_session.add(
+        Scan(
+            org_id=org_id,
+            root_asset_id=root_id,
+            status=ScanStatus.COMPLETED,
+            profile="dns_scheduled",
+            triggered_by=ScanTrigger.USER,
+        )
+    )
+    db_session.commit()
+    queue = FakeQueue(db_session)
+
+    assert (
+        scan_schedules.enqueue_due_scans(
+            db_session, queue, now=NOW, registry=registry, max_starts_per_hour=1
+        )
+        == 0
+    )
+
+    assert queue.sent == []
+    schedule = scan_schedules.get_schedule(db_session, org_id, root_id)
+    assert schedule is not None
+    assert schedule.next_run_at is not None
+    assert NOW + timedelta(hours=1) <= schedule.next_run_at < NOW + timedelta(hours=1, minutes=10)
 
 
 def test_tick_skips_locked_schedule_without_losing_next_candidate(db_engine: Engine) -> None:
