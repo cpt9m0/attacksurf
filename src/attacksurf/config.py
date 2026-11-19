@@ -14,6 +14,7 @@ from pydantic import Field, PrivateAttr, SecretStr, field_validator, model_valid
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from attacksurf.domain.llm import ProviderKind
+from attacksurf.domain.scans import ScanScheduleDefault
 from attacksurf.domain.scope import is_blocked_address
 
 MIN_PROD_SECRET_KEY_LENGTH = 32
@@ -101,6 +102,9 @@ class Settings(BaseSettings):
     # proxying to Caddy directly = 2. Decides which X-Forwarded-For entry is the client IP for
     # rate limiting; leave 0 when the app is reached directly.
     proxy_count: int = Field(default=0, ge=0, le=5)
+
+    # New root registrations only: a saved per-root schedule always wins (#27).
+    scan_default_frequency: ScanScheduleDefault = "weekly"
 
     # Instance LLM config (ADR 0019): orgs without their own key use it, capped (#24). Model
     # names come only from config, so there is no default; no key or no model means AI is off.
