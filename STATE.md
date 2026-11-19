@@ -5,19 +5,27 @@
 **Updated:** 2026-11-18 · **Branch:** `24-org-llm-settings` · **Issue:** #24 (Org AI settings)
 
 ## Status
-Issue #24 and all code-review fixes are complete and verified on `24-org-llm-settings`; ready to open the PR.
+PR #182 review fixes verified locally; awaiting publication and fresh Codex clearance.
 
 ## Last task
-- Added `OrgSettings` (`0011_add_org_settings`), `SecretCipher` (`APP_ENCRYPTION_KEY` + `APP_ENCRYPTION_OLD_KEYS` rotation), `validate_llm_base_url`, and expanded `redact_secrets` (`api[-_]?key`, `base[-_]?url`, URL credentials).
-- Hardened `AnthropicProvider`, `OpenAICompatProvider`, and `_DeadlineBackend` (`follow_redirects=False`, `trust_env=False`, dial-time `check_addresses` unless `allow_private_base_url=True`), single-query `resolve_org_llm_config`, and monthly UTC token caps (`LLM_MONTHLY_INSTANCE_TOKEN_BUDGET`).
-- Added `/settings` UI + async `ai.test_connection` Celery task (`_ai_test_status.html` 2 s polling, `aiSettingsForm` replace modal, `confirm_dialog`, `.notice-list`, monthly `data_table`).
+- Reproduced Codex finding `discussion_r4612613144`: production had no `ai` consumer.
+- Added production `worker-ai` with the shared app image/config/secrets, concurrency 2,
+  and a secret-aware healthcheck targeting `ai@$HOSTNAME`; deploy discovers it automatically.
+- Added two regression tests that fail without the worker; updated deployment/architecture
+  docs and the changelog. No new architecture decisions or agent conventions.
+- Verification: pre-commit, ruff check/format and pyright pass; pytest reports
+  2846 passed, 20 opt-in/empty-parameter skips, 95.92% coverage against real PostgreSQL.
 
 ## Next step
-Open PR for `#24` (`feat(ai): add org LLM settings, encrypted keys and budget enforcement`), wait for CI green, then start `#25` (versioned prompts + AI triage) per epic `#31`.
+Push the fix to PR #182, reply in the original Codex thread, request `@codex review`, and
+verify explicit current-head clearance plus CI. Resume with `/review https://github.com/cpt9m0/attacksurf/pull/182`.
 
 ## Open threads
-- Deadline layer wraps `httpx2.HTTPTransport._pool`; Meta prices in `ai/pricing.py` need a check on developer.meta.com.
-- After CD deploys `cb7c061` (#178): confirm `docker compose -f compose.prod.yaml logs --tail=20 cloudflared | grep -c Registered` is non-zero.
+- Fresh Codex review and CI for this fix are pending; do not merge on an older-head review.
+- Deadline layer wraps `httpx2.HTTPTransport._pool`; Meta prices need an upstream check.
 
 ## Notes for the next agent
-- Integration tests require `TEST_DATABASE_URL` ending in `_test` (e.g. `attacksurf_24_test`); `ai.test_connection` runs on the `ai` queue.
+- Review worktree: `/data/workspace/attacksurf/.worktrees/182-review`.
+- Ignored review ledger: `.worktrees/review/github.com-cpt9m0-attacksurf-182.json` within it.
+- Writable caches: `UV_CACHE_DIR=/tmp/uv-cache-182`, `PRE_COMMIT_HOME=/tmp/pre-commit-182`,
+  `GOCACHE=/tmp/go-build-182`. Test DB: `attacksurf_test` on 127.0.0.1:5432.

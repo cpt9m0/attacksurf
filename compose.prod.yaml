@@ -98,7 +98,7 @@ services:
 
   # Consumes the `passive` queue: ownership checks, dns_passive scans, artifact purge (#174).
   # Without it every `passive.verify_ownership` job stays queued and the ownership card
-  # polls forever. `worker-ai` stays out until #29 (AI triage still has no consumer).
+  # polls forever.
   worker-passive:
     <<: *app
     command:
@@ -109,6 +109,20 @@ services:
       # so substitute it here too; otherwise the probe dials `__REDIS_PASS__` and fails.
       # Explicit `bash -c`: CMD-SHELL runs `/bin/sh` (dash), which rejects `${var//pat/rep}`.
       test: ["CMD-SHELL", "bash -c 'export REDIS_URL=\"$${REDIS_URL//__REDIS_PASS__/$$(cat /run/secrets/redis_password)}\"; exec celery -A attacksurf.workers.app inspect ping -d passive@$$HOSTNAME --timeout 5'"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+  # Consumes connection tests from Settings (ai.test_connection) on the `ai` queue.
+  worker-ai:
+    <<: *app
+    command:
+      ["celery", "-A", "attacksurf.workers.app", "worker", "-Q", "ai", "-c", "2",
+       "-n", "ai@%h", "--loglevel", "INFO"]
+    healthcheck:
+      # Like worker-passive, substitute the Redis secret in a fresh bash for each probe.
+      test: ["CMD-SHELL", "bash -c 'export REDIS_URL=\"$${REDIS_URL//__REDIS_PASS__/$$(cat /run/secrets/redis_password)}\"; exec celery -A attacksurf.workers.app inspect ping -d ai@$$HOSTNAME --timeout 5'"]
       interval: 30s
       timeout: 10s
       start_period: 30s

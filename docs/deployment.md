@@ -44,7 +44,7 @@ running exits immediately without doing anything.
 
 | File | Purpose |
 |---|---|
-| `compose.prod.yaml` | the stack: `cloudflared`, `caddy`, `web`, `worker-passive`, `beat`, `postgres`, `redis`, one-off `migrate`; `web`/`worker-passive`/`beat`/`migrate` share the `x-app` anchor and `${WEB_IMAGE:-attacksurf:prod}` |
+| `compose.prod.yaml` | the stack: `cloudflared`, `caddy`, `web`, `worker-passive`, `worker-ai`, `beat`, `postgres`, `redis`, one-off `migrate`; `web`/`worker-passive`/`worker-ai`/`beat`/`migrate` share the `x-app` anchor and `${WEB_IMAGE:-attacksurf:prod}` |
 | `deploy/Caddyfile` | `www` → apex redirect, security headers, visitor IP forwarding, proxy to `web` |
 | `deploy/Caddy.Dockerfile` | Caddy with this Caddyfile baked in (no plugins needed) |
 | `deploy/attacksurf.env.example` | copy of the app env file; filled copy lives on the host |
@@ -474,18 +474,22 @@ safe: without it stored artifacts cannot be read.
 `worker-passive` consumes the `passive` queue (ownership checks, `dns_passive` scans, the
 artifact purge); `beat` schedules the hourly ownership re-verification and the 10-minute purge.
 One cannot work without the other: beat only queues, the worker only consumes (#174).
+`worker-ai` consumes the `ai` queue, including Settings connection tests (`ai.test_connection`).
+Both workers use concurrency 2 and the same application image, env file and secrets as `web`.
+The deploy script discovers long-running services from Compose, so it starts both automatically.
 
 ```bash
-docker compose -f compose.prod.yaml ps                          # worker-passive and beat healthy
+docker compose -f compose.prod.yaml ps                          # both workers and beat healthy
 docker compose -f compose.prod.yaml logs worker-passive         # passive.verify_ownership consumed
+docker compose -f compose.prod.yaml logs worker-ai              # ai.test_connection consumed
 ```
 
-`up -d --wait` (and the deploy script's `--wait-timeout 300`) gates a release on both
-healthchecks: the worker probe is `celery inspect ping`, the beat probe checks the broker
-connection. Both substitute the Redis password from the secret at probe time, the same way the
-entrypoint does for the main process. An unhealthy worker fails the deploy and rolls back.
+`up -d --wait` (and the deploy script's `--wait-timeout 300`) gates a release on all three
+healthchecks: worker probes use `celery inspect ping` targeting `passive@$HOSTNAME` and
+`ai@$HOSTNAME`; the beat probe checks the broker connection. All substitute the Redis password
+from the secret at probe time, the same way the entrypoint does for the main process. An unhealthy worker fails the deploy and rolls back.
 
 ## Known gaps on this host
 
-The stack runs `web`, `worker-passive` and `beat` plus the database. `worker-ai` is still
-missing, so AI jobs stay queued, together with backups and monitoring (all #29).
+The stack runs `web`, both workers and `beat` plus the database and Redis. Backups and
+monitoring remain to be added (#29).
