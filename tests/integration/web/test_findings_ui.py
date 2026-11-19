@@ -349,3 +349,33 @@ def test_other_orgs_finding_is_not_found(
 
     assert detail.status_code == 404
     assert "secret finding" not in listing
+
+
+def test_finding_detail_shows_dns_resolver_address_and_chain(
+    alice: FlaskClient, db_session: Session, alice_org: UUID
+) -> None:
+    root = _asset(db_session, alice_org)
+    finding = make_finding(
+        db_session,
+        alice_org,
+        root.id,
+        rule_id="dns.records.private_ip_exposed",
+        evidence=(
+            (
+                EvidenceKind.DNS_RECORD,
+                {
+                    "record": "A",
+                    "value": "10.0.0.7",
+                    "cname_chain": ["www.example.com", "origin.example.com"],
+                },
+            ),
+        ),
+    )
+    finding_id = finding.id
+    db_session.commit()
+
+    response = alice.get(f"/findings/{finding_id}")
+
+    expected = "10.0.0.7\nCNAME chain: www.example.com → origin.example.com"
+    assert response.status_code == 200
+    assert f'<pre class="evidence-body">{expected}</pre>' in response.get_data(as_text=True)

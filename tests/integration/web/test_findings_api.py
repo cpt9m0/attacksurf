@@ -260,3 +260,45 @@ def test_listing_never_shows_another_orgs_findings(
 
     assert body["total"] == 0
     assert body["items"] == []
+
+
+@pytest.mark.parametrize(
+    "evidence_case",
+    [
+        ("A", "10.0.0.7", [], "10.0.0.7"),
+        (
+            "AAAA",
+            "fd00::7",
+            ["www.example.com", "edge.example.com", "origin.example.com"],
+            "fd00::7\nCNAME chain: www.example.com → edge.example.com → origin.example.com",
+        ),
+    ],
+)
+def test_get_finding_keeps_dns_resolver_evidence(
+    alice: FlaskClient,
+    db_session: Session,
+    alice_org: UUID,
+    evidence_case: tuple[str, str, list[str], str],
+) -> None:
+    record, address, chain, expected_body = evidence_case
+    root = _asset(db_session, alice_org)
+    finding = make_finding(
+        db_session,
+        alice_org,
+        root.id,
+        rule_id="dns.records.private_ip_exposed",
+        evidence=(
+            (EvidenceKind.DNS_RECORD, {"record": record, "value": address, "cname_chain": chain}),
+        ),
+    )
+    finding_id = finding.id
+    db_session.commit()
+
+    response = alice.get(f"/api/v1/findings/{finding_id}")
+
+    assert response.status_code == 200
+    [evidence] = response.get_json()["evidence"]
+    assert evidence["kind"] == "dns_record"
+    assert evidence["title"] == f"{record} record"
+    assert evidence["body"] == expected_body
+    assert evidence["truncated"] is False

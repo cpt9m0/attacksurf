@@ -508,7 +508,15 @@ def _evidence_row(evidence: Evidence) -> EvidenceRow:
         fields = ([] if not name else [EvidenceField("Name", name)]) + (
             [] if not status else [EvidenceField("Status", status)]
         )
-        body = "\n".join(records or values)
+        lines = records or values
+        if not lines:
+            address = _text(data.get("value"), MAX_FIELD_TEXT)
+            if address:
+                lines = [address]
+        chain = _text_list(data.get("cname_chain"))
+        if chain:
+            lines.append(f"CNAME chain: {' → '.join(chain)}")
+        body = "\n".join(lines)
         title = f"{record} record" if record else "DNS record"
     elif kind is EvidenceKind.HTTP_RESPONSE:
         url = _text(data.get("url"), MAX_FIELD_TEXT)
