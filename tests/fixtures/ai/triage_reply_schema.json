@@ -1,0 +1,125 @@
+{
+  "$defs": {
+    "Confidence": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "FalsePositiveLikelihood": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "FalsePositiveLikelihood",
+      "type": "string"
+    },
+    "FindingTriage": {
+      "additionalProperties": false,
+      "description": "Your judgment of one finding.",
+      "properties": {
+        "ref": {
+          "description": "The finding's reference exactly as given in the input, for example F1.",
+          "pattern": "^F[1-9][0-9]?$",
+          "title": "Ref",
+          "type": "string"
+        },
+        "adjusted_severity": {
+          "$ref": "#/$defs/Severity",
+          "description": "Your severity for this finding given its context and evidence. It may differ from the scanner's severity."
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence",
+          "description": "How sure you are of this judgment."
+        },
+        "false_positive_likelihood": {
+          "$ref": "#/$defs/FalsePositiveLikelihood",
+          "description": "How likely it is that the finding is not a real issue."
+        },
+        "priority": {
+          "$ref": "#/$defs/TriagePriority",
+          "description": "How soon to act: P1 now, P2 within days, P3 plan it, P4 when convenient."
+        },
+        "rationale": {
+          "description": "Why, in one or two sentences, based on the evidence.",
+          "maxLength": 600,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "exploitability": {
+          "description": "How an attacker could use this issue, or an empty string if they cannot.",
+          "maxLength": 600,
+          "title": "Exploitability",
+          "type": "string"
+        },
+        "remediation_steps": {
+          "description": "Concrete steps that fix the issue, most important first.",
+          "items": {
+            "maxLength": 300,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 5,
+          "title": "Remediation Steps",
+          "type": "array"
+        }
+      },
+      "required": [
+        "ref",
+        "adjusted_severity",
+        "confidence",
+        "false_positive_likelihood",
+        "priority",
+        "rationale",
+        "exploitability",
+        "remediation_steps"
+      ],
+      "title": "FindingTriage",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "TriagePriority": {
+      "enum": [
+        "P1",
+        "P2",
+        "P3",
+        "P4"
+      ],
+      "title": "TriagePriority",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Your judgments of the findings in the input.",
+  "properties": {
+    "findings": {
+      "description": "One judgment per finding in the input.",
+      "items": {
+        "$ref": "#/$defs/FindingTriage"
+      },
+      "maxItems": 20,
+      "title": "Findings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "findings"
+  ],
+  "title": "TriageReply",
+  "type": "object"
+}

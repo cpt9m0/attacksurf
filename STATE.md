@@ -2,52 +2,42 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-18 · **Branch:** `84-sandbox-runner-client` · **Issue:** #84 (analysis sandbox)
+**Updated:** 2026-11-19 · **Branch:** `25-ai-triage` · **Issue:** #25 (AI triage stage)
 
 ## Status
-PR 3d (worker-side sandbox client) is done locally and not pushed; no PR is open. It was rebased
-onto `origin/main` (`022e53e`), which has PR 3c (#172, squash-merged); only the 3 PR 3d commits are
-on top. `origin/main` (including #24 / #182, org AI settings) was merged in afterwards; the merge
-touched `tests/unit/test_config.py` (kept both sides' tests) and the full suite has not been re-run.
+In progress: commits 1 and 2 of 9 are on `25-ai-triage`, not pushed; no PR yet.
 
 ## Last task
-- `infra/sandbox.py`: `LauncherSandboxRunner` (3 MiB capped, strictly validated reply; only 503 or
-  unreachable is retried; fixed error text).
-- `SANDBOX_LAUNCHER_URL` setting (`SecretStr`, plain `http://host[:port]`), `compose.yaml` and
-  `.env.example` entries, `workers.runtime.sandbox_runner()` wired into `scanner_gate()`.
-- 3c fix: a proxy 403 (ownership denial) is unconfirmed cleanup, so `sandbox_cleanup_failed`
-  fires instead of being suppressed.
-- Docs, CHANGELOG and this file synced, including the tenant-safety note.
+- Plan: one PR per issue (Angela: #25 now; sten-ctrl: #26 after #25 merges), kept in the Claude
+  Doc "#25 + #26: one PR per issue" (not in the repo). cpt9m0 approved going over the ~400-line
+  PR guideline.
+- `docs/adr/0029-ai-triage-stage.md`: triage runs after the scan as `ai.*` jobs, one LLM call
+  per job; cache on `Finding.ai_triage`; what is and isn't sent; prompt files; opt-in evals.
+- `ai/schemas.py` (`FindingTriage`, `TriageReply`, `StoredTriage`, `TriagePriority`) and
+  `ai/triage.py` (`TriageBatch`, `triage_cache_key`), tested in
+  `tests/unit/ai/test_triage_contract.py` with the snapshot `tests/fixtures/ai/triage_reply_schema.json`.
 
 ## Next step
-1. Check the `.env.example` line: it says port 8080, the launcher's default is 8791.
-2. Run `pre-pr-check`, push 3d, open its draft PR ("Merge order: 3d of #84"; 3c is merged).
-3. Then PR 4/5: the analysis worker and the first analyzer image (`sandbox-images.lock`).
+Push `25-ai-triage`, open the draft PR (`feat(ai): add the ai triage stage`, `Closes #25`,
+oversized-PR note under "Notable"), then commit 3: `ai/prompts/__init__.py` (`load_prompt`,
+pinned file hashes) and `ai/untrusted.py` (`scan_data_block`).
 
 ## Open threads
-- Nothing enforces "the artifact belongs to the job's org" before `SandboxRunner.run`: the scope
-  guard only checks the analyzer allowlist. The first analysis scanner must `get_scoped` the
-  artifact first and add a tenant-isolation test (docs/security.md, Sandbox launcher).
-- After a real proxy restart a stray container is alerted on but not removed. Propose a follow-up
-  issue: sweep leftover `attacksurf-*` containers after a launcher or proxy crash (before #92).
-- `http.client` timeouts in the launcher's proxy client apply per socket operation, not per run.
-- The full test suite has not been run on this branch; `stash@{0}` and the
-  `backup-3d-pre-rebase` branch are leftovers from the 3d rebase and can be deleted.
-- The #84 plans are in `docs/plans/84-analysis-sandbox/` (PR #180); issue #84 is the source of
-  truth for the PR split.
+- How a batch job finds its chunk when an asset has more than 20 findings (`Job` has no
+  parameters column): decide in commit 7.
+- Evidence cap per finding (proposed: 5 items of 2,000 characters) lands in commit 4.
+- #22 (findings UI) is unowned; the AI panel goes on the scan page first.
 
 ## Notes for the next agent
-- The launcher copies proxy constants and `domain.scanners.MAX_OUTPUT_BYTES` on purpose (it may
-  not import them); a parity test guards each copy. Don't "fix" that by importing.
-- `sandbox-images.lock` does not exist yet (the first analyzer PR adds it); the catalog is empty,
-  so every `POST /runs` is a 404 and local runs need a `{}` lock file.
-- The 3 MiB reply cap assumes stdout is at most 2 MiB (base64 about 2.67 MiB).
-- Compose has no launcher or proxy service yet (ADR 0016); `SANDBOX_LAUNCHER_URL` stays empty there.
-- ADR numbers move fast: check `origin/main` and open branches for the next free number first.
-- Production plugins are registered explicitly in `src/attacksurf/app.py` and
-  `src/attacksurf/workers/app.py`; a new plugin needs both imports.
-- Tests that need Redis behavior use `tests.fakes.FakeCache`.
-- DB tests need `TEST_DATABASE_URL`; the dev Compose stack exposes PostgreSQL on
-  `127.0.0.1:5432` with an `attacksurf_test` database (`make test` runs them in `web`).
-- The ruff format hook strips imports that aren't used yet: add imports together with their
-  first use.
+- Pydantic puts a reply model's docstring and field descriptions into the JSON schema the model
+  sees: keep them model-facing, put developer notes in comments. A change to them changes the
+  snapshot and needs a new prompt version.
+- `anthropic.transform_schema` moves unsupported limits (`maxLength`, `pattern`) into
+  descriptions; pydantic still enforces them locally, and the corrective retry covers misses.
+- On this laptop Postgres listens on `127.0.0.1:5433` (local `compose.override.yaml`, excluded
+  from git): `docker compose up -d --wait postgres`, then
+  `TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@127.0.0.1:5433/attacksurf_test`.
+- Commits here need `UV_CACHE_DIR=/tmp/uv-cache-ubuntu PRE_COMMIT_HOME=/tmp/pre-commit-cache`;
+  git identity is set repo-locally (GitHub no-reply address).
+- ADR numbers move fast: check `origin/main` and open branches before taking the next number.
+- The ruff format hook strips imports that aren't used yet: add imports with their first use.

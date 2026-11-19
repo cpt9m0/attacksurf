@@ -431,6 +431,11 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 - AI consumes **normalized findings only**; scan-derived text is treated as untrusted data.
 - AI output is advisory: adjusted severity is shown next to the scanner's severity and never
   auto-closes findings.
+- Triage (#25, ADR 0029) is being built: its reply models live in `ai/schemas.py`
+  (`TriageReply` of `FindingTriage`, P1 to P4; stored in `Finding.ai_triage` as `StoredTriage`)
+  and its input in `ai/triage.py` (`TriageBatch`: one asset's findings under batch-local refs
+  `F1` to `F99`, never database IDs; `triage_cache_key`). Reply models' docstrings and field
+  descriptions are sent to the model with the schema, so they are written for it.
 
 ## Queues
 
