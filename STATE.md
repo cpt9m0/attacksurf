@@ -5,8 +5,7 @@
 **Updated:** 2026-11-19 · **Branch:** `25-ai-triage` · **Issue:** #25 (AI triage stage)
 
 ## Status
-In progress: commits 1-6 of 9 on draft PR #186 (CI green through commit 4 and the merge of
-`origin/main` with #22 findings UI and #27 scheduled rescans).
+In progress: commits 1-7 of 9 on draft PR #186; triage now runs end to end (no UI yet).
 
 ## Last task
 - Plan: one PR per issue (Angela: #25 now; sten-ctrl: #26 after #25 merges), kept in the Claude
@@ -22,13 +21,20 @@ In progress: commits 1-6 of 9 on draft PR #186 (CI green through commit 4 and th
   `AssetTriage`, `store_triage`, `stored_triage`) and the `LLM_TRIAGE_INCLUDE_INFO` setting. One
   batch per asset per scan (at most 20 findings, most severe first; the rest come with a later
   scan as cache hits pile up): ADR 0029 updated.
+- Commit 7: `run_triage` (coordinator: gate, skip archived domains, one `ai.triage_batch` job
+  per asset + `ai.triage_done` tail + `ai.triage_failed` error callback, rows reused on
+  redelivery), `run_triage_batch` (one call; usage on success and failure; raises only
+  `LLMUnavailable` while retries remain), `finish_triage`, `fail_triage`.
+  `enforce_triage_budget` returns `LLMConfig | None`. `workers.base.ChordTask` now holds the
+  chord-member behavior `PipelineTask` had (kept results, sanitized errors).
 
 ## Next step
-Commit 7: `ai.triage` becomes the coordinator (`enforce_triage_budget` returns `LLMConfig |
-None`; `assets_to_triage`; `jobs.enqueue_workflow` with one `ai.triage_batch` job per asset in
-`Job.asset_id`, plus an `ai.triage_done` tail). Each batch job: budget check, `build_asset_batch`,
-`triage_batch`, `record_llm_usage`, `match_results`, `store_triage`, commit; it always returns a
-chord receipt. Look at `services/scanner_jobs.run_check` for the receipt pattern.
+Commit 8: the AI panel. A `components/ai_panel.html` macro (AI-generated label, model + prompt
+version, adjusted next to scanner severity, FP likelihood, priority, rationale, exploitability,
+remediation; autoescaped, CSP-safe styles) replacing #22's raw-JSON placeholder in
+`finding_detail.html`; a polled "AI triage" section on the scan page (`get_scan_triage`: job
+states, triaged findings sorted by priority, 100-row cap); the scan's own job count leaves the
+`triage*` stages out. Tests: XSS payload escaped, tenant isolation, polling stops.
 
 ## Open threads
 - #22 shipped an "AI triage" placeholder on the finding page (`finding_detail.html`, raw JSON of

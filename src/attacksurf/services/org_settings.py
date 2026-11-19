@@ -636,10 +636,9 @@ def enforce_triage_budget(
     *,
     resolver: DnsResolver | None = None,
     now: datetime | None = None,
-) -> bool:
-    """Gate the pipeline triage stage: marks `job_id` skipped with notice if AI cannot run.
-
-    Returns True when AI triage is configured, enabled and within monthly token budget.
+) -> LLMConfig | None:
+    """Gate an AI triage job: the config its calls use, or None after skipping `job_id` with
+    a notice because AI is off, misconfigured or over its monthly token budget.
     """
     try:
         config = resolve_org_llm_config(session, org_id, settings, resolver=resolver)
@@ -647,19 +646,19 @@ def enforce_triage_budget(
         reason = str(exc)
         jobs.mark_job_skipped(session, org_id, job_id, reason)
         log.warning("ai triage skipped", org_id=str(org_id), job_id=str(job_id), reason=reason)
-        return False
+        return None
     if config is None:
         reason = "AI is disabled or not configured."
         jobs.mark_job_skipped(session, org_id, job_id, reason)
         log.info("ai triage skipped", org_id=str(org_id), job_id=str(job_id), reason=reason)
-        return False
+        return None
     budget = check_llm_budget(session, org_id, config, settings, now=now)
     if not budget.allowed:
         reason = budget.reason or "Monthly AI token budget exceeded."
         jobs.mark_job_skipped(session, org_id, job_id, reason)
         log.info("ai triage skipped", org_id=str(org_id), job_id=str(job_id), reason=reason)
-        return False
-    return True
+        return None
+    return config
 
 
 def _evaluate_budget(

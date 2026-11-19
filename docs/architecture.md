@@ -463,6 +463,14 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   only with `LLM_TRIAGE_INCLUDE_INFO`; current cache keys skipped; at most 20 per asset per
   scan, most severe first, 5 latest evidence items each). `store_triage` writes judgments to
   `Finding.ai_triage` and nothing else.
+- A triage run (`workers/tasks/ai.py`, use cases in `services/triage.py`): `ai.triage`
+  (`run_triage`) gates on settings and budget, then publishes one `ai.triage_batch` job per
+  asset with work (`Job.asset_id`) plus an `ai.triage_done` tail and an `ai.triage_failed` error
+  callback through `jobs.enqueue_workflow`. `run_triage_batch` re-checks the budget, makes one
+  call, records usage on success and failure, stores matched judgments and commits; it raises
+  only `LLMUnavailable` while Celery may retry, so the run carries on past a failed batch. Batch
+  and tail tasks use `workers.base.ChordTask` (kept results, sanitized errors), which
+  `PipelineTask` also builds on.
 - Prompts are versioned files `ai/prompts/<purpose>/v<N>.md` (system part, then user part with
   `$placeholders`), loaded by `ai.prompts.load_prompt`; a test pins each file's SHA-256. Scan data
   enters a prompt only through `ai/untrusted.scan_data_block`.
@@ -472,7 +480,7 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 | Queue | Work | Isolation |
 |---|---|---|
 | `passive` | DNS, CT logs, RDAP, public APIs | normal egress |
-| `ai` | LLM calls | rate-limited per org |
+| `ai` | LLM calls: connection tests, triage runs (one call per job) | monthly token budget per org; never fails a scan |
 | `fetch` *(later)* | git smart-HTTP fetches | egress to allowlisted forges through ScopeGuard; no access to `sandbox-launcher`; never parses repository content (ADR 0017) |
 | `active` *(later)* | port/web probes on verified targets | separate network, egress rules |
 | `analysis` *(later)* | code/binary analysis (`sandbox_proxy/`, `sandbox_launcher/` and the `sandbox_tools/` archive extractor and binary format detector are implemented, as is the worker-side client `infra/sandbox.py`; the images and the worker are not yet) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |

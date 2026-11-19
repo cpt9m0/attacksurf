@@ -49,7 +49,10 @@ The forces:
   Celery retry repeats only that call. Batch jobs return a chord receipt even when they fail, as
   scanner jobs do, so one failed batch never blocks the tail. Redis carries IDs only
   (ADR 0011): a batch job names its asset in `Job.asset_id` and loads the findings from the
-  database.
+  database. Batch and tail tasks are `ChordTask`s: Celery keeps their results, and errors reach
+  the backend sanitized. If a batch task crashes anyway, the workflow's error callback
+  `ai.triage_failed` closes the run's queued jobs; otherwise `ai.triage_done` skips that unused
+  failure job. A domain archived after its scan is skipped with a notice.
 - **One batch per asset per scan.** A batch holds one asset's most severe untriaged findings,
   at most `MAX_FINDINGS_PER_BATCH = 20`. Findings past the cap are sent by a later scan, when
   the ones judged now are cache hits; a job has no field to name a chunk, and with 25 DNS rules

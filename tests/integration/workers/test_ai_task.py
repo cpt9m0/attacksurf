@@ -1,25 +1,38 @@
-"""AI Celery task tests: connection test runs asynchronously with TrackedTask lifecycle."""
+"""AI Celery tasks: the connection test and the triage run, with the TrackedTask lifecycle."""
 
 import base64
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from celery.backends.cache import CacheBackend
 from pydantic import SecretStr
 from sqlalchemy.orm import Session, sessionmaker
 
 from attacksurf.domain.accounts import Role
+from attacksurf.domain.assets import AssetSource, AssetType
 from attacksurf.domain.llm import KeySource, LLMUnavailable, ProviderKind, TokenUsage
 from attacksurf.domain.scans import JobStatus, ScanStatus
-from attacksurf.infra.db.models import Job, LLMUsage, Membership, Org, Scan, User
+from attacksurf.infra.db.models import (
+    Finding,
+    FindingObservation,
+    Job,
+    LLMUsage,
+    Membership,
+    Org,
+    Scan,
+    User,
+)
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services import jobs, org_settings
+from attacksurf.services import triage as triage_service
+from attacksurf.services.assets import record_asset
 from attacksurf.workers import runtime
 from attacksurf.workers.app import app
 from attacksurf.workers.tasks import ai as ai_tasks
 from tests.fakes import FakeLLMProvider, FakeQueue
 from tests.helpers import make_settings
-from tests.integration.factories import make_scan
+from tests.integration.factories import make_finding, make_scan
 
 APP_KEY = base64.urlsafe_b64encode(b"3" * 32).decode().rstrip("=")
 
@@ -258,3 +271,106 @@ def test_triage_task_never_touches_another_orgs_job(
 
     db_session.expire_all()
     assert job.status is JobStatus.QUEUED
+
+
+def _observed(db_session: Session, scan: Scan, asset_id: UUID, rule_id: str) -> Finding:
+    finding = make_finding(db_session, scan.org_id, asset_id, rule_id=rule_id)
+    db_session.add(
+        FindingObservation(
+            org_id=scan.org_id, scan_id=scan.id, finding_id=finding.id, severity=finding.severity
+        )
+    )
+    db_session.flush()
+    return finding
+
+
+def _judgment_reply() -> str:
+    return (
+        '{"findings": [{"ref": "F1", "adjusted_severity": "high", "confidence": "high", '
+        '"false_positive_likelihood": "low", "priority": "P2", "rationale": "Confirmed.", '
+        '"exploitability": "", "remediation_steps": ["Fix the record."]}]}'
+    )
+
+
+def test_a_triage_run_judges_every_asset_and_closes_cleanly(
+    worker_env: sessionmaker[Session], db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ai_on(monkeypatch)
+    # Celery's _backend property setter cannot restore None; patch its thread-local cache.
+    monkeypatch.setattr(
+        app.__dict__["_local"], "backend", CacheBackend(app=app, backend="memory"), raising=False
+    )
+    job = _triage_job(db_session)
+    scan = db_session.get(Scan, job.scan_id)
+    assert scan is not None
+    cdn = record_asset(
+        db_session,
+        scan.org_id,
+        AssetType.SUBDOMAIN,
+        "cdn.acme.example",
+        source=AssetSource.DISCOVERED,
+        parent_id=scan.root_asset_id,
+    )
+    findings = [
+        _observed(db_session, scan, scan.root_asset_id, "dns.email.dmarc_missing"),
+        _observed(db_session, scan, cdn.id, "dns.takeover.dangling_cname"),
+    ]
+    db_session.commit()
+    monkeypatch.setattr(
+        triage_service,
+        "build_provider",
+        lambda _config: FakeLLMProvider(_judgment_reply()),
+    )
+
+    result = _run_triage(job)
+
+    assert result.successful()
+    db_session.expire_all()
+    assert all(triage_service.stored_triage(finding) is not None for finding in findings)
+    statuses = sorted(
+        (row.stage, row.status)
+        for row in db_session.scalars(scoped(Job, scan.org_id).where(Job.scan_id == scan.id))
+    )
+    assert statuses == [
+        ("triage", JobStatus.COMPLETED),
+        ("triage_batch", JobStatus.COMPLETED),
+        ("triage_batch", JobStatus.COMPLETED),
+        ("triage_done", JobStatus.COMPLETED),
+        ("triage_failure", JobStatus.SKIPPED),
+    ]
+    assert len(db_session.scalars(scoped(LLMUsage, scan.org_id)).all()) == 2
+    assert _scan_status(db_session, job) is ScanStatus.COMPLETED
+
+
+def test_a_crashing_batch_task_stores_only_a_safe_error(
+    worker_env: sessionmaker[Session], db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ai_on(monkeypatch)
+    job = _triage_job(db_session)
+    scan = db_session.get(Scan, job.scan_id)
+    assert scan is not None
+    _observed(db_session, scan, scan.root_asset_id, "dns.email.dmarc_missing")
+    batch = jobs.record_job(
+        db_session,
+        org_id=scan.org_id,
+        scan_id=scan.id,
+        stage="triage_batch",
+        asset_id=scan.root_asset_id,
+    )
+    db_session.commit()
+
+    def crash(_config: object) -> None:
+        raise RuntimeError("secret provider detail")
+
+    monkeypatch.setattr(triage_service, "build_provider", crash)
+
+    result = ai_tasks.triage_batch.apply(
+        kwargs={"org_id": str(batch.org_id), "job_id": str(batch.id)}
+    )
+
+    assert not result.successful()
+    assert "secret" not in repr(result.result)
+    db_session.expire_all()
+    assert batch.status is JobStatus.FAILED
+    assert "secret" not in (batch.error or "")
+    assert _scan_status(db_session, job) is ScanStatus.COMPLETED

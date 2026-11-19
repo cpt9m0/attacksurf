@@ -4,7 +4,6 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from celery.exceptions import Retry
 
 from attacksurf.domain.rules import RULES
 from attacksurf.domain.scanners import ScannerError
@@ -16,27 +15,13 @@ from attacksurf.services import jobs, scan_diff, scans
 from attacksurf.services.scanner_jobs import run_check
 from attacksurf.workers import runtime
 from attacksurf.workers.app import app
-from attacksurf.workers.base import TrackedTask
+from attacksurf.workers.base import ChordTask
 
 
-class PipelineTask(TrackedTask):
-    ignore_result = False  # required for Redis chords, including failed/skipped scanner receipts
+class PipelineTask(ChordTask):
+    """A scan pipeline stage: a failure that escapes it fails the scan."""
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        try:
-            return super().__call__(*args, **kwargs)
-        except Retry as exc:
-            # The backend stores retry exceptions too (e.g. a DB URL in a driver error).
-            safe = ScannerError(jobs.describe_error(exc.exc)) if exc.exc is not None else None
-            raise Retry(
-                exc=safe,
-                when=exc.when,
-                is_eager=getattr(exc, "is_eager", False),
-                sig=getattr(exc, "sig", None),
-            ) from None
-        except Exception as exc:
-            # ChordError embeds repr(exception), so sanitize before Celery sees the failure.
-            raise ScannerError(jobs.describe_error(exc)) from None
+    sanitized_error = ScannerError
 
     def on_failure(self, exc: Exception, task_id: str, args: Any, kwargs: Any, einfo: Any) -> None:
         super().on_failure(exc, task_id, args, kwargs, einfo)
