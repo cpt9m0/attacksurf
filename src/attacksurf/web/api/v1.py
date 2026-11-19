@@ -16,15 +16,23 @@ from werkzeug.exceptions import HTTPException
 
 from attacksurf.domain.accounts import Role
 from attacksurf.domain.assets import AssetError, AssetNotFound, DomainAlreadyAdded
+from attacksurf.domain.findings import (
+    FindingError,
+    FindingNotFound,
+    FindingStatus,
+    InvalidFindingTransition,
+)
 from attacksurf.domain.scans import ScanAlreadyActive, ScanError, ScanNotFound, ScanRateLimited
 from attacksurf.scanners.profiles import PROFILES
 from attacksurf.scanners.registry import registry
-from attacksurf.services import asset_views, scan_views
+from attacksurf.services import asset_views, finding_views, scan_views
 from attacksurf.services import assets as assets_service
+from attacksurf.services import findings as findings_service
 from attacksurf.services import scans as scans_service
 from attacksurf.web.asset_params import parse_asset_filter
 from attacksurf.web.auth import get_settings, require_role
 from attacksurf.web.db import get_session
+from attacksurf.web.finding_params import parse_finding_filter
 from attacksurf.web.queue import get_task_queue
 from attacksurf.web.scan_params import parse_scan_filter
 
@@ -96,6 +104,84 @@ def list_asset_scans(asset_id: UUID) -> Response:
     except AssetNotFound as exc:
         return _asset_error(exc)
     return jsonify(items=[_json(s) for s in scans])
+
+
+@bp.get("/findings")
+def list_findings() -> Response:
+    """The findings list: same filters, sort and pagination as the UI page."""
+    flt, page = parse_finding_filter(request.args)
+    result = finding_views.list_findings(get_session(), _org_id(), flt, page)
+    return jsonify(
+        items=[_json(row) for row in result.items],
+        page=result.page,
+        pages=result.pages,
+        total=result.total,
+        latest_scan_id=result.latest_scan_id,
+    )
+
+
+@bp.get("/findings/<uuid:finding_id>")
+def get_finding(finding_id: UUID) -> Response:
+    try:
+        detail = finding_views.get_finding_detail(get_session(), _org_id(), finding_id)
+    except FindingNotFound:
+        return _error(404, "Finding not found.")
+    return jsonify(_json(detail))
+
+
+@bp.post("/findings/<uuid:finding_id>/status")
+def change_finding_status(finding_id: UUID) -> Response:
+    """Accept risk, mark false positive or reopen one finding (needs `X-CSRFToken`)."""
+    body = request.get_json(silent=True)
+    parsed = _parse_status_body(body)
+    if parsed is None:
+        return _error(422, 'Send {"status": "accepted_risk" | "false_positive" | "open"}.')
+    status, comment = parsed
+    try:
+        findings_service.change_finding_status(
+            get_session(),
+            _org_id(),
+            finding_id,
+            status,
+            actor_id=current_user.session_user.user_id,
+            comment=comment,
+        )
+    except FindingNotFound:
+        return _error(404, "Finding not found.")
+    except (InvalidFindingTransition, FindingError) as exc:
+        return _finding_error(exc)
+    return jsonify(id=str(finding_id), status=status.value)
+
+
+@bp.post("/findings/bulk-status")
+def bulk_change_finding_status() -> Response:
+    """Apply one status decision to up to 50 findings; all-or-nothing."""
+    body = request.get_json(silent=True)
+    parsed = _parse_status_body(body)
+    if parsed is None or not isinstance(body, dict):
+        return _error(422, 'Send {"finding_ids": [...], "status": "...", "comment": "..."}.')
+    status, comment = parsed
+    raw_ids = body.get("finding_ids")
+    if not isinstance(raw_ids, list) or not all(isinstance(item, str) for item in raw_ids):
+        return _error(422, '"finding_ids" must be a list of UUID strings.')
+    try:
+        finding_ids = tuple(UUID(item) for item in raw_ids)
+    except ValueError:
+        return _error(422, '"finding_ids" must be a list of UUID strings.')
+    try:
+        changed = findings_service.change_findings_status(
+            get_session(),
+            _org_id(),
+            finding_ids,
+            status,
+            actor_id=current_user.session_user.user_id,
+            comment=comment,
+        )
+    except FindingNotFound:
+        return _error(404, "Finding not found.")
+    except (InvalidFindingTransition, FindingError) as exc:
+        return _finding_error(exc)
+    return jsonify(updated=changed)
 
 
 @bp.get("/scans")
@@ -200,6 +286,29 @@ def archive_asset(asset_id: UUID) -> Response:
     except AssetNotFound as exc:
         return _asset_error(exc)
     return jsonify(_json(asset_views.get_asset(session, _org_id(), asset_id)))
+
+
+def _parse_status_body(body: Any) -> tuple[FindingStatus, str | None] | None:
+    """`(status, comment)` from a JSON body, or None when the shape is wrong."""
+    if not isinstance(body, dict):
+        return None
+    raw = body.get("status")
+    if not isinstance(raw, str):
+        return None
+    try:
+        status = FindingStatus(raw)
+    except ValueError:
+        return None
+    comment = body.get("comment")
+    if comment is not None and not isinstance(comment, str):
+        return None
+    return status, comment
+
+
+def _finding_error(exc: FindingError) -> Response:
+    if isinstance(exc, InvalidFindingTransition):
+        return _error(409, str(exc))
+    return _error(422, str(exc))
 
 
 def _org_id() -> UUID:

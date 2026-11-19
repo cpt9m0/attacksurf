@@ -3,11 +3,20 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import structlog
-from flask import Blueprint, Response, abort, flash, redirect, request, url_for
+from flask import (
+    Blueprint,
+    Response,
+    abort,
+    flash,
+    make_response,
+    redirect,
+    request,
+    url_for,
+)
 from flask_login import current_user
 from werkzeug.exceptions import HTTPException
 from werkzeug.wrappers.response import Response as BaseResponse
@@ -19,6 +28,12 @@ from attacksurf.domain.assets import (
     AssetNotFound,
     AssetType,
     InvalidAssetValue,
+)
+from attacksurf.domain.findings import (
+    FindingError,
+    FindingNotFound,
+    FindingStatus,
+    Severity,
 )
 from attacksurf.domain.llm import ProviderKind
 from attacksurf.domain.net import DnsResolver
@@ -38,6 +53,7 @@ from attacksurf.scanners.registry import registry
 from attacksurf.services import (
     asset_views,
     binaries,
+    finding_views,
     llm_usage,
     org_settings,
     repos,
@@ -46,15 +62,24 @@ from attacksurf.services import (
     verifications,
 )
 from attacksurf.services import assets as assets_service
+from attacksurf.services import findings as findings_service
 from attacksurf.services import scans as scans_service
 from attacksurf.services.asset_views import AssetFilter, AssetStatus
+from attacksurf.services.finding_views import (
+    FindingFilter,
+    FindingSort,
+    FindingStatusFilter,
+)
 from attacksurf.services.org_settings import InvalidOrgSettings, OrgSettingsError
 from attacksurf.services.scan_views import ScanFilter
 from attacksurf.services.uploads import AssetUpload
+from attacksurf.web import export as export_module
 from attacksurf.web import uploads
 from attacksurf.web.asset_params import parse_asset_filter
 from attacksurf.web.auth import get_settings, require_role
 from attacksurf.web.db import get_session
+from attacksurf.web.finding_params import filter_args as finding_filter_args
+from attacksurf.web.finding_params import parse_finding_filter
 from attacksurf.web.formatting import exact_time, humanize_delta
 from attacksurf.web.queue import get_task_queue
 from attacksurf.web.rendering import is_htmx_request, render_page
@@ -90,6 +115,19 @@ _TYPE_LABELS = {
     AssetType.BINARY: "Binary",
 }
 ASSET_TABS = (("overview", "Overview"), ("findings", "Findings"), ("scans", "Scan history"))
+_FINDING_STATUS_FILTER_LABELS = {
+    FindingStatusFilter.ACTIVE: "Open/regressed",
+    FindingStatusFilter.OPEN: "Open",
+    FindingStatusFilter.FIXED: "Fixed",
+    FindingStatusFilter.REGRESSED: "Regressed",
+    FindingStatusFilter.ACCEPTED_RISK: "Accepted risk",
+    FindingStatusFilter.FALSE_POSITIVE: "False positive",
+    FindingStatusFilter.ALL: "All statuses",
+}
+_FINDING_SORT_LABELS = {
+    FindingSort.SEVERITY: "Severity (worst)",
+    FindingSort.LAST_SEEN: "Last seen (newest)",
+}
 
 
 @bp.app_context_processor
@@ -109,7 +147,9 @@ def _exact_time(value: datetime) -> str:
 
 @bp.get("/")
 def dashboard() -> Response:
-    return render_page("pages/dashboard.html")
+    return render_page(
+        "pages/dashboard.html", data=finding_views.get_dashboard(get_session(), _org_id())
+    )
 
 
 @bp.get("/assets")
@@ -371,7 +411,105 @@ def cancel_scan(scan_id: UUID) -> BaseResponse:
 
 @bp.get("/findings")
 def findings() -> Response:
-    return render_page("pages/findings.html")
+    flt, page = parse_finding_filter(request.args)
+    return _findings_page(flt, page)
+
+
+@bp.get("/findings/<uuid:finding_id>")
+def finding_detail(finding_id: UUID) -> Response:
+    try:
+        detail = finding_views.get_finding_detail(get_session(), _org_id(), finding_id)
+    except FindingNotFound:
+        abort(404)
+    return render_page(
+        "pages/finding_detail.html",
+        detail=detail,
+        finding=detail.finding,
+        status_options=[
+            ("", "Choose a status change"),
+            *_finding_action_options(detail.finding.status),
+        ],
+    )
+
+
+@bp.post("/findings/<uuid:finding_id>/status")
+def change_finding_status(finding_id: UUID) -> BaseResponse:
+    """Apply one user decision (accept risk / false positive / reopen). Scans own the rest."""
+    status = _finding_status(request.form.get("status", ""))
+    if status is None:
+        flash("Choose a status change.", "error")
+        return _navigate(url_for("ui.finding_detail", finding_id=finding_id))
+    try:
+        findings_service.change_finding_status(
+            get_session(),
+            _org_id(),
+            finding_id,
+            status,
+            actor_id=current_user.session_user.user_id,
+            comment=request.form.get("comment", ""),
+        )
+    except FindingNotFound:
+        abort(404)
+    except FindingError as exc:
+        flash(str(exc), "error")
+        return _navigate(url_for("ui.finding_detail", finding_id=finding_id))
+    flash("Finding updated.", "success")
+    return _navigate(url_for("ui.finding_detail", finding_id=finding_id))
+
+
+@bp.post("/findings/bulk-status")
+def bulk_change_finding_status() -> BaseResponse:
+    """Apply one decision to a selection; all-or-nothing, at most 50 findings."""
+    flt, _ = parse_finding_filter(request.args)  # the filter rides on the form action
+    back = url_for("ui.findings", **cast("dict[str, Any]", finding_filter_args(flt)))
+    status = _finding_status(request.form.get("status", ""))
+    if status is None:
+        flash("Choose a status change.", "error")
+        return _navigate(back)
+    raw_ids = request.form.getlist("finding_ids")
+    try:
+        finding_ids = tuple(UUID(raw) for raw in raw_ids)
+    except ValueError:
+        flash("Select findings from the list.", "error")
+        return _navigate(back)
+    try:
+        changed = findings_service.change_findings_status(
+            get_session(),
+            _org_id(),
+            finding_ids,
+            status,
+            actor_id=current_user.session_user.user_id,
+            comment=request.form.get("comment", ""),
+        )
+    except FindingNotFound:
+        flash("Finding not found.", "error")
+        return _navigate(back)
+    except FindingError as exc:
+        flash(str(exc), "error")
+        return _navigate(back)
+    flash(
+        "No findings changed."
+        if not changed
+        else f"Updated {changed} finding{'s' if changed != 1 else ''}.",
+        "success" if changed else "info",
+    )
+    return _navigate(back)
+
+
+@bp.get("/findings/export.csv")
+def export_findings_csv() -> Response:
+    flt, _ = parse_finding_filter(request.args)
+    export = finding_views.export_findings(get_session(), _org_id(), flt)
+    return _export_response(export_module.findings_csv(export), "findings.csv", "text/csv", export)
+
+
+@bp.get("/findings/export.json")
+def export_findings_json() -> Response:
+    flt, _ = parse_finding_filter(request.args)
+    export = finding_views.export_findings(get_session(), _org_id(), flt)
+    return _export_response(
+        export_module.findings_json(export), "findings.json", "application/json", export
+    )
 
 
 @bp.get("/settings")
@@ -574,6 +712,64 @@ def _scan_start_fallback(root_id: UUID) -> str:
     except AssetNotFound:
         return url_for("ui.scans")
     return url_for("ui.asset_detail", asset_id=root_id)
+
+
+def _findings_page(flt: FindingFilter, page: int, status: int = 200) -> Response:
+    session = get_session()
+    options = finding_views.list_filter_options(session, _org_id())
+    return render_page(
+        "pages/findings.html",
+        status=status,
+        result=finding_views.list_findings(session, _org_id(), flt, page),
+        export_limit=finding_views.EXPORT_LIMIT,
+        flt=flt,
+        filtered=flt != FindingFilter(),
+        # Non-default filters only, so pagination links and the bulk form stay short.
+        filter_args=finding_filter_args(flt),
+        severity_options=[("", "All severities")]
+        + [(severity.value, severity.value.capitalize()) for severity in Severity],
+        status_options=[
+            (item.value, _FINDING_STATUS_FILTER_LABELS[item]) for item in FindingStatusFilter
+        ],
+        sort_options=[(item.value, _FINDING_SORT_LABELS[item]) for item in FindingSort],
+        root_options=[("", "All roots")]
+        + [(r.id, r.value if r.is_active else f"{r.value} (archived)") for r in options.roots],
+        rule_options=[("", "All rules")]
+        + [(rule.id, f"{rule.title} ({rule.id})") for rule in options.rules],
+    )
+
+
+def _finding_status(raw: str) -> FindingStatus | None:
+    try:
+        return FindingStatus(raw)
+    except ValueError:
+        return None
+
+
+def _finding_action_options(current: FindingStatus) -> list[tuple[str, str]]:
+    """The status changes a user may make on this finding; scans own fixed/regressed."""
+    if current is FindingStatus.FIXED or current in (
+        FindingStatus.ACCEPTED_RISK,
+        FindingStatus.FALSE_POSITIVE,
+    ):
+        return [(FindingStatus.OPEN.value, "Reopen")]
+    return [
+        (FindingStatus.ACCEPTED_RISK.value, "Accept risk"),
+        (FindingStatus.FALSE_POSITIVE.value, "Mark false positive"),
+    ]
+
+
+def _export_response(
+    body: str, filename: str, mimetype: str, export: finding_views.FindingExport
+) -> Response:
+    response = make_response(body)
+    response.mimetype = mimetype
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response.headers["Cache-Control"] = "no-store"
+    if export.truncated:
+        # Machine-readable flag for this download; the toolbar warns based on its list count.
+        response.headers["X-Export-Truncated"] = "true"
+    return response
 
 
 def _scans_page(flt: ScanFilter, page: int, status: int = 200) -> Response:

@@ -5,9 +5,9 @@
 **Updated:** 2026-11-19 · **Branch:** `27-scheduled-rescans` · **Issue:** #27 (scheduled rescans)
 
 ## Status
-Implemented and open as PR #185 (`Closes #27`), branched from `origin/main` `db663bd`. Local
-checks are green: pytest 2994 passed / 20 optional skips (95.9% coverage), web-e2e 14 passed,
-ruff, ruff format, pyright, import-linter (8 kept), pre-commit and the pre-push pytest hook.
+Implemented and open as PR #185 (`Closes #27`), with `origin/main` (`9e621c5`, #184) merged in.
+Local checks are green: pytest 3066 passed / 20 optional skips, web-e2e 14 passed, ruff, ruff
+format, pyright, import-linter (8 kept), pre-commit and the pre-push pytest hook.
 
 ## Last task
 - `0012_add_scan_schedules` + `ScanSchedule` (one per root, same-org FK, unique, enabled/due

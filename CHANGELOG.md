@@ -10,6 +10,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   for new domains (`SCAN_DEFAULT_FREQUENCY`), a minute beat tick that claims due rows with
   `FOR UPDATE SKIP LOCKED` and starts the read-only `dns_scheduled` profile through
   `start_scan`, and an admin-only card on the root's overview to change or turn it off.
+- Findings UI (#22): a filterable, sortable findings list with bulk status actions and
+  CSV/JSON export that warns when the download cap is exceeded; a detail page with
+  escaped evidence (DNS records, HTTP snippets, raw JSON), remediation, references,
+  timeline and an AI-triage placeholder; accept-risk /
+  false-positive decisions that require a comment and are audited, plus reopen; a dashboard
+  with open findings by severity, the newest findings, the asset count and each root's last
+  scan; and `/api/v1/findings` list/detail/status/bulk endpoints. Status comments live in
+  the audit log, so no schema change was needed; scans keep owning `fixed`/`regressed`.
 - Production `worker-ai` consumes Settings connection tests from the `ai` queue, with a
   secret-aware targeted healthcheck that gates deployment (#24).
 - Organization AI settings, encrypted BYO API keys, SSRF-guarded custom `base_url`s, monthly UTC token budget enforcement, and monthly AI usage breakdown on `/settings` (`0011_add_org_settings`, `SecretCipher` with `APP_ENCRYPTION_OLD_KEYS` rotation, `validate_llm_base_url`, `services.org_settings`, `services.llm_usage.get_usage_summary`, `LLM_MONTHLY_INSTANCE_TOKEN_BUDGET`, `LLM_ALLOWED_BASE_HOSTS`, #24).
