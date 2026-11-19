@@ -80,6 +80,13 @@ def celery_config(settings: Settings) -> dict[str, Any]:
                 "task": "passive.purge_expired_artifacts",
                 "schedule": crontab(minute="*/10"),
             },
+            # Database-backed per-root scan schedules (#27). `expires` drops a tick that a
+            # stalled beat could not deliver in its minute; the next one catches up.
+            "enqueue-due-scans": {
+                "task": "passive.enqueue_due_scans",
+                "schedule": crontab(),
+                "options": {"expires": 60},
+            },
         },
     }
 
