@@ -1,0 +1,21 @@
+{
+  "why": "The middle of the scale: an SPF record ending in +all lets anyone pass SPF, a real and confirmed issue that is not an emergency takeover.",
+  "asset": {"value": "acme.example", "type": "domain"},
+  "findings": [
+    {
+      "ref": "F1",
+      "rule_id": "dns.email.spf_permissive",
+      "title": "SPF record ends in a permissive qualifier",
+      "description": "The SPF record authorizes every other host (`+all`) or explicitly takes no position on them (`?all`), so spoofed mail still passes SPF.",
+      "severity": "high",
+      "confidence": "high",
+      "location": "",
+      "evidence": [
+        {"kind": "dns_record", "data": {"record": "TXT", "name": "acme.example", "values": ["v=spf1 include:_spf.google.com +all"]}}
+      ]
+    }
+  ],
+  "expect": {
+    "F1": {"priority": ["P1", "P2", "P3"], "false_positive": ["low"], "severity_at_least": "medium"}
+  }
+}

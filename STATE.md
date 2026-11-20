@@ -5,7 +5,7 @@
 **Updated:** 2026-11-19 · **Branch:** `25-ai-triage` · **Issue:** #25 (AI triage stage)
 
 ## Status
-In progress: commits 1-8 of 9 on draft PR #186; triage runs end to end and shows in the UI.
+All 9 commits written (1-8 on draft PR #186); the live eval still needs a working LLM key.
 
 ## Last task
 - Plan: one PR per issue (Angela: #25 now; sten-ctrl: #26 after #25 merges), kept in the Claude
@@ -31,14 +31,26 @@ In progress: commits 1-8 of 9 on draft PR #186; triage runs end to end and shows
   raw-JSON placeholder on the finding page; `pages/_scan_triage.html` + `ui.scan_triage` is the
   scan page's polled AI section, fed by `services/triage_views.get_scan_triage`; scan job
   counts leave `TRIAGE_STAGES` out. `DESIGN.md` AI panel row filled in.
+- Commit 9: the eval set (5 cases in `tests/fixtures/ai/triage_eval/`, harness
+  `tests/eval/triage_cases.py`, live runner `tests/eval/test_triage_eval.py`, offline checks
+  `tests/unit/ai/test_eval_harness.py`) and `make eval`; README, CHANGELOG, AGENTS.md commands
+  and `docs/development.md` synced.
 
 ## Next step
-Commit 9: the eval set and `make eval` (fixtures in `tests/fixtures/ai/triage_eval/`, an
-`llm_live` runner in `tests/eval/`, a CI-safe harness test with `FakeLLMProvider`), then the
-`finish-task` sync (`README.md` feature line, `CHANGELOG.md`, `STATE.md`). A live run needs an
-LLM key and model in `.env`; the PR records the model and results.
+Run `make eval` with a working key and record the model and per-case results in PR #186; then
+`pre-pr-check`, update the PR description, and mark #186 ready for review. If the dangling-CNAME
+case isn't P1/P2 or the DKIM case isn't a likely false positive, the prompt needs `triage/v2`
+(new file, new pinned hash), not an edit to v1.
 
 ## Open threads
+- The first live `make eval` (2026-11-19) got HTTP 401 on all five calls, and so did the #23
+  contract live test: Meta rejects the `.env` key itself. Check for a stale `LLM_API_KEY`
+  exported in the shell (it overrides `.env`), then for a rotated key.
+- Two tests unrelated to #25 flake on a loaded machine and pass alone:
+  `test_artifact_purge_task.py::test_purge_task_deletes_expired_artifacts_even_without_a_key`
+  (its `NOW` is fixed at import while the task reads the real clock) and
+  `test_deadline.py::test_stalled_tls_handshake_is_cut_off_at_the_deadline` (timing). Worth an
+  issue of their own.
 - #27 took migration `0012`: #26's `Scan.ai_summary` migration is `0013`.
 - sten-ctrl may start #26 on a branch stacked on `25-ai-triage` (see the plan doc).
 

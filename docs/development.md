@@ -193,6 +193,17 @@ LLM_PROVIDER=anthropic LLM_BASE_URL=https://api.meta.ai RUN_LLM_TESTS=1 \
     uv run pytest tests/e2e/test_anthropic_live.py -m llm_live --no-cov
 ```
 
+### Evaluating the triage prompt (`make eval`)
+
+`make eval` sends the triage eval set to the LLM in your `.env`, one call per case, and prints
+each case's verdict. A case is one asset's batch in `tests/fixtures/ai/triage_eval/` with the
+judgments a good model must give (ranges of priority, false-positive likelihood and severity).
+It is opt-in (`llm_live`) and never runs in CI; `tests/unit/ai/test_eval_harness.py` checks the
+cases and the harness offline. The cases are synthetic, so `muse-spark-1.3-contributor` is fine
+here. Before releasing a new prompt version, run both versions and record the model and the
+results in the PR. Override the format for one run as above, e.g.
+`LLM_PROVIDER=anthropic LLM_BASE_URL=https://api.meta.ai make eval`.
+
 ### Running the sandbox services locally
 
 Both read the process environment only (no `.env`). On a host without gVisor, allow `runc` for

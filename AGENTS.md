@@ -62,6 +62,7 @@ sudo make deploy                         # prod, root-only: deploy origin/main (
 uv add <pkg> / uv add --dev <pkg>        # add deps (never edit lockfile by hand)
 uv run flask --app attacksurf run --debug
 uv run pytest                            # tests + coverage (fails under 80%)
+make eval                                # AI triage eval set against the LLM in .env (opt-in, real calls, never CI)
 uv run ruff check --fix . && uv run ruff format .
 uv run pyright
 uv run pre-commit install                # once: git hooks (pre-commit, commit-msg, pre-push)
