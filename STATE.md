@@ -5,7 +5,7 @@
 **Updated:** 2026-11-19 · **Branch:** `25-ai-triage` · **Issue:** #25 (AI triage stage)
 
 ## Status
-All 9 commits written (1-8 on draft PR #186); the live eval still needs a working LLM key.
+Done: all 9 commits on draft PR #186; the live eval passes 5 of 5 on `claude-sonnet-5-5`.
 
 ## Last task
 - Plan: one PR per issue (Angela: #25 now; sten-ctrl: #26 after #25 merges), kept in the Claude
@@ -37,15 +37,15 @@ All 9 commits written (1-8 on draft PR #186); the live eval still needs a workin
   and `docs/development.md` synced.
 
 ## Next step
-Run `make eval` with a working key and record the model and per-case results in PR #186; then
-`pre-pr-check`, update the PR description, and mark #186 ready for review. If the dangling-CNAME
-case isn't P1/P2 or the DKIM case isn't a likely false positive, the prompt needs `triage/v2`
-(new file, new pinned hash), not an edit to v1.
+Mark #186 ready for review once CI is green (Angela ticks the PR's AI-assistance box), then
+address review comments from sten-ctrl and cpt9m0. A future prompt change is `triage/v2` (new
+file, new pinned hash), compared against v1 with `make eval`.
 
 ## Open threads
-- The first live `make eval` (2026-11-19) got HTTP 401 on all five calls, and so did the #23
-  contract live test: Meta rejects the `.env` key itself. Check for a stale `LLM_API_KEY`
-  exported in the shell (it overrides `.env`), then for a rotated key.
+- `make eval` on 2026-11-19: 5 of 5 pass with `claude-sonnet-5-5` and `triage/v1`. The Meta
+  development key returned HTTP 401 that day, so `.env` now points at Anthropic.
+- `ai/pricing.py` has no Claude prices: Claude usage rows record tokens but no cost estimate.
+  Add list prices from Anthropic's pricing page in a follow-up.
 - Two tests unrelated to #25 flake on a loaded machine and pass alone:
   `test_artifact_purge_task.py::test_purge_task_deletes_expired_artifacts_even_without_a_key`
   (its `NOW` is fixed at import while the task reads the real clock) and
