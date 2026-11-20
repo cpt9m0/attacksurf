@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from uuid import UUID
 
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from attacksurf.ai.schemas import StoredTriage, TriagePriority
 from attacksurf.domain.findings import SEVERITY_RANK, Severity
-from attacksurf.domain.scans import JobStatus, ScanNotFound
+from attacksurf.domain.scans import JobStatus, ScanNotFound, ScanStatus
 from attacksurf.infra.db.models import Asset, Finding, FindingObservation, Job, Scan
 from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.services.jobs import FINISHED
@@ -22,12 +23,17 @@ from attacksurf.services.triage import (
 )
 
 TRIAGE_ROW_LIMIT = 100
+TRIAGE_START_GRACE = timedelta(minutes=1)
 _UNFINISHED = (JobStatus.QUEUED, JobStatus.RUNNING)
+_ACTIVE_SCAN = (ScanStatus.QUEUED, ScanStatus.RUNNING)
 _PRIORITY_ORDER = {priority: index for index, priority in enumerate(TriagePriority)}
 
 
 class TriageState(StrEnum):
-    NOT_STARTED = "not_started"  # the scan isn't complete, or predates AI triage
+    # The scan is still running, or completed moments ago and its triage job is about to appear.
+    AWAITING_SCAN = "awaiting_scan"
+    # The scan ended without triage: it failed, was cancelled, or predates AI triage.
+    NOT_STARTED = "not_started"
     PENDING = "pending"
     RUNNING = "running"
     SKIPPED = "skipped"
@@ -57,12 +63,15 @@ class ScanTriage:
     @property
     def active(self) -> bool:
         """Whether the page should keep polling."""
-        return self.state in (TriageState.PENDING, TriageState.RUNNING)
+        return self.state in (TriageState.AWAITING_SCAN, TriageState.PENDING, TriageState.RUNNING)
 
 
-def get_scan_triage(session: Session, org_id: UUID, scan_id: UUID) -> ScanTriage:
+def get_scan_triage(
+    session: Session, org_id: UUID, scan_id: UUID, *, now: datetime | None = None
+) -> ScanTriage:
     """The scan's triage run and its findings' judgments. Raises `ScanNotFound`."""
-    if get_scoped(session, Scan, scan_id, org_id) is None:
+    scan = get_scoped(session, Scan, scan_id, org_id)
+    if scan is None:
         raise ScanNotFound(str(scan_id))
     run = session.scalars(
         scoped(Job, org_id)
@@ -70,7 +79,7 @@ def get_scan_triage(session: Session, org_id: UUID, scan_id: UUID) -> ScanTriage
         .order_by(Job.created_at, Job.id)
     ).all()
     rows = _judged_rows(session, org_id, scan_id)
-    state, notice, done, total = _run_state(run)
+    state, notice, done, total = _run_state(run, scan, now or datetime.now(UTC))
     return ScanTriage(
         state=state,
         notice=notice,
@@ -81,14 +90,30 @@ def get_scan_triage(session: Session, org_id: UUID, scan_id: UUID) -> ScanTriage
     )
 
 
-def _run_state(run: Sequence[Job]) -> tuple[TriageState, str | None, int, int]:
+def _run_state(
+    run: Sequence[Job], scan: Scan, now: datetime
+) -> tuple[TriageState, str | None, int, int]:
     coordinator = _coordinator(run)
     if coordinator is None:
-        return TriageState.NOT_STARTED, None, 0, 0
+        waiting = _triage_may_still_start(scan, now)
+        return (TriageState.AWAITING_SCAN if waiting else TriageState.NOT_STARTED), None, 0, 0
     if coordinator.status is not JobStatus.COMPLETED:
         state, notice = _coordinator_outcome(coordinator)
         return state, notice, 0, 0
     return _batches_state(run)
+
+
+def _triage_may_still_start(scan: Scan, now: datetime) -> bool:
+    # An active scan queues triage when it completes. `finalize_scan` commits the completion
+    # before it creates the triage job, so a just-completed scan gets a short grace too; past
+    # it, no job means none is coming (the broker refused it, or the scan predates triage).
+    if scan.status in _ACTIVE_SCAN:
+        return True
+    return (
+        scan.status is ScanStatus.COMPLETED
+        and scan.finished_at is not None
+        and now - scan.finished_at <= TRIAGE_START_GRACE
+    )
 
 
 def _coordinator_outcome(coordinator: Job) -> tuple[TriageState, str | None]:

@@ -1,7 +1,8 @@
 {#- The scan's AI triage (ADR 0029). Triage runs after the scan completes, so this section polls
-    itself (`hx-get` to `ui.scan_triage`) while its run is pending or running, independently of
-    the progress section; once the run ends the attributes are gone and polling stops. Every
-    value stays autoescaped: finding titles and AI text can echo scan data. -#}
+    itself (`hx-get` to `ui.scan_triage`) from first paint on an active scan until its run ends,
+    independently of the progress section: a page opened mid-scan picks the run up without a
+    reload. Once the run ends the attributes are gone and polling stops. Every value stays
+    autoescaped: finding titles and AI text can echo scan data. -#}
 {%- from "components/ai_panel.html" import priority_pill -%}
 {%- from "components/badges.html" import severity_badge -%}
 {%- from "components/table.html" import data_table -%}
@@ -16,8 +17,10 @@
     {%- endif %}
   </div>
   <div class="card-body">
-    {%- if triage.state == "not_started" %}
-    <p class="muted">AI triage runs once the scan completes.</p>
+    {%- if triage.state == "awaiting_scan" %}
+    <p class="muted" role="status">AI triage starts once the scan completes.</p>
+    {%- elif triage.state == "not_started" %}
+    <p class="muted">No AI triage ran for this scan.</p>
     {%- elif triage.notice %}
     <p class="muted" role="status">{{ triage.notice }}</p>
     {%- endif %}

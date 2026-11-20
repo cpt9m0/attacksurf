@@ -158,6 +158,23 @@ def test_the_scan_page_lists_the_scans_judgments(
     assert 'hx-trigger="every 2s"' not in body  # a finished run is not polled
 
 
+def test_a_page_opened_mid_scan_polls_for_the_triage_to_come(
+    alice: FlaskClient, db_session: Session, org_id: UUID
+) -> None:
+    # Regression: only the progress section polled, so this one stayed on its first paint.
+    root = _asset(db_session, org_id)
+    scan = _completed_scan(db_session, org_id, root.id)
+    scan.status = ScanStatus.RUNNING
+    scan.finished_at = None
+    db_session.commit()
+    scan_id = scan.id  # requests close the test session
+
+    body = _body(alice, f"/scans/{scan_id}")
+
+    assert f'hx-get="/scans/{scan_id}/triage"' in body
+    assert "AI triage starts once the scan completes." in body
+
+
 def test_the_triage_section_polls_only_while_the_run_is_active(
     alice: FlaskClient, db_session: Session, org_id: UUID
 ) -> None:

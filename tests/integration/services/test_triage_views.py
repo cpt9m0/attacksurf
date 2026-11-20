@@ -1,6 +1,6 @@
 """What the UI shows about a scan's AI triage (ADR 0029)."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from pydantic import SecretStr
@@ -19,6 +19,7 @@ from attacksurf.services.triage_views import (
 )
 from tests.integration.factories import make_finding, make_scan
 
+NOW = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
 _CONFIG = LLMConfig(
     provider=ProviderKind.ANTHROPIC,
     model="muse-spark-1.3",
@@ -97,6 +98,57 @@ def test_a_scan_without_a_triage_job_has_not_started(db_session: Session) -> Non
     scan = _scan(db_session)
 
     view = get_scan_triage(db_session, scan.org_id, scan.id)
+
+    assert view.state is TriageState.NOT_STARTED
+    assert not view.active
+
+
+@pytest.mark.parametrize("status", [ScanStatus.QUEUED, ScanStatus.RUNNING])
+def test_an_active_scan_awaits_its_triage_and_is_polled(
+    db_session: Session, status: ScanStatus
+) -> None:
+    # Regression: a page opened mid-scan never polled, so triage never showed without a reload.
+    scan = _scan(db_session)
+    scan.status = status
+    db_session.flush()
+
+    view = get_scan_triage(db_session, scan.org_id, scan.id, now=NOW)
+
+    assert view.state is TriageState.AWAITING_SCAN
+    assert view.active
+
+
+def test_a_just_completed_scan_keeps_polling_until_its_triage_job_appears(
+    db_session: Session,
+) -> None:
+    # `finalize_scan` commits the scan before it creates the triage job.
+    scan = _scan(db_session)
+    scan.finished_at = NOW - timedelta(seconds=5)
+    db_session.flush()
+
+    view = get_scan_triage(db_session, scan.org_id, scan.id, now=NOW)
+
+    assert view.state is TriageState.AWAITING_SCAN
+    assert view.active
+
+
+@pytest.mark.parametrize(
+    ("status", "finished_ago"),
+    [
+        (ScanStatus.COMPLETED, timedelta(minutes=10)),  # triage was never queued
+        (ScanStatus.FAILED, timedelta(seconds=5)),
+        (ScanStatus.CANCELLED, timedelta(seconds=5)),
+    ],
+)
+def test_a_scan_that_ended_without_triage_stops_polling(
+    db_session: Session, status: ScanStatus, finished_ago: timedelta
+) -> None:
+    scan = _scan(db_session)
+    scan.status = status
+    scan.finished_at = NOW - finished_ago
+    db_session.flush()
+
+    view = get_scan_triage(db_session, scan.org_id, scan.id, now=NOW)
 
     assert view.state is TriageState.NOT_STARTED
     assert not view.active
