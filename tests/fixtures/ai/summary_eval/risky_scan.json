@@ -1,0 +1,52 @@
+{
+  "why": "Acceptance criterion of #26: a risky scan flags the dangling CNAME finding as a key risk, flags jenkins. and staging. as notable assets, and invents no unknown refs.",
+  "root_domain": "acme.example",
+  "changes": {
+    "new_findings": {"total": 1, "by_severity": {"high": 1}},
+    "fixed_findings": {"total": 0, "by_severity": {}},
+    "regressed_findings": {"total": 0, "by_severity": {}},
+    "total_findings": {"total": 2, "by_severity": {"high": 1, "medium": 1}},
+    "new_assets": {"total": 2, "names": ["jenkins.acme.example", "staging.acme.example"]},
+    "disappeared_assets": {"total": 0, "names": []}
+  },
+  "findings": [
+    {
+      "ref": "F1",
+      "rule_id": "dns.takeover.dangling_cname",
+      "title": "Dangling CNAME points at a deprovisioned service",
+      "severity": "high",
+      "asset": "assets.acme.example",
+      "triage": {
+        "priority": "P1",
+        "adjusted_severity": "critical",
+        "false_positive_likelihood": "low",
+        "rationale": "assets.acme.example CNAMEs to an unclaimed AWS S3 bucket that returns NXDOMAIN and can be registered by an attacker."
+      }
+    },
+    {
+      "ref": "F2",
+      "rule_id": "dns.email.dmarc_missing",
+      "title": "No DMARC record published",
+      "severity": "medium",
+      "asset": "acme.example",
+      "triage": {
+        "priority": "P3",
+        "adjusted_severity": "medium",
+        "false_positive_likelihood": "low",
+        "rationale": "The domain lacks a DMARC TXT record, making outbound email spoofing harder to detect."
+      }
+    }
+  ],
+  "assets": [
+    {"ref": "A1", "name": "acme.example", "type": "domain"},
+    {"ref": "A2", "name": "assets.acme.example", "type": "subdomain"},
+    {"ref": "A3", "name": "jenkins.acme.example", "type": "subdomain"},
+    {"ref": "A4", "name": "staging.acme.example", "type": "subdomain"},
+    {"ref": "A5", "name": "www.acme.example", "type": "subdomain"}
+  ],
+  "expect": {
+    "required_key_risks": ["F1"],
+    "required_notable_assets": ["A3", "A4"],
+    "forbidden_notable_assets": ["A1", "A5"]
+  }
+}

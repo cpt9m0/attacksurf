@@ -58,11 +58,13 @@ own key) **triages, prioritizes, and explains** them in plain language with fix 
   ones and each root's last scan
 
 ### Platform
-- **AI triage**: after each scan, an LLM judges every new or changed finding: its severity in
-  context, false-positive likelihood, a P1 to P4 priority and fix steps, labeled as AI-generated
-  next to the scanner's own verdict. It never changes a finding, never fails a scan, stays within
-  each org's monthly token budget and never pays twice for an unchanged finding. Exposure
-  summaries are coming
+- **AI triage & exposure summaries**: after each scan, an LLM judges every new or changed finding
+  (severity in context, false-positive likelihood, P1 to P4 priority and fix steps) and then
+  writes a plain-language exposure summary (headline, top risks linked to real findings, sensitive
+  hosts flagged with the `notable` tag, changes since the last scan, and next actions) shown on
+  the scan page and dashboard. Every output is labeled as AI-generated, never changes a finding,
+  never fails a scan, stays within each org's monthly token budget and never pays twice for an
+  unchanged finding or already-summarized scan
 - **Continuous monitoring**: per-domain daily or weekly rescans of read-only DNS configuration
   checks, with an admin opt-out and the same new / fixed / regressed diffs
 - **Bring your own LLM**: Anthropic or any OpenAI-compatible endpoint (OpenAI, OpenRouter, vLLM, ...)
