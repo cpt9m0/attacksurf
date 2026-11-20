@@ -61,9 +61,12 @@ The forces:
   `Finding.last_seen_scan_id`. `info` findings are included only when the instance setting
   `LLM_TRIAGE_INCLUDE_INFO` is true (default false).
 - **The cache lives on the finding.** `Finding.ai_triage` holds a `StoredTriage` whose
-  `cache_key` is the SHA-256 of the prompt version, model, fingerprint and evidence digest. A
-  finding whose stored key still matches is not sent again; a new prompt version, model or
-  evidence triggers a new judgment. There is no cache table. Results are committed per batch.
+  `cache_key` is the SHA-256 of the prompt version, model, fingerprint, evidence digest and
+  every other finding field the prompt shows that can change under the same fingerprint and
+  evidence: scanner severity, confidence, title and description (`TriageCacheInput`). A
+  finding whose stored key still matches is not sent again; a change to any part triggers a new
+  judgment. All parts are finding columns, so checking the cache loads no evidence. There is no
+  cache table. Results are committed per batch.
 - **The budget is checked before every call.** Once it runs out, the remaining batch jobs are
   skipped with the notice. Batches running in parallel can each start one call after the cap
   is reached; the overshoot is bounded by one batch per `ai` worker.

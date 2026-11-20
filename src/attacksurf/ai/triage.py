@@ -31,7 +31,7 @@ TRIAGE_PROMPT_VERSION = "triage/v1"
 TRIAGE_MAX_TOKENS = 8192
 EVIDENCE_ITEMS_PER_FINDING = 5
 EVIDENCE_STRING_LENGTH = 2000
-_CACHE_KEY_VERSION = "v1"
+_CACHE_KEY_VERSION = "v2"  # v2 adds the finding fields the prompt shows
 _REF = re.compile(FINDING_REF_PATTERN)
 
 
@@ -107,16 +107,41 @@ def match_results(batch: TriageBatch, reply: TriageReply) -> dict[str, FindingTr
     }
 
 
-def triage_cache_key(
-    prompt_version: str, model: str, fingerprint: str, evidence_digest: str | None
-) -> str:
+@dataclass(frozen=True)
+class TriageCacheInput:
+    """What a judgment of one finding answers: a change to any part means a new judgment.
+
+    The fingerprint covers rule, asset and location, and the digest the evidence. The other
+    fields reach the prompt too and can change under the same fingerprint and evidence (a
+    rule's new default severity, a scanner's new confidence, reworded text).
+    """
+
+    fingerprint: str
+    evidence_digest: str | None
+    severity: Severity
+    confidence: Confidence
+    title: str
+    description: str
+
+
+def triage_cache_key(prompt_version: str, model: str, finding: TriageCacheInput) -> str:
     """SHA-256 hex naming one judgment: a finding is triaged again only when a part changes.
 
     Same scheme as `finding_fingerprint`: a JSON array keeps the parts unambiguous, and the
     version prefix lets the scheme change without colliding with stored keys.
     """
     payload = json.dumps(
-        [_CACHE_KEY_VERSION, prompt_version, model, fingerprint, evidence_digest],
+        [
+            _CACHE_KEY_VERSION,
+            prompt_version,
+            model,
+            finding.fingerprint,
+            finding.evidence_digest,
+            finding.severity,
+            finding.confidence,
+            finding.title,
+            finding.description,
+        ],
         ensure_ascii=False,
         separators=(",", ":"),
     )

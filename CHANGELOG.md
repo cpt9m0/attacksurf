@@ -13,9 +13,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   `Finding.ai_triage` and shown in an AI panel on the finding page and a polled section on the
   scan page. Scan data reaches the model only as escaped, capped JSON in `<scan_data>` with
   batch-local refs; replies are schema-validated and unknown refs dropped; judgments are cached
-  by prompt version, model, fingerprint and evidence digest; the budget is checked before every
-  call; `LLM_TRIAGE_INCLUDE_INFO` opts `info` findings in. `make eval` runs the eval set against
-  the LLM in `.env`.
+  by prompt version, model and everything the prompt shows about the finding (fingerprint,
+  evidence digest, scanner severity and confidence, title, description); the budget is checked
+  before every call; `LLM_TRIAGE_INCLUDE_INFO` opts `info` findings in. `make eval` runs the
+  eval set against the LLM in `.env`.
 - Recurring scans (#27): one per-root schedule (`0012_add_scan_schedules`), weekly by default
   for new domains (`SCAN_DEFAULT_FREQUENCY`), a minute beat tick that claims due rows with
   `FOR UPDATE SKIP LOCKED` and starts the read-only `dns_scheduled` profile through

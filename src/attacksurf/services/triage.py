@@ -24,6 +24,7 @@ from attacksurf.ai.triage import (
     TRIAGE_PROMPT_VERSION,
     TRIAGE_PURPOSE,
     TriageBatch,
+    TriageCacheInput,
     TriageEvidence,
     TriageFinding,
     match_results,
@@ -247,7 +248,8 @@ def build_asset_batch(
         batch=batch,
         finding_ids={ref: finding.id for ref, finding in zip(refs, findings, strict=True)},
         cache_keys={
-            ref: _cache_key(finding, model) for ref, finding in zip(refs, findings, strict=True)
+            ref: finding_cache_key(finding, model)
+            for ref, finding in zip(refs, findings, strict=True)
         },
     )
 
@@ -374,12 +376,25 @@ def _untriaged(
 
 def _is_current(finding: Finding, model: str) -> bool:
     stored = stored_triage(finding)
-    return stored is not None and stored.cache_key == _cache_key(finding, model)
+    return stored is not None and stored.cache_key == finding_cache_key(finding, model)
 
 
-def _cache_key(finding: Finding, model: str) -> str:
+def finding_cache_key(finding: Finding, model: str) -> str:
+    """The cache key a judgment of `finding` by `model` with the current prompt answers.
+
+    Read from the finding's own columns, so checking the cache needs no evidence query.
+    """
     return triage_cache_key(
-        TRIAGE_PROMPT_VERSION, model, finding.fingerprint, finding.evidence_digest
+        TRIAGE_PROMPT_VERSION,
+        model,
+        TriageCacheInput(
+            fingerprint=finding.fingerprint,
+            evidence_digest=finding.evidence_digest,
+            severity=finding.severity,
+            confidence=finding.confidence,
+            title=finding.title,
+            description=finding.description,
+        ),
     )
 
 

@@ -9,15 +9,16 @@ from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
 from attacksurf.ai.schemas import FindingTriage, StoredTriage
-from attacksurf.ai.triage import TRIAGE_PROMPT_VERSION, triage_cache_key
+from attacksurf.ai.triage import TRIAGE_PROMPT_VERSION
 from attacksurf.domain.assets import AssetSource, AssetType
-from attacksurf.domain.findings import EvidenceKind, FindingStatus, Severity
+from attacksurf.domain.findings import Confidence, EvidenceKind, FindingStatus, Severity
 from attacksurf.domain.llm import KeySource, LLMConfig, ProviderKind
 from attacksurf.infra.db.models import Asset, Evidence, Finding, FindingObservation, Scan
 from attacksurf.services.assets import record_asset
 from attacksurf.services.triage import (
     assets_to_triage,
     build_asset_batch,
+    finding_cache_key,
     store_triage,
     stored_triage,
 )
@@ -74,14 +75,11 @@ def _judgment(ref: str = "F1") -> FindingTriage:
 
 
 def _judge(session: Session, finding: Finding, model: str = MODEL) -> None:
-    key = triage_cache_key(
-        TRIAGE_PROMPT_VERSION, model, finding.fingerprint, finding.evidence_digest
-    )
     finding.ai_triage = StoredTriage.from_judgment(
         _judgment(),
         prompt_version=TRIAGE_PROMPT_VERSION,
         config=_config(model),
-        cache_key=key,
+        cache_key=finding_cache_key(finding, model),
         triaged_at=NOW,
     ).model_dump(mode="json")
     session.flush()
@@ -175,6 +173,29 @@ def test_changed_evidence_is_sent_again(db_session: Session) -> None:
     assert _rules(db_session, scan, scan.root_asset_id) == ["dns.email.dmarc_missing"]
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("severity", Severity.CRITICAL),
+        ("confidence", Confidence.LOW),
+        ("title", "DMARC record missing"),
+        ("description", "Reworded by a rule catalog update."),
+    ],
+)
+def test_a_changed_finding_the_prompt_shows_is_sent_again(
+    db_session: Session, field: str, value: object
+) -> None:
+    # Regression: a later scan updated these (`_upsert_finding`) under the same fingerprint and
+    # evidence, the model had judged the old values, and the stale judgment counted as current.
+    scan = make_scan(db_session)
+    finding = _observed(db_session, scan, scan.root_asset_id)
+    _judge(db_session, finding)
+    setattr(finding, field, value)
+    db_session.flush()
+
+    assert _rules(db_session, scan, scan.root_asset_id) == ["dns.email.dmarc_missing"]
+
+
 def test_a_stored_judgment_that_does_not_parse_counts_as_untriaged(db_session: Session) -> None:
     scan = make_scan(db_session)
     finding = _observed(db_session, scan, scan.root_asset_id)
@@ -228,9 +249,7 @@ def test_a_batch_numbers_refs_most_severe_first(db_session: Session) -> None:
         ("F2", "dns.caa.missing"),
     ]
     assert planned.finding_ids == {"F1": critical.id, "F2": low.id}
-    assert planned.cache_keys["F1"] == triage_cache_key(
-        TRIAGE_PROMPT_VERSION, MODEL, critical.fingerprint, critical.evidence_digest
-    )
+    assert planned.cache_keys["F1"] == finding_cache_key(critical, MODEL)
 
 
 def test_a_batch_holds_twenty_findings_and_the_rest_come_next(db_session: Session) -> None:

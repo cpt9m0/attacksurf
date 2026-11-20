@@ -1,6 +1,7 @@
 """The triage contract (ADR 0029): what goes into triage, what comes out, and what is stored."""
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from attacksurf.ai.schemas import (
 from attacksurf.ai.triage import (
     TRIAGE_PURPOSE,
     TriageBatch,
+    TriageCacheInput,
     TriageEvidence,
     TriageFinding,
     triage_cache_key,
@@ -333,38 +335,64 @@ def test_batches_are_immutable() -> None:
 # --- The cache key ---------------------------------------------------------------------------
 
 
+_CACHE_INPUT = TriageCacheInput(
+    fingerprint=FINGERPRINT,
+    evidence_digest=DIGEST,
+    severity=Severity.HIGH,
+    confidence=Confidence.HIGH,
+    title="Dangling CNAME",
+    description="The target no longer resolves.",
+)
+
+
 def test_cache_key_is_stable() -> None:
     assert (
-        triage_cache_key("triage/v1", "test-model", FINGERPRINT, DIGEST)
-        == "61f0bb03d253ad6be3b9de2015e51bf237458910608fea69c9f2464babef06f6"
+        triage_cache_key("triage/v1", "test-model", _CACHE_INPUT)
+        == "543ef536a8429f934660ec3b7e46f39261dac76514cb1ee3a4efa1f220b9ba71"
     )
 
 
 @pytest.mark.parametrize(
-    "changed",
+    "changes",
     [
-        ("triage/v2", "test-model", FINGERPRINT, DIGEST),
-        ("triage/v1", "other-model", FINGERPRINT, DIGEST),
-        ("triage/v1", "test-model", "d" * 64, DIGEST),
-        ("triage/v1", "test-model", FINGERPRINT, "e" * 64),
-        ("triage/v1", "test-model", FINGERPRINT, None),
+        {"fingerprint": "d" * 64},
+        {"evidence_digest": "e" * 64},
+        {"evidence_digest": None},
+        # Regression: these reach the prompt and can change while fingerprint and evidence
+        # don't (a rule's new default severity, a scanner's new confidence, reworded text).
+        {"severity": Severity.CRITICAL},
+        {"confidence": Confidence.LOW},
+        {"title": "Dangling CNAME to S3"},
+        {"description": "Reworded description."},
     ],
 )
-def test_cache_key_changes_with_each_part(changed: tuple[str, str, str, str | None]) -> None:
-    assert triage_cache_key(*changed) != triage_cache_key(
-        "triage/v1", "test-model", FINGERPRINT, DIGEST
+def test_cache_key_changes_with_each_finding_part(changes: dict[str, Any]) -> None:
+    changed = replace(_CACHE_INPUT, **changes)
+
+    assert triage_cache_key("triage/v1", "test-model", changed) != triage_cache_key(
+        "triage/v1", "test-model", _CACHE_INPUT
+    )
+
+
+@pytest.mark.parametrize(
+    ("prompt_version", "model"), [("triage/v2", "test-model"), ("triage/v1", "other")]
+)
+def test_cache_key_changes_with_prompt_and_model(prompt_version: str, model: str) -> None:
+    assert triage_cache_key(prompt_version, model, _CACHE_INPUT) != triage_cache_key(
+        "triage/v1", "test-model", _CACHE_INPUT
     )
 
 
 def test_cache_key_parts_cannot_run_together() -> None:
     # "a" + "bc" and "ab" + "c" must not collide.
-    assert triage_cache_key("a", "bc", FINGERPRINT, DIGEST) != triage_cache_key(
-        "ab", "c", FINGERPRINT, DIGEST
-    )
+    first = replace(_CACHE_INPUT, title="a", description="bc")
+    second = replace(_CACHE_INPUT, title="ab", description="c")
+
+    assert triage_cache_key("v", "m", first) != triage_cache_key("v", "m", second)
 
 
 def test_cache_key_is_accepted_by_stored_triage() -> None:
-    key = triage_cache_key("triage/v1", "test-model", FINGERPRINT, None)
+    key = triage_cache_key("triage/v1", "test-model", replace(_CACHE_INPUT, evidence_digest=None))
 
     stored = _stored().model_copy(update={"cache_key": key})
 
