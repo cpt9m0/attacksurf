@@ -484,3 +484,76 @@ def test_run_summary_never_reads_another_orgs_job(
 
     with pytest.raises(JobNotFound):
         summary.run_summary(db_session, other.org_id, job.id, _settings(), retry_allowed=True)
+
+
+# --- Notable asset tagging (ADR 0030) ------------------------------------------------------
+
+
+def test_run_summary_adds_and_removes_notable_tag_while_preserving_other_tags(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scan = _completed_scan(db_session)
+    jenkins = _subdomain(db_session, scan, "jenkins")
+    staging = _subdomain(db_session, scan, "staging")
+    www = _subdomain(db_session, scan, "www")
+    jenkins.tags = ["ci"]
+    staging.tags = ["preprod", summary.NOTABLE_TAG]
+    www.tags = ["public", summary.NOTABLE_TAG]
+    db_session.flush()
+
+    # Sorted active assets: A1=acme.example, A2=jenkins, A3=staging, A4=www
+    job = _job(db_session, scan)
+    reply = _reply(
+        key_risks=[],
+        notable_assets=[{"asset_ref": "A2", "reason": "Exposed Jenkins server."}],
+    )
+    _use_provider(monkeypatch, FakeLLMProvider(reply))
+
+    summary.run_summary(db_session, scan.org_id, job.id, _settings(), retry_allowed=True)
+
+    assert _refreshed(db_session, jenkins).tags == ["ci", "notable"]
+    assert _refreshed(db_session, staging).tags == ["preprod"]
+    assert _refreshed(db_session, www).tags == ["public"]
+
+
+def test_notable_tagging_never_touches_another_root_or_another_org(db_session: Session) -> None:
+    acme_scan = _completed_scan(db_session, "acme")
+    acme_host = _subdomain(db_session, acme_scan, "jenkins")
+    other_root = record_asset(
+        db_session, acme_scan.org_id, AssetType.DOMAIN, "second.example", source=AssetSource.USER
+    )
+    other_root_host = record_asset(
+        db_session,
+        acme_scan.org_id,
+        AssetType.SUBDOMAIN,
+        "admin.second.example",
+        source=AssetSource.DISCOVERED,
+        parent_id=other_root.id,
+    )
+    other_root_host.tags = ["keep", summary.NOTABLE_TAG]
+
+    globex_scan = _completed_scan(db_session, "globex")
+    globex_host = record_asset(
+        db_session,
+        globex_scan.org_id,
+        AssetType.SUBDOMAIN,
+        "vpn.globex.example",
+        source=AssetSource.DISCOVERED,
+        parent_id=globex_scan.root_asset_id,
+    )
+    globex_host.tags = ["corp"]
+    db_session.flush()
+
+    # Even if IDs from another root or org are passed, only acme_scan's root is touched.
+    summary.apply_notable_tags(
+        db_session,
+        acme_scan.org_id,
+        acme_scan.root_asset_id,
+        [acme_host.id, other_root.id, globex_host.id],
+    )
+    db_session.commit()
+
+    assert _refreshed(db_session, acme_host).tags == ["notable"]
+    assert _refreshed(db_session, other_root).tags == []
+    assert _refreshed(db_session, other_root_host).tags == ["keep", "notable"]
+    assert _refreshed(db_session, globex_host).tags == ["corp"]

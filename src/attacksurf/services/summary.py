@@ -4,6 +4,7 @@
 `store_summary` are building blocks and don't. Every query is scoped by `org_id`.
 """
 
+from collections.abc import Collection
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -45,6 +46,8 @@ from attacksurf.services.triage import stored_triage, triage_is_stale
 
 log = structlog.get_logger(__name__)
 
+# Owned by AI exposure summaries (ADR 0030): reserve if manual tagging is added later.
+NOTABLE_TAG = "notable"
 _PRIORITY_ORDER = {priority: index for index, priority in enumerate(TriagePriority)}
 
 
@@ -78,6 +81,7 @@ def run_summary(
         jobs.mark_job_skipped(session, org_id, job_id, "The domain was archived.")
         return
     scan_id = scan.id
+    root_asset_id = scan.root_asset_id
     config = org_settings.enforce_triage_budget(
         session, org_id, job_id, settings, resolver=resolver
     )
@@ -109,6 +113,12 @@ def run_summary(
         validated,
         config=config,
         generated_at=now or datetime.now(UTC),
+    )
+    apply_notable_tags(
+        session,
+        org_id,
+        root_asset_id,
+        [item.asset_id for item in validated.notable_assets],
     )
     session.commit()
 
@@ -164,6 +174,34 @@ def stored_summary(scan: Scan) -> StoredSummary | None:
         return StoredSummary.model_validate(scan.ai_summary)
     except ValidationError:
         return None
+
+
+def apply_notable_tags(
+    session: Session,
+    org_id: UUID,
+    root_asset_id: UUID,
+    notable_asset_ids: Collection[UUID],
+) -> None:
+    """Sync the `notable` tag on assets under `root_asset_id` to match `notable_asset_ids`.
+
+    Building block: doesn't commit. Adds `notable` to flagged active assets under the scan's
+    root and removes it from that root's other assets. Never touches any other tag value,
+    another root's assets, or another organization's assets (ADR 0030).
+    """
+    flagged = set(notable_asset_ids)
+    assets = session.scalars(
+        scoped(Asset, org_id).where(
+            (Asset.id == root_asset_id) | (Asset.parent_id == root_asset_id)
+        )
+    ).all()
+    for asset in assets:
+        current = list(asset.tags or ())
+        has_tag = NOTABLE_TAG in current
+        should_have = asset.id in flagged and asset.is_active
+        if should_have and not has_tag:
+            asset.tags = [*current, NOTABLE_TAG]
+        elif not should_have and has_tag:
+            asset.tags = [tag for tag in current if tag != NOTABLE_TAG]
 
 
 def _select_findings(session: Session, org_id: UUID, scan_id: UUID) -> tuple[SummaryFinding, ...]:
