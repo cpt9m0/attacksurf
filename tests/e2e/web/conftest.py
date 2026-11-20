@@ -11,6 +11,7 @@ from attacksurf.services import (
     llm_usage,
     org_settings,
     scan_views,
+    summary_views,
 )
 from tests.conftest import LoginAs, make_session_user
 
@@ -42,6 +43,7 @@ def _no_assets(monkeypatch: pytest.MonkeyPatch) -> None:
             open_findings=0, by_severity=(), newest=(), active_assets=0, roots=()
         ),
     )
+    monkeypatch.setattr(summary_views, "list_latest_root_summaries", lambda *_args, **_kw: ())
     default_settings = org_settings.OrgSettingsView(
         ai_enabled=True,
         provider=ProviderKind.ANTHROPIC,

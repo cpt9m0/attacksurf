@@ -1006,3 +1006,53 @@ dl.meta dd {
   font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
 }
+
+/* AI exposure summary (#26, DESIGN.md "AI exposure summary") */
+.ai-summary h3 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--text-md);
+}
+
+.ai-summary-headline {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-md);
+  font-weight: var(--font-weight-semibold);
+  max-width: var(--measure);
+  overflow-wrap: anywhere;
+}
+
+.ai-summary-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ai-summary-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.ai-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: var(--space-4);
+}
+
+.ai-summary-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.ai-summary-card-head h3 {
+  margin: 0;
+  font-size: var(--text-md);
+}
