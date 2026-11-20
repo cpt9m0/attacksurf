@@ -40,8 +40,9 @@ class AssetUpload:
 
 @dataclass(frozen=True)
 class AnalysisRequest:
-    """Which scan an upload asks for. The `analysis` queue has no worker until #84: the job
-    (and its scan) stays queued until then."""
+    """Which scan an upload asks for. In dev the opt-in `worker-analysis` consumes the queue but
+    has no analysis tasks until #87/#101; prod has no consumer until #92 (ADR 0029). The job
+    stays queued."""
 
     kind: ArtifactKind
     profile: str
