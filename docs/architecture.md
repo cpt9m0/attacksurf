@@ -209,8 +209,12 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 ## Scan pipeline
 
 ```
-discover ─► per-asset checks (parallel group) ─► persist/normalize ─► dedupe + diff ─► AI triage ─► AI summary ─► notify
+discover ─► per-asset checks (parallel group) ─► persist/normalize ─► dedupe + diff ─► finalize
+                                                                   (scan complete) ─► AI triage ─► AI summary ─► notify
 ```
+
+- AI work starts only after `finalize` commits the scan as completed (ADR 0029): `finalize_scan`
+  queues one `ai.triage` job, so an LLM outage or a spent budget never delays or fails a scan.
 
 - Implemented as a Celery `chain`/`chord`; each stage is idempotent and tracked as a `Job`.
 - **Scanners are plugins** (`@register_scanner`) returning normalized pydantic `ScanOutput`.
@@ -313,7 +317,8 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   read a below-limit count. Two waves use Celery chords:
   discovery on the root, then checks on the active root and its known direct children, filtered
   by each plugin's supported asset types. Continuations use immutable signatures and tracked
-  jobs: `checks`, then `persist → diff → triage → finalize`. Batch rows commit before messages.
+  jobs: `checks`, then `persist → diff → finalize`. Batch rows commit before messages.
+  `passive.triage` stays one release as a no-op so chains published before ADR 0029 finish.
 - **Recurring scans (#27):** `passive.enqueue_due_scans` runs every minute from beat.
   `services.scan_schedules.enqueue_due_scans` reads due rows one org at a time (tenant-scoped
   queries), keeps the globally oldest 20 per delivery, and for each locks the root and then the
@@ -416,9 +421,9 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   or undecryptable org config fails closed instead of falling back to the instance key). Model
   names only from config.
 - Call path: `resolve_org_llm_config(session, org_id, settings)` (single-query org check +
-  decryption) + `check_llm_budget(...)` (or `enforce_triage_budget(...)` in
-  `workers/tasks/pipeline.py`, which marks `passive.triage` `SKIPPED` with a reason when AI is
-  off/over budget while allowing `finalize` to complete the scan), then
+  decryption) + `check_llm_budget(...)` (or `enforce_triage_budget(...)` in the `ai.triage`
+  task, `workers/tasks/ai.py`, which marks that job `SKIPPED` with a reason when AI is
+  off/over budget; the scan completed before the job was queued), then
   `ai/factory.build_provider(config).complete(...)`, then `services.llm_usage.record_llm_usage`.
   Connection probes enqueue `ai.test_connection` (`workers/tasks/ai.py`) via
   `services.org_settings.queue_ai_connection_test` and execute in `run_ai_connection_test`.
@@ -446,13 +451,40 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 - AI consumes **normalized findings only**; scan-derived text is treated as untrusted data.
 - AI output is advisory: adjusted severity is shown next to the scanner's severity and never
   auto-closes findings.
+- Triage (#25, ADR 0029) is being built: its reply models live in `ai/schemas.py`
+  (`TriageReply` of `FindingTriage`, P1 to P4; stored in `Finding.ai_triage` as `StoredTriage`)
+  and its calls in `ai/triage.py`: `TriageBatch` (one asset's findings under batch-local refs
+  `F1` to `F99`, never database IDs), `triage_batch(provider, batch)` (one call with prompt
+  `triage/v1`; `build_triage_messages` puts the batch in one `scan_data_block`),
+  `match_results` (drops refs outside the batch and refs judged twice) and `triage_cache_key`.
+  Reply models' docstrings and field descriptions are sent to the model with the schema, so they
+  are written for it. `services/triage.py` picks what a scan sends: `assets_to_triage` and
+  `build_asset_batch` (active findings this scan observed, from `finding_observations`; `info`
+  only with `LLM_TRIAGE_INCLUDE_INFO`; current cache keys skipped; at most 20 per asset per
+  scan, most severe first, 5 latest evidence items each). `store_triage` writes judgments to
+  `Finding.ai_triage` and nothing else.
+- A triage run (`workers/tasks/ai.py`, use cases in `services/triage.py`): `ai.triage`
+  (`run_triage`) gates on settings and budget, then publishes one `ai.triage_batch` job per
+  asset with work (`Job.asset_id`) plus an `ai.triage_done` tail and an `ai.triage_failed` error
+  callback through `jobs.enqueue_workflow`. `run_triage_batch` re-checks the budget, makes one
+  call, records usage on success and failure, stores matched judgments and commits; it raises
+  only `LLMUnavailable` while Celery may retry, so the run carries on past a failed batch. Batch
+  and tail tasks use `workers.base.ChordTask` (kept results, sanitized errors), which
+  `PipelineTask` also builds on.
+- The UI reads triage through `services/triage_views.get_scan_triage` (the run's state from its
+  jobs, and the scan's judged findings by priority, capped at 100) for the scan page's polled
+  `ui.scan_triage` section, and through `finding_views` (`ai_triage` parsed as `StoredTriage`)
+  for the finding page's AI panel. `TRIAGE_STAGES` are left out of every scan job count.
+- Prompts are versioned files `ai/prompts/<purpose>/v<N>.md` (system part, then user part with
+  `$placeholders`), loaded by `ai.prompts.load_prompt`; a test pins each file's SHA-256. Scan data
+  enters a prompt only through `ai/untrusted.scan_data_block`.
 
 ## Queues
 
 | Queue | Work | Isolation |
 |---|---|---|
 | `passive` | DNS, CT logs, RDAP, public APIs | normal egress |
-| `ai` | LLM calls | rate-limited per org |
+| `ai` | LLM calls: connection tests, triage runs (one call per job) | monthly token budget per org; never fails a scan |
 | `fetch` *(later)* | git smart-HTTP fetches | egress to allowlisted forges through ScopeGuard; no access to `sandbox-launcher`; never parses repository content (ADR 0017) |
 | `active` *(later)* | port/web probes on verified targets | separate network, egress rules |
 | `analysis` *(later)* | code/binary analysis (`sandbox_proxy/`, `sandbox_launcher/` and the `sandbox_tools/` archive extractor and binary format detector are implemented, as is the worker-side client `infra/sandbox.py`; the images and the worker are not yet) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |

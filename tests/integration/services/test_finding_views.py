@@ -142,7 +142,9 @@ def test_list_findings_root_filter_includes_discovered_assets(
 
     page = finding_views.list_findings(db_session, acme.org.id, FindingFilter(root_id=acme.root.id))
 
-    assert _titles(page) == ["on root", "on www"]
+    # Same severity and last_seen, so only the UUIDv7 ids order these two, and ids made in the
+    # same millisecond sort randomly: this test is about which findings match, not their order.
+    assert sorted(_titles(page)) == ["on root", "on www"]
 
 
 def test_list_findings_status_filter(db_session: Session, acme: Case) -> None:

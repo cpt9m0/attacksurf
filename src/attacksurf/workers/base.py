@@ -9,10 +9,11 @@ from uuid import UUID
 
 import structlog
 from celery import Task
+from celery.exceptions import Retry
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
-from attacksurf.domain.jobs import JobNotFound, TransientJobError
+from attacksurf.domain.jobs import JobError, JobNotFound, TransientJobError
 from attacksurf.services import jobs
 from attacksurf.workers import runtime
 
@@ -112,6 +113,34 @@ class TrackedTask(Task):
     @staticmethod
     def _session() -> Session:
         return runtime.session_factory()()
+
+
+class ChordTask(TrackedTask):
+    """A `TrackedTask` inside a Celery chord: Celery keeps its result, and errors are sanitized.
+
+    A chord needs every member's result, failed and skipped receipts included. The backend
+    stores a failure's exception, and `ChordError` embeds its repr, so only the safe
+    description reaches Celery, wrapped in `sanitized_error`.
+    """
+
+    ignore_result = False
+    sanitized_error: type[JobError] = JobError
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return super().__call__(*args, **kwargs)
+        except Retry as exc:
+            # The backend stores retry exceptions too (e.g. a DB URL in a driver error).
+            cause = exc.exc
+            safe = None if cause is None else self.sanitized_error(jobs.describe_error(cause))
+            raise Retry(
+                exc=safe,
+                when=exc.when,
+                is_eager=getattr(exc, "is_eager", False),
+                sig=getattr(exc, "sig", None),
+            ) from None
+        except Exception as exc:
+            raise self.sanitized_error(jobs.describe_error(exc)) from None
 
 
 def _job_ids(kwargs: dict[str, Any]) -> tuple[UUID, UUID] | None:

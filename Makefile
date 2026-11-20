@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose
 
-.PHONY: help up down logs ps build shell test test-worker check migrate revision deploy
+.PHONY: help up down logs ps build shell test test-worker eval check migrate revision deploy
 
 help: ## Show available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -36,6 +36,9 @@ test: ## Run the test suite (incl. DB tests) inside the web container
 test-worker: ## Signup and worker smoke checks against the running stack (needs `make up`)
 	$(COMPOSE) run --rm -v ./tests:/app/tests -e RUN_WORKER_TESTS=1 \
 		web pytest -m worker --no-cov -p no:cacheprovider tests/e2e
+
+eval: ## AI triage eval set against the LLM in .env (opt-in: a few real calls, your key)
+	RUN_LLM_TESTS=1 uv run pytest tests/eval -m llm_live --no-cov -p no:cacheprovider -v -s
 
 check: ## Run all git hooks (lint, format, layer rules, secrets) locally
 	uv run pre-commit run --all-files

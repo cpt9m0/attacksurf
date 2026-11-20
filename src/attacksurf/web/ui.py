@@ -59,6 +59,7 @@ from attacksurf.services import (
     repos,
     scan_schedules,
     scan_views,
+    triage_views,
     verifications,
 )
 from attacksurf.services import assets as assets_service
@@ -381,9 +382,22 @@ def create_scan() -> BaseResponse:
 def scan_detail(scan_id: UUID) -> Response:
     try:
         detail = scan_views.get_scan_detail(get_session(), _org_id(), scan_id)
+        triage = triage_views.get_scan_triage(get_session(), _org_id(), scan_id)
     except ScanNotFound:
         abort(404)
-    return render_page("pages/scan_detail.html", detail=detail, scan=detail.scan)
+    return render_page(
+        "pages/scan_detail.html", detail=detail, scan=detail.scan, triage=triage, scan_id=scan_id
+    )
+
+
+@bp.get("/scans/<uuid:scan_id>/triage")
+def scan_triage(scan_id: UUID) -> Response:
+    """The AI triage fragment alone, polled while its run is active (ADR 0029)."""
+    try:
+        triage = triage_views.get_scan_triage(get_session(), _org_id(), scan_id)
+    except ScanNotFound:
+        abort(404)
+    return render_page("pages/_scan_triage.html", triage=triage, scan_id=scan_id)
 
 
 @bp.get("/scans/<uuid:scan_id>/progress")

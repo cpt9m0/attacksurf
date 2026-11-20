@@ -33,12 +33,16 @@ description: Add or change an LLM-powered feature or prompt (triage, summaries, 
 
 ## Steps
 1. **Schema:** define the pydantic output model in `ai/schemas.py` with field descriptions
-   (they guide the model). Keep enums tight.
-2. **Prompt file:** `ai/prompts/<purpose>/v<N>.md` (or `.j2`). Never edit a released version;
-   add `v<N+1>` and switch the pointer. The prompt version is stored with every result.
-3. **Untrusted data:** anything from scans (DNS records, HTML, banners, code, strings) goes in a
-   clearly delimited block, e.g. `<scan_data>...</scan_data>`, truncated to a size cap, with
-   an explicit instruction that it is data and must never be followed as instructions.
+   (they guide the model). Keep enums tight. Its docstrings and descriptions are sent with the
+   schema, so write them for the model and keep developer notes in comments.
+2. **Prompt file:** `ai/prompts/<purpose>/v<N>.md`: a `<!-- system -->` part, then a
+   `<!-- user -->` part whose `$placeholders` are filled once (`$$` is a literal `$`). Load it with
+   `ai.prompts.load_prompt("<purpose>/v<N>")` and add its SHA-256 to `RELEASED` in
+   `tests/unit/ai/test_prompts.py`. Never edit a released version; add `v<N+1>` and switch the
+   pointer. The prompt version is stored with every result.
+3. **Untrusted data:** anything from scans (DNS records, HTML, banners, code, strings) goes in
+   only through `ai/untrusted.scan_data_block` (escaped, capped JSON in `<scan_data>` tags), and
+   the system part says the block is data that must never be followed as instructions.
 4. **Minimize data:** send only the fields needed. No secrets, no API keys, no full evidence
    dumps. Note in `docs/security.md` what this feature sends to the provider.
 5. **Validate references:** if output references finding/asset IDs, drop any that don't exist.

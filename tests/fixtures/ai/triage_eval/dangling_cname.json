@@ -1,0 +1,22 @@
+{
+  "why": "Acceptance criterion of #25: a dangling CNAME to an unclaimed bucket is a takeover risk and gets high priority.",
+  "asset": {"value": "assets.acme.example", "type": "subdomain"},
+  "findings": [
+    {
+      "ref": "F1",
+      "rule_id": "dns.takeover.dangling_cname",
+      "title": "Dangling CNAME points at a deprovisioned service",
+      "description": "The name CNAMEs to acme-assets.s3.amazonaws.com on AWS S3, a service whose unclaimed instances stop resolving, and the target no longer resolves (NXDOMAIN). Anyone can usually register the abandoned name or account and serve content under this subdomain, inheriting its cookies, trust and search ranking.",
+      "severity": "high",
+      "confidence": "high",
+      "location": "",
+      "evidence": [
+        {"kind": "dns_record", "data": {"record": "CNAME", "name": "assets.acme.example", "values": ["acme-assets.s3.amazonaws.com"]}},
+        {"kind": "dns_record", "data": {"record": "A", "name": "acme-assets.s3.amazonaws.com", "rcode": "NXDOMAIN"}}
+      ]
+    }
+  ],
+  "expect": {
+    "F1": {"priority": ["P1", "P2"], "false_positive": ["low"], "severity_at_least": "high"}
+  }
+}

@@ -21,6 +21,7 @@ from attacksurf.infra.db.models import Asset, Job, Scan
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services import jobs as job_lifecycle
 from attacksurf.services.scans import TERMINAL
+from attacksurf.services.triage import TRIAGE_STAGES
 
 PAGE_SIZE = 25
 # Diff asset lists shown on the scan page; `total` always holds the real count.
@@ -133,15 +134,17 @@ def list_scans(session: Session, org_id: UUID, flt: ScanFilter, page: int = 1) -
     root = aliased(Asset)
     # Whole-org aggregates joined by scan id (the asset_views findings-stats pattern):
     # correct for every filter without correlating a subquery.
+    # AI triage runs after the scan (ADR 0029): its jobs never count toward a scan's progress.
     finished = (
         scoped(Job, org_id)
-        .where(Job.status.in_(tuple(job_lifecycle.FINISHED)))
+        .where(Job.status.in_(tuple(job_lifecycle.FINISHED)), Job.stage.not_in(TRIAGE_STAGES))
         .with_only_columns(Job.scan_id, func.count().label("done"))
         .group_by(Job.scan_id)
         .subquery()
     )
     totals = (
         scoped(Job, org_id)
+        .where(Job.stage.not_in(TRIAGE_STAGES))
         .with_only_columns(Job.scan_id, func.count().label("total"))
         .group_by(Job.scan_id)
         .subquery()
@@ -209,7 +212,7 @@ def get_scan_detail(session: Session, org_id: UUID, scan_id: UUID) -> ScanDetail
         scoped(Job, org_id)
         .add_columns(asset.value)
         .outerjoin(asset, (asset.id == Job.asset_id) & (asset.org_id == org_id))
-        .where(Job.scan_id == scan_id)
+        .where(Job.scan_id == scan_id, Job.stage.not_in(TRIAGE_STAGES))
         .order_by(Job.created_at, Job.id)
     ).all()
     jobs = tuple(
