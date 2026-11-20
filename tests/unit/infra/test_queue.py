@@ -25,10 +25,21 @@ JOB = UUID("00000000-0000-7000-8000-000000000002")
 
 @pytest.mark.parametrize(
     ("task_name", "queue"),
-    [("passive.ping", "passive"), ("ai.triage", "ai"), ("active.axfr", "active")],
+    [
+        ("passive.ping", "passive"),
+        ("ai.triage", "ai"),
+        ("active.axfr", "active"),
+        ("analysis.code_scan", "analysis"),
+    ],
 )
 def test_task_name_prefix_is_the_queue(task_name: str, queue: str) -> None:
     assert queue_for(task_name) == queue
+
+
+def test_analysis_is_consumed_and_only_active_checks_stay_reserved() -> None:
+    # ADR 0029: the analysis queue opens before any analyzer exists; active checks stay closed.
+    assert "analysis" in QUEUES
+    assert RESERVED_QUEUES == ("active",)
 
 
 @pytest.mark.parametrize(

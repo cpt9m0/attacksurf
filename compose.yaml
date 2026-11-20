@@ -29,8 +29,8 @@ x-app: &app
     LLM_MONTHLY_INSTANCE_TOKEN_BUDGET: ${LLM_MONTHLY_INSTANCE_TOKEN_BUDGET:-}
     LLM_ALLOWED_BASE_HOSTS: ${LLM_ALLOWED_BASE_HOSTS:-}
     SCAN_MAX_STARTS_PER_HOUR: ${SCAN_MAX_STARTS_PER_HOUR:-}
-    # Unset (the default here): the workers refuse every sandbox request. This stack has no
-    # sandbox launcher yet, so point it at one you run yourself (http://host[:port] only).
+    # Unset (the default here): the workers refuse every sandbox request. Only `worker-analysis`
+    # sets it, to the opt-in launcher; any other value is http://host[:port] only.
     SANDBOX_LAUNCHER_URL: ${SANDBOX_LAUNCHER_URL:-}
   volumes:
     - ./src:/app/src  # hot reload
@@ -113,6 +113,37 @@ services:
     healthcheck:
       <<: *worker-health
       test: ["CMD-SHELL", "celery -A attacksurf.workers.app inspect ping -d ai@$$HOSTNAME --timeout 5"]
+  # Opt-in (`sandbox` profile). Consumes `analysis` (ADR 0029) and is the only app service that
+  # knows the launcher. Until #87/#101 register the analysis tasks, Celery drops the upload jobs
+  # it receives and their rows stay `queued`.
+  worker-analysis:
+    <<: *worker
+    profiles: [sandbox]
+    command:
+      ["celery", "-A", "attacksurf.workers.app", "worker", "-Q", "analysis", "-c", "2",
+       "-n", "analysis@%h", "--loglevel", "INFO"]
+    healthcheck:
+      <<: *worker-health
+      test: ["CMD-SHELL", "celery -A attacksurf.workers.app inspect ping -d analysis@$$HOSTNAME --timeout 5"]
+    # `default` for Postgres and Redis, `sandbox` for the launcher (ADR 0016).
+    networks: [default, sandbox]
+    environment:
+      <<: *app-env
+      SANDBOX_LAUNCHER_URL: http://sandbox-launcher:8791
+      SANDBOX_ARTIFACT_ROOT: ${SANDBOX_ARTIFACT_ROOT:-/tmp/attacksurf-sandbox}
+    # Lists are replaced by a merge, so the `x-app` ones are repeated. The staging folder is
+    # read-write here (it stages decrypted artifacts) and read-only in the launcher.
+    volumes:
+      - ./src:/app/src
+      - artifact-store:/var/lib/attacksurf/artifact-store
+      - ${SANDBOX_ARTIFACT_ROOT:-/tmp/attacksurf-sandbox}:${SANDBOX_ARTIFACT_ROOT:-/tmp/attacksurf-sandbox}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      sandbox-launcher:
+        condition: service_healthy
   beat:
     <<: *app
     # Schedule state in /tmp: the image's /app is not meant to be written at runtime.

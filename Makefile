@@ -13,8 +13,8 @@ up: ## Build, migrate, then start the healthy stack (http://127.0.0.1:5000)
 	$(MAKE) migrate
 	$(COMPOSE) up -d --wait
 
-down: ## Stop the stack (keeps the database volume)
-	$(COMPOSE) down
+down: ## Stop the stack, incl. opt-in sandbox services (keeps the database volume)
+	$(COMPOSE) --profile sandbox down
 
 logs: ## Follow logs of all services
 	$(COMPOSE) logs -f

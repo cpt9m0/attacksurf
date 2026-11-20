@@ -14,14 +14,17 @@ from kombu import Exchange, Queue
 from attacksurf.config import Settings
 from attacksurf.domain.jobs import JobTask
 
-QUEUES = ("passive", "ai")
-RESERVED_QUEUES = ("active", "analysis")  # no workers yet: active checks, sandboxed analysis
+# Every queue a task may be routed to. Sending works for both lists, so a job can wait in a
+# reserved queue until its worker exists. The split is checked by tests only: tasks and beat
+# entries may be registered only on a consumed queue (`QUEUES`, read by a compose worker).
+QUEUES = ("passive", "ai", "analysis")
+RESERVED_QUEUES = ("active",)  # nobody reads these yet; sending is allowed, registering is not
 
 
 def queue_for(task_name: str) -> str:
     queue, dot, task = task_name.partition(".")
     if not dot or not task or queue not in QUEUES + RESERVED_QUEUES:
-        # Fail loudly: a task routed to a queue nobody consumes would wait forever.
+        # Fail loudly: a task on an unknown queue would never be read.
         raise ValueError(f"task {task_name!r} must be named <queue>.<task>, queue in {QUEUES}")
     return queue
 
