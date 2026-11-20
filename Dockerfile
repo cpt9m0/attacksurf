@@ -23,7 +23,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM deps AS dev
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project
-COPY README.md LICENSE alembic.ini ./
+COPY README.md LICENSE alembic.ini sandbox-images.lock ./
 COPY src ./src
 # The artifact-store volume takes this directory's owner and mode on first mount (ADR 0028).
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -35,7 +35,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
 CMD ["flask", "--app", "attacksurf", "run", "--host", "0.0.0.0", "--port", "5000", "--debug"]
 
 FROM deps AS prod
-COPY README.md LICENSE alembic.ini ./
+COPY README.md LICENSE alembic.ini sandbox-images.lock ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable \
