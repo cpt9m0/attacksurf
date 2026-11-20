@@ -7,6 +7,7 @@ what the model sees: release it with a new prompt version.
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Self
+from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -17,10 +18,20 @@ MAX_FINDINGS_PER_BATCH = 20
 # Batch-local references (F1 to F99), never database IDs: a reply can only point at findings
 # of its own batch.
 FINDING_REF_PATTERN = r"^F[1-9][0-9]?$"
+# Batch-local asset references (A1 to A999), never database IDs.
+ASSET_REF_PATTERN = r"^A[1-9][0-9]{0,2}$"
 MAX_RATIONALE_LENGTH = 600
 MAX_EXPLOITABILITY_LENGTH = 600
 MAX_REMEDIATION_STEPS = 5
 MAX_REMEDIATION_STEP_LENGTH = 300
+MAX_HEADLINE_LENGTH = 200
+MAX_KEY_RISKS = 5
+MAX_KEY_RISK_WHY_LENGTH = 300
+MAX_NOTABLE_ASSETS = 10
+MAX_NOTABLE_REASON_LENGTH = 200
+MAX_CHANGES_LENGTH = 600
+MAX_NEXT_ACTIONS = 5
+MAX_NEXT_ACTION_LENGTH = 200
 _SHA256_HEX = r"^[0-9a-f]{64}$"
 
 
@@ -157,3 +168,134 @@ class StoredTriage(BaseModel):
             cache_key=cache_key,
             triaged_at=triaged_at,
         )
+
+
+# --- Exposure summary (ADR 0030) -------------------------------------------------------------
+
+AssetRef = Annotated[
+    str,
+    Field(
+        pattern=ASSET_REF_PATTERN,
+        description="The asset's reference exactly as given in the input, for example A1.",
+    ),
+]
+SummaryHeadline = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=MAX_HEADLINE_LENGTH,
+        description="One short sentence capturing the domain's current exposure.",
+    ),
+]
+RiskWhy = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=MAX_KEY_RISK_WHY_LENGTH,
+        description="Why this finding matters to the security team, in one or two sentences.",
+    ),
+]
+NotableReason = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=MAX_NOTABLE_REASON_LENGTH,
+        description="Why this host looks sensitive or worth inspecting first.",
+    ),
+]
+SummaryChanges = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=MAX_CHANGES_LENGTH,
+        description=(
+            "What changed since the previous scan (new, fixed, or regressed findings and assets), "
+            "or that nothing changed."
+        ),
+    ),
+]
+NextActions = Annotated[
+    list[Annotated[str, Field(min_length=1, max_length=MAX_NEXT_ACTION_LENGTH)]],
+    Field(
+        max_length=MAX_NEXT_ACTIONS,
+        description="Concrete next steps for the security team, most urgent first.",
+    ),
+]
+
+
+class KeyRisk(BaseModel):
+    """One top risk citing a finding from the input."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    finding_ref: FindingRef
+    why: RiskWhy
+
+
+class NotableAsset(BaseModel):
+    """One host from the input that looks sensitive or worth checking first."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    asset_ref: AssetRef
+    reason: NotableReason
+
+
+class ExposureSummary(BaseModel):
+    """A short exposure summary for the scanned domain."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    headline: SummaryHeadline
+    key_risks: list[KeyRisk] = Field(
+        max_length=MAX_KEY_RISKS,
+        description=(
+            "Up to five top risks, ranked most urgent first, each citing a finding from the input."
+        ),
+    )
+    notable_assets: list[NotableAsset] = Field(
+        max_length=MAX_NOTABLE_ASSETS,
+        description=(
+            "Up to ten hosts from the input whose names suggest sensitive, internal, or legacy "
+            "services (such as admin, jenkins, vpn, staging, or old)."
+        ),
+    )
+    changes: SummaryChanges
+    next_actions: NextActions
+
+
+class StoredKeyRisk(BaseModel):
+    """One validated top risk linked to a real finding ID."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    finding_id: UUID
+    why: RiskWhy
+
+
+class StoredNotableAsset(BaseModel):
+    """One validated notable host linked to a real asset ID."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    asset_id: UUID
+    reason: NotableReason
+
+
+class StoredSummary(BaseModel):
+    """`Scan.ai_summary`: one validated exposure summary with real IDs and provenance.
+
+    A row that doesn't validate (written by an older version) counts as missing.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    headline: SummaryHeadline
+    key_risks: list[StoredKeyRisk] = Field(max_length=MAX_KEY_RISKS)
+    notable_assets: list[StoredNotableAsset] = Field(max_length=MAX_NOTABLE_ASSETS)
+    changes: SummaryChanges
+    next_actions: NextActions
+    prompt_version: str = Field(min_length=1, max_length=50)
+    provider: ProviderKind
+    model: str = Field(min_length=1, max_length=200)  # as long as `LLMUsage.model`
+    generated_at: AwareDatetime
