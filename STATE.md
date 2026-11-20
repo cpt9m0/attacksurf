@@ -2,52 +2,47 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-18 · **Branch:** `84-sandbox-runner-client` · **Issue:** #84 (analysis sandbox)
+**Updated:** 2026-11-20 · **Branch:** `84-analysis-worker` · **Issue:** #84 (analysis sandbox)
 
 ## Status
-PR 3d (worker-side sandbox client) is done locally and not pushed; no PR is open. It was rebased
-onto `origin/main` (`022e53e`), which has PR 3c (#172, squash-merged); only the 3 PR 3d commits are
-on top. `origin/main` (including #24 / #182, org AI settings) was merged in afterwards; the merge
-touched `tests/unit/test_config.py` (kept both sides' tests) and the full suite has not been re-run.
+PR 4 (analysis worker) is code-complete locally: 8 of 8 commits, nothing pushed, no PR open. The
+gate and `pre-pr-check` have not been run on this final commit yet.
 
 ## Last task
-- `infra/sandbox.py`: `LauncherSandboxRunner` (3 MiB capped, strictly validated reply; only 503 or
-  unreachable is retried; fixed error text).
-- `SANDBOX_LAUNCHER_URL` setting (`SecretStr`, plain `http://host[:port]`), `compose.yaml` and
-  `.env.example` entries, `workers.runtime.sandbox_runner()` wired into `scanner_gate()`.
-- 3c fix: a proxy 403 (ownership denial) is unconfirmed cleanup, so `sandbox_cleanup_failed`
-  fires instead of being suppressed.
-- Docs, CHANGELOG and this file synced, including the tenant-safety note.
+- Commit 8: architecture, security, changelog and this file now describe the dev `sandbox`
+  profile (`worker-analysis` → `sandbox-launcher` → `sandbox-proxy` → Docker, ADR 0029).
+- The `.env.example` `SANDBOX_ALLOW_RUNC=true` fix was squashed into the proxy/launcher commit.
+- Plans live in `docs/plans/84-analysis-sandbox/84-pr4-analysis-worker/` (still untracked).
 
 ## Next step
-1. Check the `.env.example` line: it says port 8080, the launcher's default is 8791.
-2. Run `pre-pr-check`, push 3d, open its draft PR ("Merge order: 3d of #84"; 3c is merged).
-3. Then PR 4/5: the analysis worker and the first analyzer image (`sandbox-images.lock`).
+Run the full gate (`ruff check`, `ruff format --check`, `pyright`, `lint-imports`, `pytest`) and
+`pre-pr-check`, push, and open the draft PR `feat(workers): add analysis worker and sandbox
+services` (merge order 4 of 5: after 3d, before PR 5; tick it in #84). Then PR 5
+(`84-sandbox-ci`): fixture analyzer image, a real `sandbox-images.lock` entry, runsc CI job.
 
 ## Open threads
-- Nothing enforces "the artifact belongs to the job's org" before `SandboxRunner.run`: the scope
-  guard only checks the analyzer allowlist. The first analysis scanner must `get_scoped` the
-  artifact first and add a tenant-isolation test (docs/security.md, Sandbox launcher).
-- After a real proxy restart a stray container is alerted on but not removed. Propose a follow-up
-  issue: sweep leftover `attacksurf-*` containers after a launcher or proxy crash (before #92).
-- `http.client` timeouts in the launcher's proxy client apply per socket operation, not per run.
-- The full test suite has not been run on this branch; `stash@{0}` and the
-  `backup-3d-pre-rebase` branch are leftovers from the 3d rebase and can be deleted.
-- The #84 plans are in `docs/plans/84-analysis-sandbox/` (PR #180); issue #84 is the source of
-  truth for the PR split.
+- **Proxy trust:** the proxy has no caller authentication and `worker-analysis` shares the
+  `sandbox` network with it. Written up in `docs/security.md`; #92 must close it before prod.
+- **Dropped dev jobs:** `worker-analysis` drops `analysis.*` messages until #87/#101 register
+  tasks; the job rows stay `queued`.
+- **#92 prerequisites:** proxy, launcher and worker in `compose.prod.yaml`, `runsc` on the VPS,
+  and the profile guard test in `tests/unit/scanners/test_profiles.py` removed or changed.
+- Follow-up issue to file (before #92): after a proxy restart a stray `attacksurf-*` container
+  is alerted on but not removed.
+- The `/tmp/attacksurf-sandbox` default can be claimed first by another local user on a shared
+  host (symlink risk, `sandbox_launcher/artifacts.py`). Accepted in dev; revisit before #92.
+- Unverified: plain `make down` vs profile services; `--profile sandbox` build racing `make up`.
+- Nothing enforces "the artifact belongs to the job's org" before `SandboxRunner.run`: the first
+  analysis scanner must `get_scoped` the artifact first, with a tenant-isolation test.
+- `/tmp/attacksurf-sandbox-test` is a root-owned leftover from earlier checks.
 
 ## Notes for the next agent
 - The launcher copies proxy constants and `domain.scanners.MAX_OUTPUT_BYTES` on purpose (it may
   not import them); a parity test guards each copy. Don't "fix" that by importing.
-- `sandbox-images.lock` does not exist yet (the first analyzer PR adds it); the catalog is empty,
-  so every `POST /runs` is a 404 and local runs need a `{}` lock file.
-- The 3 MiB reply cap assumes stdout is at most 2 MiB (base64 about 2.67 MiB).
-- Compose has no launcher or proxy service yet (ADR 0016); `SANDBOX_LAUNCHER_URL` stays empty there.
+- `sandbox-images.lock` is `{}`: the catalog is empty, so every `POST /runs` is a 404.
+- Compose sandbox services have no `curl`; healthchecks use `python -c`.
 - ADR numbers move fast: check `origin/main` and open branches for the next free number first.
-- Production plugins are registered explicitly in `src/attacksurf/app.py` and
-  `src/attacksurf/workers/app.py`; a new plugin needs both imports.
-- Tests that need Redis behavior use `tests.fakes.FakeCache`.
-- DB tests need `TEST_DATABASE_URL`; the dev Compose stack exposes PostgreSQL on
-  `127.0.0.1:5432` with an `attacksurf_test` database (`make test` runs them in `web`).
-- The ruff format hook strips imports that aren't used yet: add imports together with their
-  first use.
+- Production plugins are registered in `src/attacksurf/app.py` and `src/attacksurf/workers/app.py`.
+- DB tests need `TEST_DATABASE_URL`; the dev stack exposes PostgreSQL on `127.0.0.1:5432` with an
+  `attacksurf_test` database (`make test` runs them in `web`).
+- The ruff format hook strips imports that aren't used yet: add imports with their first use.

@@ -6,6 +6,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Analysis worker and sandbox services in the dev stack (#84): `worker-analysis`,
+  `sandbox-launcher` and `sandbox-proxy` run behind the opt-in Compose `sandbox` profile on an
+  internal network, the `analysis` queue is consumed from now on (ADR 0029), and an empty
+  `sandbox-images.lock` ships in the image, so no analyzer can run yet. Prod runs none of it
+  until #92.
 - Production `worker-ai` consumes Settings connection tests from the `ai` queue, with a
   secret-aware targeted healthcheck that gates deployment (#24).
 - Organization AI settings, encrypted BYO API keys, SSRF-guarded custom `base_url`s, monthly UTC token budget enforcement, and monthly AI usage breakdown on `/settings` (`0011_add_org_settings`, `SecretCipher` with `APP_ENCRYPTION_OLD_KEYS` rotation, `validate_llm_base_url`, `services.org_settings`, `services.llm_usage.get_usage_summary`, `LLM_MONTHLY_INSTANCE_TOKEN_BUDGET`, `LLM_ALLOWED_BASE_HOSTS`, #24).

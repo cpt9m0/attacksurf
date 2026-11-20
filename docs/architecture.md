@@ -13,18 +13,22 @@ attacksurf is a **modular monolith**: one Flask codebase, deployed as several pr
         ┌───▼────┐   enqueue   ┌────────┐   consume  ┌─▼──────────────┐
 Browser ─► web    ├────────────►│ Redis  ├───────────►│ worker-passive │─► DNS / CT logs / RDAP
  (HTMX) │ Flask  │◄─ poll ─────┤ broker │            │ worker-ai      │─► LLM provider
-        └───┬────┘             └────▲───┘            │ (worker-active,│
-            │                       │ schedule       │  worker-       │
-            │                  ┌────┴───┐            │  analysis:     │
-            │                  │ beat   │            │  later)        │
+        └───┬────┘             └────▲───┘            │ (active: later;│
+            │                       │ schedule       │ worker-analysis│
+            │                  ┌────┴───┐            │  dev only)     │
+            │                  │ beat   │            │                │
             │                  └────────┘            └──────┬─────────┘
             │                                               │
             └──────────────────► PostgreSQL ◄───────────────┘
 ```
 
-Analysis path (ADR 0016; `sandbox-proxy`, `sandbox-launcher` and the worker-side client exist,
-the analysis worker does not yet): only `sandbox-proxy` holds the Docker socket, and the
-sandbox that reads the artifact has no network and no credentials.
+Analysis path (ADR 0016; dev only until #92, ADR 0029): only `sandbox-proxy` holds the Docker
+socket, and the sandbox that reads the artifact has no network and no credentials. Compose runs
+the chain behind the opt-in `sandbox` profile (`docker compose --profile sandbox up -d --wait`).
+`worker-analysis` is on `default` (Postgres, Redis) and on the internal `sandbox` network, which
+has no route outside and no Postgres or Redis; the launcher and proxy are on `sandbox` only, and
+get no `.env` file, database URL or encryption key. `compose.prod.yaml` has none of these
+services.
 
 ```
 worker-analysis ─ run(artifact ID, analyzer) ─► sandbox-launcher ─► sandbox-proxy ─► Docker
@@ -233,7 +237,8 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   and `dns.resolve`, `dns.email`, `dns.takeover`, `dns.takeover.http`, `dns.dnssec`, `dns.ns`,
   `dns.mx`, `dns.caa`, `dns.whois` and `dns.axfr` for checks, with `max_discovered_assets=1000`;
   empty/unknown profiles are rejected. Profiles cannot route to
-  the reserved `active`/`analysis` queues before those workers are implemented.
+  the reserved `active` queue, and a unit test keeps analysis scanners out of every profile until
+  #92 (ADR 0029).
 - **CT discovery (#15, ADR 0022):** `dns.discovery.ct` queries crt.sh's JSON endpoint and falls
   back to Cert Spotter when crt.sh fails, times out or truncates. Names are normalized, filtered
   to the root, deduplicated and capped (shallow names first). Complete results are cached per
@@ -440,7 +445,7 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 | `ai` | LLM calls | rate-limited per org |
 | `fetch` *(later)* | git smart-HTTP fetches | egress to allowlisted forges through ScopeGuard; no access to `sandbox-launcher`; never parses repository content (ADR 0017) |
 | `active` *(later)* | port/web probes on verified targets | separate network, egress rules |
-| `analysis` *(later)* | code/binary analysis (`sandbox_proxy/`, `sandbox_launcher/` and the `sandbox_tools/` archive extractor and binary format detector are implemented, as is the worker-side client `infra/sandbox.py`; the images and the worker are not yet) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
+| `analysis` *(dev only until #92)* | code/binary analysis (`sandbox_proxy/`, `sandbox_launcher/`, the `sandbox_tools/` archive extractor and binary format detector, and the worker-side client `infra/sandbox.py` are implemented; the dev `worker-analysis` consumes the queue but no `analysis.*` task is registered until #87/#101, so it drops what it receives; no analyzer image exists, `sandbox-images.lock` is empty; prod runs none of it) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
 
 - `infra/queue.py`: `create_celery(settings)` (Redis broker + result backend from `REDIS_URL`,
   JSON only, `acks_late` + `reject_on_worker_lost`, prefetch 1, results ignored unless a
@@ -497,7 +502,7 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
   `upload/<slug of the file name>` (original name in `Asset.details["upload"]`), stores the
   `Artifact`, then creates a `Scan` with profile `code` (`scanners.profiles.CODE_PROFILE`, not
   in `PROFILES`) whose `stats` hold `revision` (the archive SHA-256) and `artifact_id`, and
-  enqueues `analysis.code_scan`. That queue has no worker until #84, so the scan stays
+  enqueues `analysis.code_scan`. No task for it is registered until #87, so the scan stays
   `queued`. Three commits (asset, artifact, scan + audit + job): an upload that fails in
   storage leaves its (possibly empty) asset, because deleting it could remove a concurrent
   upload of the same name; an enqueue failure fails the scan, deletes the artifact and raises
@@ -513,7 +518,7 @@ Server-rendered Jinja templates + HTMX for partial updates (polling for job prog
   `Scan` with profile `binary_static` (`BINARY_STATIC_PROFILE`, not in `PROFILES`) and the job
   `analysis.binary_static`, audited as `binary.uploaded`. The hint is only a guess: the real
   format is decided in the sandbox by `sandbox_tools.detect`. Like the `code` scan it stays
-  `queued` until #84.
+  `queued` until #101.
 - Scans UI (#21): `GET /scans` lists scans with `root`/`status` filters and a start form over
   the org's active roots; `POST /scans` queues `dns_passive` for any org member (PRG with
   flashes; a duplicate start redirects to the running scan); `GET /scans/<id>` shows the scan
