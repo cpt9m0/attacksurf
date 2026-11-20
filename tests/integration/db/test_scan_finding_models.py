@@ -427,3 +427,20 @@ def test_scan_results_are_tenant_isolated(
     for model in (Scan, Job, Finding, FindingObservation):
         rows = db_session.scalars(scoped(model, acme.org.id)).all()
         assert {row.org_id for row in rows} == {acme.org.id}
+
+
+def test_scan_ai_summary_defaults_to_none_and_round_trips_jsonb(
+    db_session: Session, acme: Tenant
+) -> None:
+    empty = _scan(acme)
+    payload = {"headline": "Clean scan.", "key_risks": [], "notable_assets": []}
+    summarized = _scan(acme, ai_summary=payload)
+    _add(db_session, empty, summarized)
+    db_session.expunge_all()
+
+    reloaded_empty = db_session.get(Scan, empty.id)
+    reloaded_summarized = db_session.get(Scan, summarized.id)
+    assert reloaded_empty is not None
+    assert reloaded_empty.ai_summary is None
+    assert reloaded_summarized is not None
+    assert reloaded_summarized.ai_summary == payload
