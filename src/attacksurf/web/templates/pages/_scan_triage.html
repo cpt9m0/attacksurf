@@ -1,0 +1,45 @@
+{#- The scan's AI triage (ADR 0029). Triage runs after the scan completes, so this section polls
+    itself (`hx-get` to `ui.scan_triage`) while its run is pending or running, independently of
+    the progress section; once the run ends the attributes are gone and polling stops. Every
+    value stays autoescaped: finding titles and AI text can echo scan data. -#}
+{%- from "components/ai_panel.html" import priority_pill -%}
+{%- from "components/badges.html" import severity_badge -%}
+{%- from "components/table.html" import data_table -%}
+<section class="card" id="scan-triage" aria-labelledby="scan-triage-title"
+         {%- if triage.active %} hx-get="{{ url_for('ui.scan_triage', scan_id=scan_id) }}"
+         hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML" hx-sync="this:replace"{% endif %}
+         aria-busy="{{ 'true' if triage.active else 'false' }}">
+  <div class="card-header">
+    <h2 class="card-title" id="scan-triage-title">AI triage</h2>
+    {%- if triage.state == "pending" %} <span class="pill pill-active" role="status">Queued…</span>
+    {%- elif triage.state == "running" %} <span class="pill pill-active" role="status">{{ triage.batches_done }} of {{ triage.batches_total }} assets done…</span>
+    {%- endif %}
+  </div>
+  <div class="card-body">
+    {%- if triage.state == "not_started" %}
+    <p class="muted">AI triage runs once the scan completes.</p>
+    {%- elif triage.notice %}
+    <p class="muted" role="status">{{ triage.notice }}</p>
+    {%- endif %}
+    {%- if triage.rows %}
+    <p class="ai-label">AI-generated suggestions. The scanner's findings and their statuses are
+      unchanged; open a finding for the full judgment and its model.</p>
+    {%- set columns = [("priority", "Priority"), ("finding", "Finding"), ("asset", "Asset"), ("severity", "AI / scanner severity"), ("false_positive", "False positive"), ("why", "Why")] %}
+    {% call(row, key) data_table(columns, triage.rows, "AI triage of this scan's findings") -%}
+      {%- if key == "priority" %}{{ priority_pill(row.triage.priority) }}
+      {%- elif key == "finding" %}<a href="{{ url_for('ui.finding_detail', finding_id=row.finding_id) }}">{{ row.title }}</a>
+        {%- if row.location %} <span class="muted mono">{{ row.location }}</span>{% endif %}
+      {%- elif key == "asset" %}<span class="mono">{{ row.asset_value }}</span>
+      {%- elif key == "severity" %}{{ severity_badge(row.triage.adjusted_severity) }} {{ severity_badge(row.severity) }}
+      {%- elif key == "false_positive" %}{{ row.triage.false_positive_likelihood }}
+      {%- else %}{{ row.triage.rationale }}
+      {%- endif %}
+    {%- endcall %}
+    {%- if triage.total > triage.rows | length %}
+    <p class="muted">Showing {{ triage.rows | length }} of {{ triage.total }} judged findings, most urgent first.</p>
+    {%- endif %}
+    {%- elif triage.state == "done" %}
+    <p class="muted">No finding of this scan has an AI judgment.</p>
+    {%- endif %}
+  </div>
+</section>

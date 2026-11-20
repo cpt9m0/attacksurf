@@ -1,4 +1,5 @@
 {% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
+{% from "components/ai_panel.html" import ai_triage_panel %}
 {% from "components/badges.html" import severity_badge, status_pill %}
 {% from "components/form.html" import csrf_field, select_field %}
 {% from "components/time.html" import relative_time %}
@@ -90,8 +91,7 @@
 <section class="card card-body ai-panel" aria-labelledby="finding-ai">
   <h2 id="finding-ai">AI triage</h2>
   {%- if detail.ai_triage %}
-  <p class="muted">AI-generated assessment. A human decides what to do with it.</p>
-  <pre class="evidence-body">{{ detail.ai_triage | tojson(indent=2) }}</pre>
+  {{ ai_triage_panel(detail.ai_triage, finding.severity) }}
   {%- else %}
   <p class="muted">AI triage hasn't run for this finding yet. Scans stay fully usable without it.</p>
   {%- endif %}

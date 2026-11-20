@@ -45,9 +45,12 @@ from attacksurf.services.scans import load_job_scan, root_is_active
 log = structlog.get_logger(__name__)
 
 # The jobs of one run, after the `triage` coordinator that `finalize_scan` queues.
+COORDINATOR_STAGE = "triage"
 BATCH_STAGE = "triage_batch"
 DONE_STAGE = "triage_done"
 FAILURE_STAGE = "triage_failure"
+# AI work, not scan work: the scan's own progress leaves these out.
+TRIAGE_STAGES = (COORDINATOR_STAGE, BATCH_STAGE, DONE_STAGE, FAILURE_STAGE)
 
 
 @dataclass(frozen=True)

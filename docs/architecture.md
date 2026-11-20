@@ -471,6 +471,10 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   only `LLMUnavailable` while Celery may retry, so the run carries on past a failed batch. Batch
   and tail tasks use `workers.base.ChordTask` (kept results, sanitized errors), which
   `PipelineTask` also builds on.
+- The UI reads triage through `services/triage_views.get_scan_triage` (the run's state from its
+  jobs, and the scan's judged findings by priority, capped at 100) for the scan page's polled
+  `ui.scan_triage` section, and through `finding_views` (`ai_triage` parsed as `StoredTriage`)
+  for the finding page's AI panel. `TRIAGE_STAGES` are left out of every scan job count.
 - Prompts are versioned files `ai/prompts/<purpose>/v<N>.md` (system part, then user part with
   `$placeholders`), loaded by `ai.prompts.load_prompt`; a test pins each file's SHA-256. Scan data
   enters a prompt only through `ai/untrusted.scan_data_block`.

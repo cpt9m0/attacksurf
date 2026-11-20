@@ -5,7 +5,7 @@
 **Updated:** 2026-11-19 · **Branch:** `25-ai-triage` · **Issue:** #25 (AI triage stage)
 
 ## Status
-In progress: commits 1-7 of 9 on draft PR #186; triage now runs end to end (no UI yet).
+In progress: commits 1-8 of 9 on draft PR #186; triage runs end to end and shows in the UI.
 
 ## Last task
 - Plan: one PR per issue (Angela: #25 now; sten-ctrl: #26 after #25 merges), kept in the Claude
@@ -27,19 +27,20 @@ In progress: commits 1-7 of 9 on draft PR #186; triage now runs end to end (no U
   `LLMUnavailable` while retries remain), `finish_triage`, `fail_triage`.
   `enforce_triage_budget` returns `LLMConfig | None`. `workers.base.ChordTask` now holds the
   chord-member behavior `PipelineTask` had (kept results, sanitized errors).
+- Commit 8: `components/ai_panel.html` (`ai_triage_panel`, `priority_pill`) replaces #22's
+  raw-JSON placeholder on the finding page; `pages/_scan_triage.html` + `ui.scan_triage` is the
+  scan page's polled AI section, fed by `services/triage_views.get_scan_triage`; scan job
+  counts leave `TRIAGE_STAGES` out. `DESIGN.md` AI panel row filled in.
 
 ## Next step
-Commit 8: the AI panel. A `components/ai_panel.html` macro (AI-generated label, model + prompt
-version, adjusted next to scanner severity, FP likelihood, priority, rationale, exploitability,
-remediation; autoescaped, CSP-safe styles) replacing #22's raw-JSON placeholder in
-`finding_detail.html`; a polled "AI triage" section on the scan page (`get_scan_triage`: job
-states, triaged findings sorted by priority, 100-row cap); the scan's own job count leaves the
-`triage*` stages out. Tests: XSS payload escaped, tenant isolation, polling stops.
+Commit 9: the eval set and `make eval` (fixtures in `tests/fixtures/ai/triage_eval/`, an
+`llm_live` runner in `tests/eval/`, a CI-safe harness test with `FakeLLMProvider`), then the
+`finish-task` sync (`README.md` feature line, `CHANGELOG.md`, `STATE.md`). A live run needs an
+LLM key and model in `.env`; the PR records the model and results.
 
 ## Open threads
-- #22 shipped an "AI triage" placeholder on the finding page (`finding_detail.html`, raw JSON of
-  `ai_triage`): commit 8 replaces it with the AI panel and adds the scan page section.
 - #27 took migration `0012`: #26's `Scan.ai_summary` migration is `0013`.
+- sten-ctrl may start #26 on a branch stacked on `25-ai-triage` (see the plan doc).
 
 ## Notes for the next agent
 - Pydantic puts a reply model's docstring and field descriptions into the JSON schema the model
