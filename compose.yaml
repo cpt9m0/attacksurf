@@ -42,6 +42,21 @@ x-app: &app
     redis:
       condition: service_healthy
 
+# The sandbox services (ADR 0016): no app env file, no database or Redis URL, no encryption key.
+# They read the process environment only, so nothing from `.env` reaches them.
+x-sandbox: &sandbox
+  build:
+    context: .
+    target: dev
+  image: attacksurf:dev
+  profiles: [sandbox]
+  networks: [sandbox]
+  environment: &sandbox-env
+    ENV: dev
+    # Dev hosts rarely have gVisor; a host with `runsc` still uses it. Refused when ENV=prod.
+    SANDBOX_ALLOW_RUNC: ${SANDBOX_ALLOW_RUNC:-true}
+    SANDBOX_ARTIFACT_ROOT: ${SANDBOX_ARTIFACT_ROOT:-/tmp/attacksurf-sandbox}
+
 services:
   web:
     <<: *app
@@ -111,6 +126,46 @@ services:
       timeout: 10s
       start_period: 20s
       retries: 3
+
+  # Opt-in: `docker compose --profile sandbox up -d --wait`. The only service with the Docker
+  # socket; the launcher fixes the analyzer command, this proxy only checks what Docker is asked.
+  sandbox-proxy:
+    <<: *sandbox
+    command: ["python", "-m", "attacksurf.sandbox_proxy"]
+    volumes:
+      - ./src:/app/src:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    # The image's HEALTHCHECK probes port 5000. The proxy has no health route, so a TCP connect
+    # shows it is listening without sending anything to Docker.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8790), 2).close()"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+  # Opt-in. No socket: it asks the proxy. Mounts the staging folder read-only, at the same path
+  # as on the host, because Docker resolves the analyzer's bind source on the host.
+  sandbox-launcher:
+    <<: *sandbox
+    command: ["python", "-m", "attacksurf.sandbox_launcher"]
+    volumes:
+      - ./src:/app/src:ro
+      - ${SANDBOX_ARTIFACT_ROOT:-/tmp/attacksurf-sandbox}:${SANDBOX_ARTIFACT_ROOT:-/tmp/attacksurf-sandbox}:ro
+    depends_on:
+      sandbox-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8791/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+networks:
+  # No route to the internet or the host. Postgres and Redis are not on it.
+  sandbox:
+    internal: true
 
 volumes:
   pgdata:
