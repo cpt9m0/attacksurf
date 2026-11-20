@@ -21,6 +21,7 @@ from attacksurf.services.triage import (
     finding_cache_key,
     store_triage,
     stored_triage,
+    triage_is_stale,
 )
 from tests.integration.factories import T0, make_finding, make_scan
 
@@ -194,6 +195,45 @@ def test_a_changed_finding_the_prompt_shows_is_sent_again(
     db_session.flush()
 
     assert _rules(db_session, scan, scan.root_asset_id) == ["dns.email.dmarc_missing"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("severity", Severity.CRITICAL),
+        ("confidence", Confidence.LOW),
+        ("title", "DMARC record missing"),
+        ("description", "Reworded by a rule catalog update."),
+        ("evidence_digest", "f" * 64),
+    ],
+)
+def test_a_judgment_goes_stale_when_its_finding_changes(
+    db_session: Session, field: str, value: object
+) -> None:
+    # Regression: pages showed the old judgment as current until a new run replaced it, which
+    # never happens when that run is skipped or fails.
+    scan = make_scan(db_session)
+    finding = _observed(db_session, scan, scan.root_asset_id)
+    _judge(db_session, finding)
+    stored = stored_triage(finding)
+    assert stored is not None
+    assert not triage_is_stale(finding, stored)
+
+    setattr(finding, field, value)
+
+    assert triage_is_stale(finding, stored)
+
+
+def test_a_judgment_by_another_model_is_not_stale(db_session: Session) -> None:
+    # A new model or prompt version schedules a fresh judgment, but the old one still describes
+    # this finding as it is: only a change to the finding makes a judgment stale.
+    scan = make_scan(db_session)
+    finding = _observed(db_session, scan, scan.root_asset_id)
+    _judge(db_session, finding, model="older-model")
+    stored = stored_triage(finding)
+    assert stored is not None
+
+    assert not triage_is_stale(finding, stored)
 
 
 def test_a_stored_judgment_that_does_not_parse_counts_as_untriaged(db_session: Session) -> None:

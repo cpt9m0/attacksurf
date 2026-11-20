@@ -20,6 +20,7 @@ from attacksurf.services.triage import (
     DONE_STAGE,
     TRIAGE_STAGES,
     stored_triage,
+    triage_is_stale,
 )
 
 TRIAGE_ROW_LIMIT = 100
@@ -49,6 +50,7 @@ class TriageRow:
     location: str
     severity: Severity  # the scanner's, shown beside the AI's
     triage: StoredTriage
+    stale: bool  # the finding changed since this judgment: shown, but marked outdated
 
 
 @dataclass(frozen=True)
@@ -170,6 +172,7 @@ def _judged_rows(session: Session, org_id: UUID, scan_id: UUID) -> list[TriageRo
             location=finding.location,
             severity=finding.severity,
             triage=triage,
+            stale=triage_is_stale(finding, triage),
         )
         for finding, asset_value in results
         if (triage := stored_triage(finding)) is not None

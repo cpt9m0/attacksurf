@@ -3,7 +3,7 @@
     independently of the progress section: a page opened mid-scan picks the run up without a
     reload. Once the run ends the attributes are gone and polling stops. Every value stays
     autoescaped: finding titles and AI text can echo scan data. -#}
-{%- from "components/ai_panel.html" import priority_pill -%}
+{%- from "components/ai_panel.html" import priority_pill, stale_marker -%}
 {%- from "components/badges.html" import severity_badge -%}
 {%- from "components/table.html" import data_table -%}
 <section class="card" id="scan-triage" aria-labelledby="scan-triage-title"
@@ -26,10 +26,12 @@
     {%- endif %}
     {%- if triage.rows %}
     <p class="ai-label">AI-generated suggestions. The scanner's findings and their statuses are
-      unchanged; open a finding for the full judgment and its model.</p>
+      unchanged; open a finding for the full judgment and its model. "Outdated" marks a judgment
+      made before its finding last changed.</p>
     {%- set columns = [("priority", "Priority"), ("finding", "Finding"), ("asset", "Asset"), ("severity", "AI / scanner severity"), ("false_positive", "False positive"), ("why", "Why")] %}
     {% call(row, key) data_table(columns, triage.rows, "AI triage of this scan's findings") -%}
       {%- if key == "priority" %}{{ priority_pill(row.triage.priority) }}
+        {%- if row.stale %} {{ stale_marker() }}{% endif %}
       {%- elif key == "finding" %}<a href="{{ url_for('ui.finding_detail', finding_id=row.finding_id) }}">{{ row.title }}</a>
         {%- if row.location %} <span class="muted mono">{{ row.location }}</span>{% endif %}
       {%- elif key == "asset" %}<span class="mono">{{ row.asset_value }}</span>

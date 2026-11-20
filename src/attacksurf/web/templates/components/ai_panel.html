@@ -22,9 +22,20 @@
   A person decides what to do with it.</p>
 {%- endmacro %}
 
-{% macro ai_triage_panel(triage, scanner_severity) -%}
+{#- A judgment whose finding changed since (`stale`) stays visible, marked outdated: the new
+    run that replaces it may be skipped or fail. -#}
+{% macro stale_marker() -%}
+<span class="ai-stale-tag">Outdated</span>
+{%- endmacro %}
+
+{% macro ai_triage_panel(triage, scanner_severity, stale=False) -%}
 <div class="ai-triage">
   {{ ai_label(triage) }}
+  {%- if stale %}
+  <p class="ai-stale" role="note">{{ stale_marker() }} This finding's severity, wording or evidence
+    changed after this assessment. AI triage judges it again on its next run; until then, read
+    this one with care.</p>
+  {%- endif %}
   <dl class="meta">
     <div><dt>Priority</dt><dd>{{ priority_pill(triage.priority) }}</dd></div>
     <div><dt>AI severity</dt><dd>{{ severity_badge(triage.adjusted_severity) }}

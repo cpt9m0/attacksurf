@@ -41,7 +41,7 @@ from attacksurf.infra.db.models import (
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services import asset_views
 from attacksurf.services.asset_views import RootOption
-from attacksurf.services.triage import stored_triage
+from attacksurf.services.triage import stored_triage, triage_is_stale
 
 PAGE_SIZE = 25
 EXPORT_LIMIT = 5_000
@@ -171,6 +171,7 @@ class FindingDetail:
     remediation: str
     references: tuple[str, ...]
     ai_triage: StoredTriage | None  # None when untriaged or written by an older version
+    ai_triage_stale: bool  # the finding changed since the judgment: shown, marked outdated
     evidence: tuple[EvidenceRow, ...]
     evidence_total: int
     events: tuple[FindingEvent, ...]
@@ -293,12 +294,14 @@ def get_finding_detail(session: Session, org_id: UUID, finding_id: UUID) -> Find
         .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
         .limit(MAX_EVENTS)
     ).all()
+    triage = stored_triage(finding)
     return FindingDetail(
         finding=_finding_row(row),
         description=finding.description,
         remediation=finding.remediation,
         references=tuple(finding.references),
-        ai_triage=stored_triage(finding),
+        ai_triage=triage,
+        ai_triage_stale=triage is not None and triage_is_stale(finding, triage),
         evidence=tuple(_evidence_row(item) for item in evidence),
         evidence_total=evidence_total,
         events=tuple(

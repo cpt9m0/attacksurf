@@ -7,11 +7,13 @@ from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
 from attacksurf.ai.schemas import FindingTriage, StoredTriage
+from attacksurf.ai.triage import TRIAGE_PROMPT_VERSION
 from attacksurf.domain.findings import Severity
 from attacksurf.domain.llm import KeySource, LLMConfig, ProviderKind
 from attacksurf.domain.scans import JobStatus, ScanNotFound, ScanStatus
 from attacksurf.infra.db.models import Finding, FindingObservation, Job, Scan
 from attacksurf.services import jobs, scan_views
+from attacksurf.services.triage import finding_cache_key
 from attacksurf.services.triage_views import (
     TRIAGE_ROW_LIMIT,
     TriageState,
@@ -82,9 +84,9 @@ def _judged(
     )
     finding.ai_triage = StoredTriage.from_judgment(
         judgment,
-        prompt_version="triage/v1",
+        prompt_version=TRIAGE_PROMPT_VERSION,
         config=_CONFIG,
-        cache_key="c" * 64,
+        cache_key=finding_cache_key(finding, _CONFIG.model),  # current for the finding as is
         triaged_at=datetime(2026, 11, 19, tzinfo=UTC),
     ).model_dump(mode="json")
     session.flush()
@@ -268,6 +270,19 @@ def test_judgments_are_listed_by_priority_then_ai_severity(db_session: Session) 
     assert [row.location for row in view.rows] == ["p1-critical", "p1-low", "p3"]
     assert view.rows[0].asset_value == "acme.example"
     assert view.rows[0].severity is Severity.HIGH  # the scanner's, shown beside the AI's
+
+
+def test_a_judgment_whose_finding_changed_is_marked_stale(db_session: Session) -> None:
+    # Regression: the scan page listed the old judgment as current after the finding changed.
+    scan = _scan(db_session)
+    _judged(db_session, scan, location="current")
+    changed = _judged(db_session, scan, location="changed")
+    changed.severity = Severity.CRITICAL  # a later scan raised it
+    db_session.flush()
+
+    view = get_scan_triage(db_session, scan.org_id, scan.id)
+
+    assert {row.location: row.stale for row in view.rows} == {"current": False, "changed": True}
 
 
 def test_only_this_scans_judged_findings_are_listed(db_session: Session) -> None:

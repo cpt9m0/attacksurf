@@ -10,14 +10,18 @@ from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
 from attacksurf.ai.schemas import FindingTriage, StoredTriage
+from attacksurf.ai.triage import TRIAGE_PROMPT_VERSION
+from attacksurf.domain.findings import Severity
 from attacksurf.domain.llm import KeySource, LLMConfig, ProviderKind
 from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger
 from attacksurf.infra.db.models import Finding, FindingObservation, Job, Scan
 from attacksurf.services import jobs
+from attacksurf.services.triage import finding_cache_key
 from tests.integration.web.test_findings_ui import _asset, _finding, _org_id, _signup
 
 HTMX = {"HX-Request": "true"}
 XSS = "<script>alert('ai')</script>"
+MARKER = 'class="ai-stale-tag"'  # the "Outdated" marker itself, not the legend that explains it
 _CONFIG = LLMConfig(
     provider=ProviderKind.ANTHROPIC,
     model="muse-spark-1.3",
@@ -55,11 +59,19 @@ def _judge(
     )
     finding.ai_triage = StoredTriage.from_judgment(
         judgment,
-        prompt_version="triage/v1",
+        prompt_version=TRIAGE_PROMPT_VERSION,
         config=_CONFIG,
-        cache_key="c" * 64,
+        cache_key=finding_cache_key(finding, _CONFIG.model),  # current for the finding as is
         triaged_at=datetime(2026, 11, 19, tzinfo=UTC),
     ).model_dump(mode="json")
+    session.commit()
+
+
+def _raise_severity(session: Session, finding_id: UUID) -> None:
+    """What a later scan does when the rule's severity changes: the judgment goes stale."""
+    finding = session.get(Finding, finding_id)
+    assert finding is not None
+    finding.severity = Severity.CRITICAL
     session.commit()
 
 
@@ -121,6 +133,23 @@ def test_the_finding_page_shows_the_ai_judgment(
     assert "Anyone can claim the target." in body
     assert "hasn't run" not in body
     assert "hasn&#39;t run" not in body
+
+
+def test_the_finding_page_marks_a_judgment_whose_finding_changed(
+    alice: FlaskClient, db_session: Session, org_id: UUID
+) -> None:
+    # Regression: the old judgment was shown as current until a new run replaced it.
+    root = _asset(db_session, org_id)
+    finding = _finding(db_session, org_id, root.id)
+    finding_id = finding.id
+    _judge(db_session, finding_id)
+    assert MARKER not in _body(alice, f"/findings/{finding_id}")
+
+    _raise_severity(db_session, finding_id)
+
+    body = _body(alice, f"/findings/{finding_id}")
+    assert MARKER in body
+    assert "Remove the record." in body  # still shown, but marked
 
 
 def test_ai_text_on_the_finding_page_is_escaped(
@@ -203,6 +232,24 @@ def test_a_skipped_run_says_why(alice: FlaskClient, db_session: Session, org_id:
     body = _body(alice, f"/scans/{scan.id}/triage", headers=HTMX)
 
     assert "AI is disabled or not configured." in body
+
+
+def test_the_scan_page_marks_a_judgment_whose_finding_changed(
+    alice: FlaskClient, db_session: Session, org_id: UUID
+) -> None:
+    root = _asset(db_session, org_id)
+    finding = _finding(db_session, org_id, root.id, title="Dangling CNAME")
+    finding_id = finding.id
+    _judge(db_session, finding_id)
+    scan = _completed_scan(db_session, org_id, root.id)
+    _observe(db_session, scan, finding)
+    _coordinator(db_session, scan, JobStatus.COMPLETED)
+    scan_id = scan.id
+    assert MARKER not in _body(alice, f"/scans/{scan_id}/triage", headers=HTMX)
+
+    _raise_severity(db_session, finding_id)
+
+    assert MARKER in _body(alice, f"/scans/{scan_id}/triage", headers=HTMX)
 
 
 def test_ai_text_on_the_scan_page_is_escaped(

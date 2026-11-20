@@ -384,17 +384,29 @@ def finding_cache_key(finding: Finding, model: str) -> str:
 
     Read from the finding's own columns, so checking the cache needs no evidence query.
     """
-    return triage_cache_key(
-        TRIAGE_PROMPT_VERSION,
-        model,
-        TriageCacheInput(
-            fingerprint=finding.fingerprint,
-            evidence_digest=finding.evidence_digest,
-            severity=finding.severity,
-            confidence=finding.confidence,
-            title=finding.title,
-            description=finding.description,
-        ),
+    return triage_cache_key(TRIAGE_PROMPT_VERSION, model, _cache_input(finding))
+
+
+def triage_is_stale(finding: Finding, stored: StoredTriage) -> bool:
+    """Whether `finding` changed since `stored` judged it (severity, confidence, text, evidence).
+
+    The key is rebuilt with the judgment's own prompt version and model: a newer prompt or
+    model schedules a new judgment but doesn't make this one wrong about the finding. A stale
+    judgment is shown marked as outdated until a new run replaces it, since that run may be
+    skipped or fail.
+    """
+    current = triage_cache_key(stored.prompt_version, stored.model, _cache_input(finding))
+    return stored.cache_key != current
+
+
+def _cache_input(finding: Finding) -> TriageCacheInput:
+    return TriageCacheInput(
+        fingerprint=finding.fingerprint,
+        evidence_digest=finding.evidence_digest,
+        severity=finding.severity,
+        confidence=finding.confidence,
+        title=finding.title,
+        description=finding.description,
     )
 
 

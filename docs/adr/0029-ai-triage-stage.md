@@ -66,7 +66,10 @@ The forces:
   evidence: scanner severity, confidence, title and description (`TriageCacheInput`). A
   finding whose stored key still matches is not sent again; a change to any part triggers a new
   judgment. All parts are finding columns, so checking the cache loads no evidence. There is no
-  cache table. Results are committed per batch.
+  cache table. Results are committed per batch. A judgment whose finding changed since (its key,
+  rebuilt with its own prompt version and model, no longer matches) stays visible but is marked
+  "Outdated" until a new run replaces it, since that run may be skipped or fail; a newer prompt
+  or model alone doesn't mark it.
 - **The budget is checked before every call.** Once it runs out, the remaining batch jobs are
   skipped with the notice. Batches running in parallel can each start one call after the cap
   is reached; the overshoot is bounded by one batch per `ai` worker.
