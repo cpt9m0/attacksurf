@@ -102,6 +102,8 @@ class SmtpEmailSender:
         try:
             self._send_mime(mime)
         except smtplib.SMTPAuthenticationError as exc:
+            if _is_transient_code(exc.smtp_code):
+                raise TransientJobError("Temporary SMTP authentication error.") from exc
             raise EmailDeliveryError("SMTP authentication failed.") from exc
         except smtplib.SMTPRecipientsRefused as exc:
             if any(_is_transient_code(code) for code, _msg in exc.recipients.values()):

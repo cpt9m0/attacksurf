@@ -205,6 +205,7 @@ def test_smtp_sender_rejects_header_injection() -> None:
         (smtplib.SMTPResponseException(421, b"try again"), TransientJobError),
         (smtplib.SMTPRecipientsRefused({"a@b.com": (450, b"greylisted")}), TransientJobError),
         (smtplib.SMTPSenderRefused(421, b"rate limited", "a@b.com"), TransientJobError),
+        (smtplib.SMTPAuthenticationError(454, b"temporary auth failure"), TransientJobError),
         (smtplib.SMTPAuthenticationError(535, b"bad password secret"), EmailDeliveryError),
         (smtplib.SMTPRecipientsRefused({"a@b.com": (550, b"no user")}), EmailRecipientRefused),
         (smtplib.SMTPSenderRefused(550, b"bad sender", "a@b.com"), EmailDeliveryError),
