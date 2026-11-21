@@ -583,9 +583,11 @@ sudo BACKUP_AGE_IDENTITY=/root/attacksurf-backup.key \
 shred -u /root/attacksurf-backup.key
 ```
 
-For an actual disaster recovery overwrite of the live database (preserves the deployed
-`WEB_IMAGE`, stops app/workers, takes a pre-restore dump under `/var/lib/attacksurf/`, restores
-into a clean staging database, atomically swaps it into `attacksurf`, runs `migrate`, restarts,
+For an actual disaster recovery overwrite of the live database (acquires `/var/lock/attacksurf-deploy.lock`
+so the CD timer cannot race recovery, preserves the deployed `WEB_IMAGE`, stops app/workers,
+takes a pre-restore dump under `/var/lib/attacksurf/`, restores into a clean staging database,
+atomically swaps it into `attacksurf`, runs `migrate`, cancels any in-flight `queued`/`running`
+scans and jobs from the snapshot so roots are not stuck behind lost Redis messages, restarts,
 and checks `/healthz`):
 
 ```bash

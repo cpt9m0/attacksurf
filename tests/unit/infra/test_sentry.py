@@ -11,6 +11,7 @@ from flask import Flask
 from pydantic import SecretStr
 
 from attacksurf.app import create_app
+from attacksurf.domain.jobs import TransientJobError
 from attacksurf.infra.logging import REDACTED
 from attacksurf.infra.sentry import (
     _scrub_breadcrumb,
@@ -58,6 +59,7 @@ def test_sentry_initializes_with_safe_defaults(monkeypatch: pytest.MonkeyPatch) 
     assert opts["include_local_variables"] is False
     assert opts["max_request_body_size"] == "never"
     assert opts["max_breadcrumbs"] == 20
+    assert opts["auto_enabling_integrations"] is False
     assert opts["before_send"] is _scrub_event
     assert opts["before_send_transaction"] is _scrub_event
     assert opts["before_breadcrumb"] is _scrub_breadcrumb
@@ -101,13 +103,17 @@ def test_sentry_scrubs_secrets_headers_cookies_and_url_credentials() -> None:
             "values": [
                 {
                     "type": "RuntimeError",
-                    "value": "dial redis://:redispass@redis:6379/0 failed",
+                    "value": "provider error body: sk-ant-secret123 and raw scan evidence",
+                    "mechanism": {"type": "generic", "data": {"raw": "secret"}},
                 }
             ]
         },
     }
 
-    scrubbed: dict[str, Any] = _scrub_event(event, {})  # type: ignore[arg-type]
+    scrubbed: dict[str, Any] = _scrub_event(
+        event,  # type: ignore[arg-type]
+        {"exc_info": (RuntimeError, RuntimeError("provider error body: sk-ant-secret123"), None)},
+    )
 
     assert scrubbed["message"] == f"failed connecting to https://{REDACTED}@proxy.internal/v1"
     req = scrubbed["request"]
@@ -130,9 +136,35 @@ def test_sentry_scrubs_secrets_headers_cookies_and_url_credentials() -> None:
             "endpoint": f"postgresql+psycopg://{REDACTED}@postgres:5432/app",
         },
     }
+    exc_entry = scrubbed["exception"]["values"][0]
+    assert exc_entry["type"] == "RuntimeError"
+    assert exc_entry["value"] == REDACTED
+    assert "mechanism" not in exc_entry
+
+
+def test_sentry_preserves_curated_job_error_message_while_redacting_chained_cause() -> None:
+    cause = RuntimeError(
+        "OpenAI 401: Incorrect API key provided: sk-proj-supersecret and <scan_data>"
+    )
+    job_err = TransientJobError("LLM provider returned HTTP 503 (https://u:pw@llm.example/v1)")
+    event: dict[str, Any] = {
+        "exception": {
+            "values": [
+                {"type": "RuntimeError", "value": str(cause)},
+                {"type": "TransientJobError", "value": str(job_err)},
+            ]
+        }
+    }
+
+    scrubbed: dict[str, Any] = _scrub_event(
+        event,  # type: ignore[arg-type]
+        {"exc_info": (TransientJobError, job_err, None)},
+    )
+
+    values = scrubbed["exception"]["values"]
+    assert values[0]["value"] == REDACTED
     assert (
-        scrubbed["exception"]["values"][0]["value"]
-        == f"dial redis://{REDACTED}@redis:6379/0 failed"
+        values[1]["value"] == f"LLM provider returned HTTP 503 (https://{REDACTED}@llm.example/v1)"
     )
 
 

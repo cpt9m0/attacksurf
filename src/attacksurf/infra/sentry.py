@@ -11,6 +11,7 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 from sentry_sdk.types import Breadcrumb, BreadcrumbHint, Event, Hint
 
 from attacksurf.config import Settings
+from attacksurf.domain.jobs import JobError
 from attacksurf.infra.logging import REDACTED, is_sensitive_key, scrub_value
 
 _SAFE_CONTEXT_TAGS = ("request_id", "org_id", "scan_id", "job_id", "task", "task_id")
@@ -58,6 +59,7 @@ def init_sentry(
         include_local_variables=False,
         max_request_body_size="never",
         max_breadcrumbs=20,
+        auto_enabling_integrations=False,
         integrations=integrations,
         before_send=_scrub_event,
         before_send_transaction=_scrub_event,
@@ -104,8 +106,30 @@ def _scrub_request(req: dict[str, Any]) -> None:
             req[key] = scrub_value(req[key])
 
 
-def _scrub_event(event: Event, _hint: Hint) -> Event:
-    """Strip PII, request bodies, cookies, headers, and URL credentials from Sentry events."""
+def _scrub_exceptions(mutable: dict[str, Any], hint: Hint) -> None:
+    """Keep exception messages only for our own `JobError`s; redact third-party messages."""
+    exc_section = mutable.get("exception")
+    if not isinstance(exc_section, dict):
+        return
+    values = exc_section.get("values")
+    if not isinstance(values, list):
+        return
+    exc_info = hint.get("exc_info") if isinstance(hint, dict) else None
+    raised_exc = exc_info[1] if isinstance(exc_info, tuple) and exc_info[1:] else None
+    allow_last_value = isinstance(raised_exc, JobError)
+    last_idx = len(values) - 1
+    for idx, item in enumerate(values):
+        if not isinstance(item, dict):
+            continue
+        item.pop("mechanism", None)
+        if idx == last_idx and allow_last_value and "value" in item:
+            item["value"] = scrub_value(item["value"])
+        elif "value" in item:
+            item["value"] = REDACTED
+
+
+def _scrub_event(event: Event, hint: Hint) -> Event:
+    """Strip PII, request bodies, cookies, headers, and third-party exception messages."""
     mutable = cast(dict[str, Any], event)
 
     req = mutable.get("request")
@@ -117,9 +141,11 @@ def _scrub_event(event: Event, _hint: Hint) -> Event:
         for field in _PII_USER_FIELDS:
             user.pop(field, None)
 
-    for section in ("extra", "contexts", "tags", "logentry", "exception", "breadcrumbs", "spans"):
+    for section in ("extra", "contexts", "tags", "logentry", "breadcrumbs", "spans"):
         if section in mutable:
             mutable[section] = scrub_value(mutable[section])
+
+    _scrub_exceptions(mutable, hint)
 
     if "message" in mutable:
         mutable["message"] = scrub_value(mutable["message"])

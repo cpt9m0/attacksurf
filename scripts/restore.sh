@@ -19,6 +19,7 @@ BACKUP_ENV_FILE=${BACKUP_ENV_FILE:-/etc/attacksurf/backup.env}
 VERIFY_DB=${VERIFY_DB:-attacksurf_restore_verify}
 STAGE_DB=${STAGE_DB:-attacksurf_restore_stage}
 STATE_DIR=${STATE_DIR:-/var/lib/attacksurf}
+DEPLOY_LOCK_FILE=${DEPLOY_LOCK_FILE:-/var/lock/attacksurf-deploy.lock}
 
 case "$COMPOSE_FILE" in
   /*) COMPOSE_PATH=$COMPOSE_FILE ;;
@@ -182,12 +183,41 @@ resolve_live_web_image() {
   fi
 }
 
+acquire_deploy_lock() {
+  command -v flock >/dev/null 2>&1 || die "flock not found in PATH"
+  mkdir -p "$(dirname "$DEPLOY_LOCK_FILE")"
+  log "acquiring deploy lock $DEPLOY_LOCK_FILE"
+  exec 9>"$DEPLOY_LOCK_FILE"
+  flock --timeout 300 9 ||
+    die "could not acquire deploy lock $DEPLOY_LOCK_FILE (a deploy may be running)"
+}
+
+reconcile_restored_db() {
+  local db_name=$1
+  log "cancelling unfinished scans and jobs from backup snapshot in $db_name"
+  compose exec -T postgres psql -U attacksurf -d "$db_name" -v ON_ERROR_STOP=1 -c "
+    UPDATE scans
+       SET status = 'cancelled',
+           started_at = COALESCE(started_at, clock_timestamp()),
+           finished_at = GREATEST(COALESCE(started_at, clock_timestamp()), clock_timestamp()),
+           updated_at = clock_timestamp()
+     WHERE status IN ('queued', 'running');
+    UPDATE jobs
+       SET status = 'cancelled',
+           error = 'Cancelled by database restore.',
+           finished_at = GREATEST(COALESCE(started_at, clock_timestamp()), clock_timestamp()),
+           updated_at = clock_timestamp()
+     WHERE status IN ('queued', 'running');
+  " >/dev/null
+}
+
 live_restore() {
   local plain_dump=$1
   local safety_dump="$STATE_DIR/pre-restore-$(date -u +%Y%m%dT%H%M%SZ).dump"
 
   [[ "$STAGE_DB" =~ ^[A-Za-z0-9_]+$ ]] || die "invalid STAGE_DB name: $STAGE_DB"
 
+  acquire_deploy_lock
   resolve_live_web_image
   log "preserving image ${WEB_IMAGE:-attacksurf:prod} across recovery"
 
@@ -222,6 +252,7 @@ live_restore() {
 
   log "running forward migrations on restored database"
   compose run --rm -T migrate
+  reconcile_restored_db attacksurf
 
   log "restarting application services"
   compose up -d --wait --wait-timeout 300 --no-build \

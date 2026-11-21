@@ -283,6 +283,7 @@ def test_restore_live_preserves_image_stages_clean_db_and_migrates(tmp_path: Pat
         "APP_DIR": str(ROOT),
         "BACKUP_ENV_FILE": str(tmp_path / "nonexistent.env"),
         "STATE_DIR": str(state_dir),
+        "DEPLOY_LOCK_FILE": str(tmp_path / "deploy.lock"),
     }
     res = subprocess.run(  # noqa: S603
         [
@@ -298,17 +299,23 @@ def test_restore_live_preserves_image_stages_clean_db_and_migrates(tmp_path: Pat
     )
 
     assert res.returncode == 0, res.stderr
+    assert (tmp_path / "deploy.lock").is_file()
     calls = log_file.read_text(encoding="utf-8")
     assert 'CREATE DATABASE "attacksurf_restore_stage"' in calls
     assert "pg_restore -U attacksurf -d attacksurf_restore_stage --no-owner" in calls
     assert "--clean" not in calls
     assert 'ALTER DATABASE "attacksurf_restore_stage" RENAME TO attacksurf' in calls
+    assert "UPDATE scans" in calls
+    assert "Cancelled by database restore." in calls
     assert "WEB_IMAGE=attacksurf-web:deadbeef1234 docker compose" in calls
     migrate_line = next(line for line in calls.splitlines() if "run --rm -T migrate" in line)
+    reconcile_line = next(
+        line for line in calls.splitlines() if "Cancelled by database restore." in line
+    )
     up_line = next(
         line for line in calls.splitlines() if "up -d --wait --wait-timeout 300 --no-build" in line
     )
-    assert calls.index(migrate_line) < calls.index(up_line)
+    assert calls.index(migrate_line) < calls.index(reconcile_line) < calls.index(up_line)
     assert migrate_line.startswith("WEB_IMAGE=attacksurf-web:deadbeef1234 ")
     assert up_line.startswith("WEB_IMAGE=attacksurf-web:deadbeef1234 ")
 
