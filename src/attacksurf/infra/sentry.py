@@ -56,9 +56,11 @@ def init_sentry(
         traces_sample_rate=settings.sentry_traces_sample_rate,
         send_default_pii=False,
         include_local_variables=False,
+        max_request_body_size="never",
         max_breadcrumbs=20,
         integrations=integrations,
         before_send=_scrub_event,
+        before_send_transaction=_scrub_event,
         before_breadcrumb=_scrub_breadcrumb,
     )
     return True
@@ -115,7 +117,7 @@ def _scrub_event(event: Event, _hint: Hint) -> Event:
         for field in _PII_USER_FIELDS:
             user.pop(field, None)
 
-    for section in ("extra", "contexts", "tags", "logentry", "exception", "breadcrumbs"):
+    for section in ("extra", "contexts", "tags", "logentry", "exception", "breadcrumbs", "spans"):
         if section in mutable:
             mutable[section] = scrub_value(mutable[section])
 

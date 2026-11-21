@@ -5,8 +5,9 @@
 #   --verify-only <backup>   Restore into a temporary database `attacksurf_restore_verify`,
 #                            check schema/table row counts, and drop the temporary DB.
 #   --live <backup> --i-understand-this-replaces-prod
-#                            Stop app/workers, take a safety dump, replace live `attacksurf` DB,
-#                            restart services, and check /healthz.
+#                            Preserve the deployed WEB_IMAGE, stop app/workers, take a safety
+#                            dump, restore into a clean staging DB, swap it into `attacksurf`,
+#                            run migrations, restart services, and check /healthz.
 #
 # <backup> may be a local file path or a filename/object under BACKUP_REMOTE_PATH.
 # Encrypted `.age` backups require BACKUP_AGE_IDENTITY=/path/to/age.key (or in backup.env).
@@ -16,6 +17,8 @@ APP_DIR=${APP_DIR:-/opt/attacksurf}
 COMPOSE_FILE=${COMPOSE_FILE:-compose.prod.yaml}
 BACKUP_ENV_FILE=${BACKUP_ENV_FILE:-/etc/attacksurf/backup.env}
 VERIFY_DB=${VERIFY_DB:-attacksurf_restore_verify}
+STAGE_DB=${STAGE_DB:-attacksurf_restore_stage}
+STATE_DIR=${STATE_DIR:-/var/lib/attacksurf}
 
 case "$COMPOSE_FILE" in
   /*) COMPOSE_PATH=$COMPOSE_FILE ;;
@@ -33,10 +36,15 @@ compose() { docker compose --project-directory "$APP_DIR" -f "$COMPOSE_PATH" "$@
 WORK_DIR=""
 PREPARED_DUMP=""
 VERIFY_DB_CREATED=0
+STAGE_DB_CREATED=0
 cleanup() {
   if [ "$VERIFY_DB_CREATED" -eq 1 ]; then
     compose exec -T postgres psql -U attacksurf -d postgres -v ON_ERROR_STOP=1 \
       -c "DROP DATABASE IF EXISTS \"$VERIFY_DB\";" >/dev/null 2>&1 || true
+  fi
+  if [ "$STAGE_DB_CREATED" -eq 1 ]; then
+    compose exec -T postgres psql -U attacksurf -d postgres -v ON_ERROR_STOP=1 \
+      -c "DROP DATABASE IF EXISTS \"$STAGE_DB\";" >/dev/null 2>&1 || true
   fi
   if [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ]; then
     rm -rf "$WORK_DIR"
@@ -118,6 +126,19 @@ fetch_and_prepare_dump() {
   PREPARED_DUMP="$plain_dump"
 }
 
+check_restored_db() {
+  local db_name=$1
+  log "checking alembic_version and core table counts in $db_name"
+  compose exec -T postgres psql -U attacksurf -d "$db_name" -v ON_ERROR_STOP=1 -At -c "
+    SELECT 'alembic_version=' || COALESCE((SELECT version_num FROM alembic_version LIMIT 1), 'missing');
+    SELECT 'orgs=' || count(*) FROM orgs;
+    SELECT 'users=' || count(*) FROM users;
+    SELECT 'assets=' || count(*) FROM assets;
+    SELECT 'scans=' || count(*) FROM scans;
+    SELECT 'findings=' || count(*) FROM findings;
+  "
+}
+
 verify_restore() {
   local plain_dump=$1
   [[ "$VERIFY_DB" =~ ^[A-Za-z0-9_]+$ ]] || die "invalid VERIFY_DB name: $VERIFY_DB"
@@ -133,37 +154,78 @@ verify_restore() {
   compose exec -T postgres pg_restore -U attacksurf -d "$VERIFY_DB" \
     --no-owner --no-acl --exit-on-error <"$plain_dump"
 
-  log "checking alembic_version and core table counts in $VERIFY_DB"
-  compose exec -T postgres psql -U attacksurf -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -At -c "
-    SELECT 'alembic_version=' || COALESCE((SELECT version_num FROM alembic_version LIMIT 1), 'missing');
-    SELECT 'organizations=' || count(*) FROM organizations;
-    SELECT 'users=' || count(*) FROM users;
-    SELECT 'assets=' || count(*) FROM assets;
-    SELECT 'scans=' || count(*) FROM scans;
-    SELECT 'findings=' || count(*) FROM findings;
-  "
+  check_restored_db "$VERIFY_DB"
   log "restore verification passed ($VERIFY_DB will be dropped on exit)"
+}
+
+resolve_live_web_image() {
+  local deployed_sha short_sha web_container live_image
+  deployed_sha=$(cat "$STATE_DIR/deployed-sha" 2>/dev/null || true)
+  if [ -z "${SENTRY_RELEASE:-}" ] && [ -n "$deployed_sha" ]; then
+    export SENTRY_RELEASE
+    SENTRY_RELEASE=$(printf '%s' "$deployed_sha" | cut -c1-12)
+  fi
+  if [ -n "${WEB_IMAGE:-}" ]; then
+    return 0
+  fi
+  web_container=$(compose ps -q web 2>/dev/null | head -n1 || true)
+  if [ -n "$web_container" ]; then
+    live_image=$(docker inspect --format '{{.Config.Image}}' "$web_container" 2>/dev/null || true)
+    if [ -n "$live_image" ]; then
+      export WEB_IMAGE="$live_image"
+      return 0
+    fi
+  fi
+  if [ -n "$deployed_sha" ]; then
+    short_sha=$(printf '%s' "$deployed_sha" | cut -c1-12)
+    export WEB_IMAGE="attacksurf-web:$short_sha"
+  fi
 }
 
 live_restore() {
   local plain_dump=$1
-  local safety_dump="/var/lib/attacksurf/pre-restore-$(date -u +%Y%m%dT%H%M%SZ).dump"
+  local safety_dump="$STATE_DIR/pre-restore-$(date -u +%Y%m%dT%H%M%SZ).dump"
+
+  [[ "$STAGE_DB" =~ ^[A-Za-z0-9_]+$ ]] || die "invalid STAGE_DB name: $STAGE_DB"
+
+  resolve_live_web_image
+  log "preserving image ${WEB_IMAGE:-attacksurf:prod} across recovery"
 
   log "stopping application services before live restore"
   compose stop web worker-passive worker-ai beat
 
-  install -d -m 0700 /var/lib/attacksurf
+  install -d -m 0700 "$STATE_DIR"
   log "taking pre-restore safety dump at $safety_dump"
   compose exec -T postgres pg_dump -U attacksurf -d attacksurf \
     --format=custom --no-owner --no-acl >"$safety_dump"
   chmod 0600 "$safety_dump"
 
-  log "restoring live database attacksurf"
-  compose exec -T postgres pg_restore -U attacksurf -d attacksurf \
-    --clean --if-exists --no-owner --no-acl --exit-on-error <"$plain_dump"
+  log "restoring backup into clean staging database $STAGE_DB"
+  compose exec -T postgres psql -U attacksurf -d postgres -v ON_ERROR_STOP=1 \
+    -c "DROP DATABASE IF EXISTS \"$STAGE_DB\";" >/dev/null
+  compose exec -T postgres psql -U attacksurf -d postgres -v ON_ERROR_STOP=1 \
+    -c "CREATE DATABASE \"$STAGE_DB\" OWNER attacksurf;" >/dev/null
+  STAGE_DB_CREATED=1
+
+  compose exec -T postgres pg_restore -U attacksurf -d "$STAGE_DB" \
+    --no-owner --no-acl --exit-on-error <"$plain_dump"
+  check_restored_db "$STAGE_DB"
+
+  log "swapping staged database $STAGE_DB into attacksurf"
+  compose exec -T postgres psql -U attacksurf -d postgres -v ON_ERROR_STOP=1 \
+    -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'attacksurf' AND pid <> pg_backend_pid();" >/dev/null
+  compose exec -T postgres psql -U attacksurf -d postgres -v ON_ERROR_STOP=1 \
+    -c "DROP DATABASE IF EXISTS attacksurf;" >/dev/null
+  compose exec -T postgres psql -U attacksurf -d postgres -v ON_ERROR_STOP=1 \
+    -c "ALTER DATABASE \"$STAGE_DB\" RENAME TO attacksurf;" >/dev/null
+  STAGE_DB_CREATED=0
+
+  log "running forward migrations on restored database"
+  compose run --rm -T migrate
 
   log "restarting application services"
-  compose up -d --wait --wait-timeout 300 web worker-passive worker-ai beat caddy cloudflared
+  compose up -d --wait --wait-timeout 300 --no-build \
+    web worker-passive worker-ai beat caddy cloudflared
   compose exec -T caddy wget -q -T 5 -O /dev/null "http://web:5000/healthz"
   log "live restore complete; safety dump kept at $safety_dump"
 }

@@ -43,6 +43,27 @@ if [ "${{1:-}}" = "compose" ] && [ "${{2:-}}" = "version" ]; then
   echo "Docker Compose version v5.1.1"
   exit 0
 fi
+if [ "${{1:-}}" = "inspect" ]; then
+  echo "attacksurf-web:deadbeef1234"
+  exit 0
+fi
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-q" ] && [ "$arg" = "web" ]; then
+    echo "web-cid-1"
+    exit 0
+  fi
+  if [ "$prev" = "-d" ]; then
+    case "$*" in
+      *orgs*)
+        printf 'alembic_version=0014\\norgs=1\\nusers=2\\n'
+        printf 'assets=5\\nscans=3\\nfindings=4\\n'
+        exit 0
+        ;;
+    esac
+  fi
+  prev=$arg
+done
 for arg in "$@"; do
   case "$arg" in
     pg_dump)
@@ -51,13 +72,6 @@ for arg in "$@"; do
       ;;
     pg_restore)
       cat >/dev/null
-      exit 0
-      ;;
-    psql)
-      if [[ "$*" == *"alembic_version"* ]]; then
-        printf 'alembic_version=0014\\norganizations=1\\nusers=2\\n'
-        printf 'assets=5\\nscans=3\\nfindings=4\\n'
-      fi
       exit 0
       ;;
   esac
@@ -239,9 +253,64 @@ def test_restore_verify_only_downloads_verifies_decrypts_and_drops_temp_db(
 
     assert restore_res.returncode == 0, restore_res.stderr
     assert "alembic_version=0014" in restore_res.stdout
+    assert "orgs=1" in restore_res.stdout
     calls = log_file.read_text(encoding="utf-8")
     assert "CREATE DATABASE" in calls
     assert "DROP DATABASE IF EXISTS" in calls
+
+
+def test_restore_live_preserves_image_stages_clean_db_and_migrates(tmp_path: Path) -> None:
+    bin_dir, log_file = _install_stub_bin(tmp_path)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "deployed-sha").write_text("deadbeef1234567890\n", encoding="utf-8")
+    dump_file = tmp_path / "backup.dump"
+    dump_file.write_bytes(b"PGDMP-FAKE-CUSTOM-DUMP\n")
+
+    # Record WEB_IMAGE seen by compose invocations in the stubbed docker wrapper.
+    docker_stub = bin_dir / "docker"
+    docker_stub.write_text(
+        docker_stub.read_text(encoding="utf-8").replace(
+            'echo "docker $*"',
+            'echo "WEB_IMAGE=${WEB_IMAGE:-unset} docker $*"',
+        ),
+        encoding="utf-8",
+    )
+
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "APP_DIR": str(ROOT),
+        "BACKUP_ENV_FILE": str(tmp_path / "nonexistent.env"),
+        "STATE_DIR": str(state_dir),
+    }
+    res = subprocess.run(  # noqa: S603
+        [
+            str(ROOT / "scripts/restore.sh"),
+            "--live",
+            str(dump_file),
+            "--i-understand-this-replaces-prod",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert res.returncode == 0, res.stderr
+    calls = log_file.read_text(encoding="utf-8")
+    assert 'CREATE DATABASE "attacksurf_restore_stage"' in calls
+    assert "pg_restore -U attacksurf -d attacksurf_restore_stage --no-owner" in calls
+    assert "--clean" not in calls
+    assert 'ALTER DATABASE "attacksurf_restore_stage" RENAME TO attacksurf' in calls
+    assert "WEB_IMAGE=attacksurf-web:deadbeef1234 docker compose" in calls
+    migrate_line = next(line for line in calls.splitlines() if "run --rm -T migrate" in line)
+    up_line = next(
+        line for line in calls.splitlines() if "up -d --wait --wait-timeout 300 --no-build" in line
+    )
+    assert calls.index(migrate_line) < calls.index(up_line)
+    assert migrate_line.startswith("WEB_IMAGE=attacksurf-web:deadbeef1234 ")
+    assert up_line.startswith("WEB_IMAGE=attacksurf-web:deadbeef1234 ")
 
 
 def test_restore_live_requires_explicit_confirmation_flag(tmp_path: Path) -> None:

@@ -56,8 +56,10 @@ def test_sentry_initializes_with_safe_defaults(monkeypatch: pytest.MonkeyPatch) 
     assert opts["traces_sample_rate"] == 0.05
     assert opts["send_default_pii"] is False
     assert opts["include_local_variables"] is False
+    assert opts["max_request_body_size"] == "never"
     assert opts["max_breadcrumbs"] == 20
     assert opts["before_send"] is _scrub_event
+    assert opts["before_send_transaction"] is _scrub_event
     assert opts["before_breadcrumb"] is _scrub_breadcrumb
     integration_names = {type(item).__name__ for item in opts["integrations"]}
     assert integration_names == {"LoggingIntegration", "FlaskIntegration", "CeleryIntegration"}
@@ -132,6 +134,37 @@ def test_sentry_scrubs_secrets_headers_cookies_and_url_credentials() -> None:
         scrubbed["exception"]["values"][0]["value"]
         == f"dial redis://{REDACTED}@redis:6379/0 failed"
     )
+
+
+def test_sentry_scrubs_sampled_transaction_requests_and_spans() -> None:
+    tx: dict[str, Any] = {
+        "type": "transaction",
+        "transaction": "ui.ai_settings",
+        "request": {
+            "url": "https://admin:pw@attacksurf.dev/settings/ai",
+            "data": {"base_url": "https://user:secret@llm.example/v1", "api_key": "sk-123"},
+            "headers": {"Cookie": "__Host-session=abc", "X-CSRFToken": "tok"},
+        },
+        "spans": [
+            {
+                "op": "http.client",
+                "description": "POST https://user:secret@llm.example/v1/chat",
+                "data": {"url": "https://user:secret@llm.example/v1/chat", "api_key": "sk-123"},
+            }
+        ],
+    }
+
+    scrubbed: dict[str, Any] = _scrub_event(tx, {})  # type: ignore[arg-type]
+
+    assert "data" not in scrubbed["request"]
+    assert scrubbed["request"]["url"] == f"https://{REDACTED}@attacksurf.dev/settings/ai"
+    assert scrubbed["request"]["headers"] == {"Cookie": REDACTED, "X-CSRFToken": REDACTED}
+    span = scrubbed["spans"][0]
+    assert span["description"] == f"POST https://{REDACTED}@llm.example/v1/chat"
+    assert span["data"] == {
+        "url": f"https://{REDACTED}@llm.example/v1/chat",
+        "api_key": REDACTED,
+    }
 
 
 def test_sentry_scrubs_breadcrumbs() -> None:

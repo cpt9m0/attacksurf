@@ -515,10 +515,11 @@ jobs stay queued. This is a checklist for that change, not steps to follow now:
 
 The primary `attacksurf.dev` instance keeps using pull-based source builds via `scripts/deploy.sh`,
 so no registry pull credentials or webhooks are needed on the VPS. Self-hosters who prefer
-prebuilt images can set `WEB_IMAGE` and pull directly:
+prebuilt images can set `WEB_IMAGE` (note that `v0.1.0` Git tags publish `:0.1.0`, `:0.1`,
+`:sha-<short>`, and `:latest`, without a `v` prefix) and pull directly:
 
 ```bash
-export WEB_IMAGE=ghcr.io/cpt9m0/attacksurf:v0.1.0
+export WEB_IMAGE=ghcr.io/cpt9m0/attacksurf:0.1.0
 docker compose -f compose.prod.yaml pull web worker-passive worker-ai beat migrate
 docker compose -f compose.prod.yaml build caddy
 docker compose -f compose.prod.yaml run --rm migrate
@@ -582,8 +583,10 @@ sudo BACKUP_AGE_IDENTITY=/root/attacksurf-backup.key \
 shred -u /root/attacksurf-backup.key
 ```
 
-For an actual disaster recovery overwrite of the live database (stops app/workers, takes a
-pre-restore dump under `/var/lib/attacksurf/`, restores, restarts, and checks `/healthz`):
+For an actual disaster recovery overwrite of the live database (preserves the deployed
+`WEB_IMAGE`, stops app/workers, takes a pre-restore dump under `/var/lib/attacksurf/`, restores
+into a clean staging database, atomically swaps it into `attacksurf`, runs `migrate`, restarts,
+and checks `/healthz`):
 
 ```bash
 sudo BACKUP_AGE_IDENTITY=/root/attacksurf-backup.key \
