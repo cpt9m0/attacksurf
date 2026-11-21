@@ -35,6 +35,12 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
 CMD ["flask", "--app", "attacksurf", "run", "--host", "0.0.0.0", "--port", "5000", "--debug"]
 
 FROM deps AS prod
+ARG APP_VERSION=""
+LABEL org.opencontainers.image.title="AttackSurf" \
+      org.opencontainers.image.description="Open-source, AI-powered attack surface management" \
+      org.opencontainers.image.source="https://github.com/cpt9m0/attacksurf" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+      org.opencontainers.image.version="${APP_VERSION}"
 COPY README.md LICENSE alembic.ini sandbox-images.lock ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -45,5 +51,5 @@ USER app
 EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=2)"]
-# Request logs come from the app (JSON, with request_id); gunicorn tuning/hardening: #29.
-CMD ["gunicorn", "attacksurf.app:create_app()", "--bind", "0.0.0.0:5000"]
+# Request logs come from the app (JSON, with request_id); /dev/shm avoids disk-backed heartbeats on ro rootfs.
+CMD ["gunicorn", "attacksurf.app:create_app()", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "4", "--timeout", "120", "--graceful-timeout", "30", "--keep-alive", "5", "--max-requests", "1000", "--max-requests-jitter", "100", "--worker-tmp-dir", "/dev/shm"]

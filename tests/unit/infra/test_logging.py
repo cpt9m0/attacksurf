@@ -88,6 +88,7 @@ def test_redact_secrets_masks_credentials_inside_urls() -> None:
         "event": "connecting",
         "url": "https://alice:hunter2@gateway.example/v1",
         "db": "postgresql+psycopg://attacksurf:secret@db:5432/app",
+        "broker": "redis://:redispass@redis:6379/0",
         "public_url": "https://api.openai.com/v1",
     }
 
@@ -95,6 +96,7 @@ def test_redact_secrets_masks_credentials_inside_urls() -> None:
 
     assert result["url"] == f"https://{REDACTED}@gateway.example/v1"
     assert result["db"] == f"postgresql+psycopg://{REDACTED}@db:5432/app"
+    assert result["broker"] == f"redis://{REDACTED}@redis:6379/0"
     assert result["public_url"] == "https://api.openai.com/v1"
 
 

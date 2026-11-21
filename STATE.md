@@ -2,32 +2,37 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-20 · **Branch:** `28-email-notifications` · **Issue:** #28 (email digest notifications)
+**Updated:** 2026-11-21 · **Branch:** `29-production-deployment` · **Issue:** #29 (production deployment hardening)
 
 ## Status
-Implemented issue #28 (email digest notifications on new/regressed findings, ADR 0032) on branch
-`28-email-notifications`. All unit tests, `ruff`, `pyright`, `lint-imports`, and offline Alembic
-SQL generation pass; database integration tests (`tests/integration/services/test_notifications.py`)
-require PostgreSQL (`TEST_DATABASE_URL` / `make test`) which was not running in this environment.
+Implemented issue #29 on branch `29-production-deployment` (branched off `main` at `3d90648`):
+container/network/Gunicorn hardening in `compose.prod.yaml` & `Dockerfile`, non-root `caddy`,
+image pruning + `SENTRY_RELEASE` injection in `scripts/deploy.sh`, optional scrubbed Sentry
+(`infra/sentry.py`), nightly off-box `rclone` backups + `restore.sh` drill + systemd units,
+host hardening & log rotation docs (`docs/deployment.md`), and tag-triggered multi-arch GHCR
+workflow (`.github/workflows/release.yml`).
 
 ## Last task
-- Added `domain/notifications.py` (`EmailSender`, `ScanDigest`, `DigestFinding`, `EmailDeliveryError`),
-  `SMTP_*` and `APP_BASE_URL` settings in `config.py`, and `infra/email.py` (`SmtpEmailSender` +
-  `render_digest_email` with plain-text & autoescaped HTML templates and no external tracking).
-- Added migration `0014_add_notifications.py` (`finding_observations.regressed`,
-  `notification_preferences`, `notification_deliveries`), updated `services/scan_diff.py` to mark
-  regressed observations, and implemented `services/notifications.py` +
-  `workers/tasks/notifications.py` (`passive.notify_scan`).
-- Wired `queue_scan_notification` into the terminal exits of the post-scan AI stage
-  (`services/summary.py`, `services/triage.py`, `services/scans.py`) and excluded `NOTIFY_STAGE`
-  from scan progress counts in `services/scan_views.py`.
-- Added per-user notification preferences UI on `/settings` (`POST /settings/notifications`) and
-  added `mailpit` to `compose.yaml` + `.env.example`.
+- Hardened `compose.prod.yaml` (`read_only: true`, `cap_drop: [ALL]`, PID/CPU/memory limits,
+  `json-file` log rotation, `internal: true` network isolation, Redis `--maxmemory`), made
+  Caddy non-root (`uid 10001`), tuned Gunicorn (`--timeout 120`, `--max-requests 1000`,
+  `--worker-tmp-dir /dev/shm`) + `320m` `/tmp` `tmpfs` for uploads, and added old-image pruning
+  to `scripts/deploy.sh`.
+- Added optional env-gated Sentry (`SENTRY_DSN` et al.) in `config.py`, `infra/sentry.py`,
+  `app.py`, `web/errors.py`, and `workers/app.py` using `sentry-sdk[flask,celery]==2.74.0`
+  (two-week age policy), `send_default_pii=False`, `include_local_variables=False`, and shared
+  redaction from `infra/logging.py`.
+- Added `scripts/backup.sh`, `scripts/restore.sh`, `deploy/backup.env.example`, and
+  `deploy/systemd/attacksurf-backup.{service,timer,tmpfiles.conf}` plus `.github/workflows/release.yml`
+  and host hardening / restore-drill docs in `docs/deployment.md`.
+- Added unit tests (`tests/unit/infra/test_sentry.py`, `tests/unit/test_backup_scripts.py`,
+  config & `compose.prod.yaml` hardening assertions).
 
 ## Next step
-Run `make test` (or `TEST_DATABASE_URL=... uv run pytest`) against PostgreSQL to execute
-`tests/integration/services/test_notifications.py` and the full integration suite, then open PR
-for #28. On the sandbox track, PR 5 (`84-sandbox-ci`) remains next.
+Open PR for #29 against `main` (and after merge, run the manual VPS steps in `docs/deployment.md`:
+install `rclone`/`age` + `attacksurf-backup.{service,timer}`, configure `/etc/attacksurf/backup.env`,
+verify the first backup + `restore.sh --verify-only`, optionally set `SENTRY_DSN`, and walk through
+the host hardening checklist). On the sandbox track, PR 5 (`84-sandbox-ci`) remains next.
 
 ## Open threads
 - **Proxy trust:** the proxy has no caller authentication and `worker-analysis` shares the

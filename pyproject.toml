@@ -54,6 +54,7 @@ dependencies = [
     "redis>=6.4.0",
     "pydantic>=2.12",
     "pydantic-settings>=2.15.0",
+    "sentry-sdk[celery,flask]>=2.74.0,<2.75.0",
     "sqlalchemy>=2.1.4",
     "structlog>=26.1.0",
     "tldextract>=5.4.0",
@@ -227,8 +228,8 @@ forbidden_modules = [
     "attacksurf.sandbox_launcher",
     "alembic", "anthropic", "argon2", "celery", "cryptography", "dns", "flask",
     "flask_limiter", "flask_login", "flask_wtf", "gunicorn", "httpx", "idna", "jinja2",
-    "kombu", "openai", "psycopg", "pydantic", "pydantic_settings", "redis", "sqlalchemy",
-    "structlog", "tldextract", "werkzeug",
+    "kombu", "openai", "psycopg", "pydantic", "pydantic_settings", "redis", "sentry_sdk",
+    "sqlalchemy", "structlog", "tldextract", "werkzeug",
 ]
 
 [[tool.importlinter.contracts]]

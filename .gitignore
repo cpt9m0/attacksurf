@@ -6,6 +6,7 @@ __pycache__/
 !.env.example
 # Production secrets live on the host (docs/deployment.md); never commit the filled env.
 deploy/attacksurf.env
+deploy/backup.env
 .coverage
 coverage.xml
 htmlcov/

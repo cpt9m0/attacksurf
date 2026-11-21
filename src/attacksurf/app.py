@@ -6,6 +6,7 @@ from flask import Flask
 from attacksurf.ai.config import resolve_llm_config
 from attacksurf.config import Settings, get_settings
 from attacksurf.infra.logging import configure_logging, init_request_logging
+from attacksurf.infra.sentry import init_sentry
 from attacksurf.scanners.dns import axfr as _dns_axfr  # noqa: F401
 from attacksurf.scanners.dns import caa as _dns_caa  # noqa: F401
 
@@ -33,6 +34,7 @@ from attacksurf.web.uploads import init_uploads
 def create_app(settings: Settings | None = None) -> Flask:
     settings = settings or get_settings()
     configure_logging(settings)
+    init_sentry(settings, enable_flask=True)
 
     app = Flask(__name__, template_folder="web/templates", static_folder="web/static")
     app.config.update(
