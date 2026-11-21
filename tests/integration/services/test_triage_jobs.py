@@ -199,7 +199,7 @@ def test_the_coordinator_is_skipped_when_ai_is_off(db_session: Session) -> None:
     triage.run_triage(db_session, queue, scan.org_id, coordinator.id, make_settings(env="test"))
 
     assert queue.published == []
-    assert queue.enqueued == []
+    assert [name for name, _, _ in queue.enqueued] == ["passive.notify_scan"]
     assert _refreshed(db_session, coordinator).status is JobStatus.SKIPPED
 
 

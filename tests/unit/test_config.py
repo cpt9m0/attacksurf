@@ -627,6 +627,58 @@ def test_org_llm_settings_defaults() -> None:
     assert settings.app_encryption_old_key_bytes == ()
 
 
+def test_smtp_defaults_disable_outbound_email() -> None:
+    settings = make_settings()
+
+    assert settings.smtp_host is None
+    assert settings.smtp_port == 587
+    assert settings.smtp_tls == "starttls"
+    assert settings.smtp_from == "noreply@attacksurf.local"
+    assert settings.app_base_url is None
+
+
+def test_smtp_reads_environment_and_masks_password(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("SMTP_HOST", "smtp.example")
+    clean_env.setenv("SMTP_PORT", "2525")
+    clean_env.setenv("SMTP_USER", "mailer")
+    clean_env.setenv("SMTP_PASSWORD", "super-secret-smtp-pass")
+    clean_env.setenv("SMTP_FROM", "alerts@example.com")
+    clean_env.setenv("SMTP_TLS", "ssl")
+    clean_env.setenv("APP_BASE_URL", "https://app.example.com/")
+
+    settings = settings_from_env()
+
+    assert settings.smtp_host == "smtp.example"
+    assert settings.smtp_port == 2525
+    assert settings.smtp_user == "mailer"
+    assert isinstance(settings.smtp_password, SecretStr)
+    assert "super-secret-smtp-pass" not in repr(settings)
+    assert settings.smtp_from == "alerts@example.com"
+    assert settings.smtp_tls == "ssl"
+    assert settings.app_base_url == "https://app.example.com"
+
+
+@pytest.mark.parametrize("bad_from", ["", "not-an-email", "a@b\r\nBcc: evil@x", "a b@example.com"])
+def test_smtp_from_rejects_invalid_or_multiline_addresses(bad_from: str) -> None:
+    with pytest.raises(ValidationError, match="SMTP_FROM"):
+        make_settings(smtp_from=bad_from)
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "ftp://app.example",
+        "https://user:pass@app.example",
+        "https://app.example?x=1",
+        "https://app.example#frag",
+        "not-a-url",
+    ],
+)
+def test_app_base_url_rejects_invalid_urls(bad_url: str) -> None:
+    with pytest.raises(ValidationError, match="APP_BASE_URL"):
+        make_settings(app_base_url=bad_url)
+
+
 def test_org_llm_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
     clean_env.setenv("LLM_MONTHLY_INSTANCE_TOKEN_BUDGET", "120000")
     clean_env.setenv("LLM_ALLOWED_BASE_HOSTS", " localhost, Ollama.Internal. , [::1], 127.0.0.1 ")

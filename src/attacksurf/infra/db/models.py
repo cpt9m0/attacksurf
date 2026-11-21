@@ -391,6 +391,7 @@ class FindingObservation(TenantScoped, Base):
     scan_id: Mapped[UUID] = mapped_column(index=True)
     finding_id: Mapped[UUID] = mapped_column(index=True)
     severity: Mapped[Severity] = mapped_column(_str_enum(Severity, "severity"))
+    regressed: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
 
 
 class Evidence(TenantScoped, Base):
@@ -471,3 +472,32 @@ class OrgSettings(TenantScoped, Timestamps, Base):
     api_key_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary(512))
     api_key_last4: Mapped[str | None] = mapped_column(String(4))
     monthly_token_budget: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class NotificationPreference(TenantScoped, Timestamps, Base):
+    """Per-user email notification preferences within an org (#28)."""
+
+    __tablename__ = "notification_preferences"
+    __table_args__ = (UniqueConstraint("org_id", "user_id"),)
+
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    email_enabled: Mapped[bool] = mapped_column(default=True, server_default=text("true"))
+    min_severity: Mapped[Severity] = mapped_column(
+        _str_enum(Severity, "severity"),
+        default=Severity.HIGH,
+        server_default=Severity.HIGH.value,
+    )
+
+
+class NotificationDelivery(TenantScoped, Base):
+    """Records one sent scan digest email per `(org, scan, user)` to prevent duplicates (#28)."""
+
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        UniqueConstraint("org_id", "scan_id", "user_id"),
+        _same_org_fk("scan_id", "scans"),
+    )
+
+    scan_id: Mapped[UUID] = mapped_column(index=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    sent_at: Mapped[datetime] = mapped_column(server_default=func.now())

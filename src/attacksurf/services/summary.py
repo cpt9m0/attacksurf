@@ -33,13 +33,13 @@ from attacksurf.ai.summary import (
 )
 from attacksurf.config import Settings
 from attacksurf.domain.findings import ACTIVE_STATUSES, SEVERITY_RANK
-from attacksurf.domain.jobs import JobNotFound
+from attacksurf.domain.jobs import JobNotFound, TaskQueue
 from attacksurf.domain.llm import LLMConfig, LLMError, LLMUnavailable
 from attacksurf.domain.net import DnsResolver
 from attacksurf.domain.scans import ScanNotFound, ScanStatus
 from attacksurf.infra.db.models import Asset, Finding, FindingObservation, Job, Scan
 from attacksurf.infra.db.tenancy import get_scoped, scoped
-from attacksurf.services import jobs, org_settings, scan_views
+from attacksurf.services import jobs, notifications, org_settings, scan_views
 from attacksurf.services.llm_usage import record_llm_usage
 from attacksurf.services.scans import root_is_active
 from attacksurf.services.triage import stored_triage, triage_is_stale
@@ -58,6 +58,7 @@ def run_summary(
     settings: Settings,
     *,
     retry_allowed: bool,
+    queue: TaskQueue | None = None,
     resolver: DnsResolver | None = None,
     now: datetime | None = None,
 ) -> None:
@@ -74,7 +75,10 @@ def run_summary(
     if scan is None:
         raise JobNotFound(str(job_id))
     if stored_summary(scan) is not None:
+        scan_id = scan.id
         session.rollback()
+        if queue is not None:
+            notifications.queue_scan_notification(session, queue, org_id, scan_id)
         return
     if not root_is_active(session, org_id, scan):
         session.rollback()
@@ -86,6 +90,8 @@ def run_summary(
         session, org_id, job_id, settings, resolver=resolver
     )
     if config is None:
+        if queue is not None:
+            notifications.queue_scan_notification(session, queue, org_id, scan_id)
         return
     summary_input = build_summary_input(session, org_id, scan_id)
     session.rollback()  # no transaction stays open during a call that can take minutes
@@ -103,6 +109,8 @@ def run_summary(
             job_id=str(job_id),
             error=jobs.describe_error(exc),
         )
+        if queue is not None:
+            notifications.queue_scan_notification(session, queue, org_id, scan_id)
         return
     validated = validate_summary(summary_input, result.parsed)
     # Publish under the root lock so concurrent completions cannot pass the recency check
@@ -137,6 +145,8 @@ def run_summary(
             [item.asset_id for item in validated.notable_assets],
         )
     session.commit()
+    if queue is not None:
+        notifications.queue_scan_notification(session, queue, org_id, scan_id)
 
 
 def build_summary_input(session: Session, org_id: UUID, scan_id: UUID) -> SummaryInput:

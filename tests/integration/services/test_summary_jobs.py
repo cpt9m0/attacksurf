@@ -196,7 +196,7 @@ def test_summary_is_not_queued_when_triage_is_skipped_for_budget(db_session: Ses
 
     triage.run_triage(db_session, queue, scan.org_id, coordinator.id, _settings(budget=1_000))
 
-    assert queue.enqueued == []
+    assert [name for name, _, _ in queue.enqueued] == ["passive.notify_scan"]
     assert _refreshed(db_session, coordinator).status is JobStatus.SKIPPED
 
 

@@ -6,6 +6,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Email digest notifications (#28, ADR 0032): `passive.notify_scan` runs at the end of the
+  post-scan AI phase (or its skip/failure exits) and sends each opted-in org member a plain-text
+  + HTML digest (no external tracking) of new and regressed findings (`FindingObservation.regressed`,
+  migration `0014_add_notifications`) meeting their severity threshold, with the AI exposure
+  summary headline when available. `infra.email.SmtpEmailSender` delivers over env-configured
+  SMTP (`SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`,
+  `APP_BASE_URL`), `NotificationDelivery` prevents duplicate emails across retries, `/settings`
+  adds a per-user Email notifications card (`POST /settings/notifications`), and `compose.yaml`
+  adds `mailpit` for local previewing.
 - Analysis worker and sandbox services in the dev stack (#84): `worker-analysis`,
   `sandbox-launcher` and `sandbox-proxy` run behind the opt-in Compose `sandbox` profile on an
   internal network, the `analysis` queue is consumed from now on (ADR 0031), and an empty

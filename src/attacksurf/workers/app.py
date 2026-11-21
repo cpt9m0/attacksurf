@@ -25,6 +25,7 @@ from attacksurf.workers import runtime
 
 TASK_MODULES = (
     "attacksurf.workers.tasks.ai",
+    "attacksurf.workers.tasks.notifications",
     "attacksurf.workers.tasks.system",
     "attacksurf.workers.tasks.pipeline",
     "attacksurf.workers.tasks.verification",

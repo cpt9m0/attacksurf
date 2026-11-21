@@ -1,0 +1,20 @@
+{#- Swapped in place by HTMX: re-rendered with inline field errors (422) on invalid input. -#}
+{%- from "components/form.html" import csrf_field, form_error, select_field -%}
+<form id="notification-settings-form" class="form" method="post"
+      action="{{ url_for('ui.save_notification_settings') }}"
+      hx-post="{{ url_for('ui.save_notification_settings') }}" hx-target="this" hx-swap="outerHTML"
+      hx-disabled-elt="find button">
+  {{ csrf_field() }}
+  {{ form_error(notification_errors.get("_form")) }}
+  <div class="field-check">
+    <input id="f-email_enabled" name="email_enabled" type="checkbox" value="1"
+           {%- if notification_form.email_enabled %} checked{% endif %}>
+    <label for="f-email_enabled">Send email digests when scans find new or regressed issues</label>
+  </div>
+  {{ select_field("min_severity", "Minimum severity", severity_options, notification_form.min_severity,
+                  error=notification_errors.get("min_severity"),
+                  hint="Only findings at or above this severity are included in your digest.") }}
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">Save notification preferences</button>
+  </div>
+</form>

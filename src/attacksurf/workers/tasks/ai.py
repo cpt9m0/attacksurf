@@ -67,7 +67,7 @@ def triage_done(*, org_id: str, job_id: str) -> None:
 def triage_failed(*, org_id: str, job_id: str) -> None:
     """The run's error callback: a batch crashed, so its queued jobs are closed."""
     with runtime.session_factory()() as session:
-        triage_service.fail_triage(session, UUID(org_id), UUID(job_id))
+        triage_service.fail_triage(session, UUID(org_id), UUID(job_id), queue=CeleryTaskQueue(app))
 
 
 @app.task(bind=True, base=TrackedTask, name="ai.summarize")
@@ -80,5 +80,6 @@ def summarize(self: TrackedTask, *, org_id: str, job_id: str) -> None:
             UUID(job_id),
             runtime.settings(),
             retry_allowed=self.request.retries < (self.max_retries or 0),
+            queue=CeleryTaskQueue(app),
             resolver=runtime.dns_resolver(),
         )
