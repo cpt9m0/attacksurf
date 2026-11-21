@@ -5,7 +5,14 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from attacksurf.domain.llm import ProviderKind
-from attacksurf.services import asset_views, finding_views, llm_usage, org_settings, scan_views
+from attacksurf.services import (
+    asset_views,
+    finding_views,
+    llm_usage,
+    org_settings,
+    scan_views,
+    summary_views,
+)
 from attacksurf.services.auth import SessionUser
 from tests.conftest import LoginAs, make_session_user
 
@@ -48,6 +55,7 @@ def _no_scans(monkeypatch: pytest.MonkeyPatch) -> None:
         roots=(),
     )
     monkeypatch.setattr(finding_views, "get_dashboard", lambda *_args, **_kw: empty_dashboard)
+    monkeypatch.setattr(summary_views, "list_latest_root_summaries", lambda *_args, **_kw: ())
     default_settings = org_settings.OrgSettingsView(
         ai_enabled=True,
         provider=ProviderKind.ANTHROPIC,

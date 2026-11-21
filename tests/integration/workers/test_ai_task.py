@@ -24,7 +24,9 @@ from attacksurf.infra.db.models import (
     User,
 )
 from attacksurf.infra.db.tenancy import scoped
+from attacksurf.infra.queue import CeleryTaskQueue
 from attacksurf.services import jobs, org_settings
+from attacksurf.services import summary as summary_service
 from attacksurf.services import triage as triage_service
 from attacksurf.services.assets import record_asset
 from attacksurf.workers import runtime
@@ -50,6 +52,13 @@ class _FakeDns:
 
 @pytest.fixture
 def worker_env(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> sessionmaker[Session]:
+    class RecordingQueue(CeleryTaskQueue):
+        # `send_task` ignores eager mode and would dial the broker, so single tasks (the summary
+        # job triage queues) are recorded instead; `enqueue_workflow` stays real.
+        def enqueue(self, task_name: str, *, org_id: UUID, job_id: UUID) -> str:
+            return "task-1"
+
+    monkeypatch.setattr(ai_tasks, "CeleryTaskQueue", RecordingQueue)
     factory = sessionmaker(
         bind=db_session.connection(),
         join_transaction_mode="create_savepoint",
@@ -230,10 +239,20 @@ def test_triage_task_is_skipped_with_a_notice_when_the_budget_is_spent(
     assert _scan_status(db_session, job) is ScanStatus.COMPLETED
 
 
+def _summary_reply() -> str:
+    return (
+        '{"headline": "Scan summarized.", "key_risks": [], "notable_assets": [], '
+        '"changes": "No changes.", "next_actions": []}'
+    )
+
+
 def test_triage_task_completes_when_ai_is_on(
     worker_env: sessionmaker[Session], db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _ai_on(monkeypatch)
+    monkeypatch.setattr(
+        summary_service, "build_provider", lambda _config: FakeLLMProvider(_summary_reply())
+    )
     job = _triage_job(db_session)
 
     result = _run_triage(job)
@@ -332,6 +351,7 @@ def test_a_triage_run_judges_every_asset_and_closes_cleanly(
         for row in db_session.scalars(scoped(Job, scan.org_id).where(Job.scan_id == scan.id))
     )
     assert statuses == [
+        ("summary", JobStatus.QUEUED),
         ("triage", JobStatus.COMPLETED),
         ("triage_batch", JobStatus.COMPLETED),
         ("triage_batch", JobStatus.COMPLETED),
@@ -339,6 +359,33 @@ def test_a_triage_run_judges_every_asset_and_closes_cleanly(
         ("triage_failure", JobStatus.SKIPPED),
     ]
     assert len(db_session.scalars(scoped(LLMUsage, scan.org_id)).all()) == 2
+    assert _scan_status(db_session, job) is ScanStatus.COMPLETED
+
+
+def test_summarize_task_stores_summary_and_marks_job_completed(
+    worker_env: sessionmaker[Session], db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ai_on(monkeypatch)
+    monkeypatch.setattr(
+        summary_service, "build_provider", lambda _config: FakeLLMProvider(_summary_reply())
+    )
+    scan = make_scan(db_session)
+    scan.status = ScanStatus.COMPLETED
+    job = jobs.create_job(
+        db_session,
+        FakeQueue(db_session),
+        org_id=scan.org_id,
+        scan_id=scan.id,
+        stage="summary",
+        task_name="ai.summarize",
+    )
+
+    result = ai_tasks.summarize.apply(kwargs={"org_id": str(job.org_id), "job_id": str(job.id)})
+
+    assert result.successful()
+    db_session.expire_all()
+    assert job.status is JobStatus.COMPLETED
+    assert summary_service.stored_summary(scan) is not None
     assert _scan_status(db_session, job) is ScanStatus.COMPLETED
 
 

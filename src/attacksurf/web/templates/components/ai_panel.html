@@ -16,9 +16,10 @@
 <span class="pill pill-{{ tone }}">{{ label }}</span>
 {%- endmacro %}
 
-{% macro ai_label(triage) -%}
-<p class="ai-label">AI-generated with <span class="mono">{{ triage.model }}</span> and prompt
-  <span class="mono">{{ triage.prompt_version }}</span>, {{ relative_time(triage.triaged_at) }}.
+{% macro ai_label(item, at=None) -%}
+{%- set timestamp = at if at is not none else item.triaged_at -%}
+<p class="ai-label">AI-generated with <span class="mono">{{ item.model }}</span> and prompt
+  <span class="mono">{{ item.prompt_version }}</span>, {{ relative_time(timestamp) }}.
   A person decides what to do with it.</p>
 {%- endmacro %}
 

@@ -198,7 +198,7 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 | `Asset` | polymorphic target: `domain`, `subdomain`, `ip`, `url`, `repo`, `binary`; one row per `(org_id, type, value)` with `value` normalized by `domain.assets.normalize_asset_value` (hostnames lowercase punycode via `idna`, canonical IPs, `http(s)` URLs without credentials/fragment/default port; repos as `host/owner/name` or `upload/<slug>`; binaries as `sha256:<64 lowercase hex>` of their bytes); `source` user/discovered, `parent_id` = asset a discovered one was found under (set once at first sighting, so no cycles; user-added assets are roots; deleting a parent cascades to its discovered children), `first_seen`/`last_seen`, `first_seen_scan_id` + `deactivated_by_scan_id` (which scan discovered/deactivated it, so an overlapping scan's diff cannot claim it), `is_active` + `deactivated_at` (only sightings after it reactivate), `tags`, `details` (a JSONB bag for scan-derived metadata: CT discovery stores `{"wildcard": true}` on wildcard zones; DNS resolution stores `dns` records/chain and `ip` PTR/ASN/organisation, plus an `observed_at` marker so stale scans cannot replace newer details, ADR 0025). Roots come from `services.assets.add_root_domain` (any name `check_public_hostname` accepts, registrable or subdomain; re-adding an archived root restores it) and are removed only by `archive_root_domain` (root + its discovered children go inactive; findings and scans are kept) |
 | `AssetRelation` | graph edges: `subdomain_of`, `cname_to`, `resolves_to`, `serves`; unique per `(org_id, from, to, kind)`, no self-edges. `services.assets.record_asset` / `record_relation` upsert atomically (`INSERT … ON CONFLICT`): re-seen rows extend `last_seen`, never downgrade `source=user`, don't commit (the pipeline commits once), and raise `AssetNotFound` for a parent or endpoint that isn't the org's (locked `FOR KEY SHARE` so it can't vanish before the insert) |
 | `Verification` | proof of ownership of a root domain (`_attacksurf-verify.<root>` TXT, `pending`/`verified`/`revoked`, `verified_at`, `last_checked_at`, `recheck_at`, `expires_at`; unique per `(org_id, asset_id)`). Renewals are due after 20 hours; authorization expires after 24 hours. Subdomains inherit their root's proof; a `verified` row counts only while `expires_at` is in the future. Written by `services.verifications` / `services.ownership`, read by `DbOwnershipChecker` (ADRs 0014, 0015) |
-| `Scan`, `Job` | one run of a profile (`dns_passive`, …) against a root asset (`queued/running/completed/failed/cancelled`, triggered by `user`/`schedule`; `stats` holds the #20 diff: new/fixed/regressed findings by severity and new/disappeared assets, ADR 0027), and its jobs: a pipeline stage, or one scanner on one asset (`skipped` = not run, e.g. denied by ScopeGuard). `scan_id` is NULL for work that isn't part of a scan (ownership verification). Deleting the root asset deletes its scans (their jobs are kept with `scan_id` NULL); deleting another asset keeps the job with `asset_id` NULL |
+| `Scan`, `Job` | one run of a profile (`dns_passive`, …) against a root asset (`queued/running/completed/failed/cancelled`, triggered by `user`/`schedule`; `stats` holds the #20 diff: new/fixed/regressed findings by severity and new/disappeared assets, ADR 0027; `ai_summary` holds the #26 `StoredSummary`, ADR 0030), and its jobs: a pipeline stage, or one scanner on one asset (`skipped` = not run, e.g. denied by ScopeGuard). `scan_id` is NULL for work that isn't part of a scan (ownership verification). Deleting the root asset deletes its scans (their jobs are kept with `scan_id` NULL); deleting another asset keeps the job with `asset_id` NULL |
 | `Finding`, `Evidence` | normalized result, one row per issue across scans: unique `(org_id, fingerprint)`, with `fingerprint = domain.findings.finding_fingerprint(org_id, asset_id, rule_id, location)` (SHA-256 of a versioned JSON array; `location` tells apart several issues of one rule on one asset). `rule_id` points into the rule catalog (`domain.rules`: title, default severity, remediation template, references). `scanner` is the `Job.scanner` that last observed it (`NULL` before #20: never auto-fixed), and `evidence_digest` is the SHA-256 of the last observed evidence set (empty included) for material-change checks. Status `open → fixed → regressed → fixed` (the diff stage `services.scan_diff` owns those transitions, ADR 0027), plus the user's `accepted_risk`/`false_positive`, which reopen to `open` only on a material change; `fixed_at` is set exactly when `fixed`. `FindingObservation` records one row per `(scan, finding)` with the severity at observation time: it is what a scan's own stats and fix/regress decisions use, so they never depend on the mutable `last_seen_scan_id`; rows cascade with their scan and finding. Deleting a scan keeps its findings (scan references become NULL); evidence (`dns_record`/`http_response`/`raw`) goes with its finding |
 | `Artifact` | an uploaded or fetched repo/binary of an asset, stored encrypted (#85, ADR 0028): `kind` (`repo`/`binary`), plaintext `sha256` + `size_bytes`, `storage_key` (`{org_id}/{artifact_id}`), `key_envelope` (the per-artifact AES key wrapped by `APP_ENCRYPTION_KEY`; NULL exactly when `deleted_at` is set, enforced by a CHECK), `delete_after`. `services.artifacts`: `store_artifact` (streams through the `domain.artifacts.ArtifactStore` port, per-artifact limit and per-org quota, audited), `open_artifact`, `stage_artifact`, `delete_artifact` (file removed, key erased, row kept), `purge_expired` (beat, every 10 min; a failed deletion keeps the key and is retried behind everything still waiting). `infra.storage.LocalArtifactStore` writes ciphertext to `ARTIFACT_STORE_ROOT/{org}/{artifact}` (0700/0600, temp file + `os.replace`; staging and deletion of one artifact are serialised by a `flock` on `{artifact}.lock` there) and stages plaintext for one sandbox run at `SANDBOX_ARTIFACT_ROOT/{artifact}/artifact`; the two roots may not overlap. Deleting the asset or org cascades the row, which erases the key. Nothing stages yet: the caller is #84's decision |
 | `LLMUsage` | one row per finished LLM call, successful or not: provider, model, `purpose`, `key_source` (`org`/`instance`), input/output tokens, `usage_reported`, `estimated_cost_usd` (snapshotted from `ai/pricing.py` list prices; NULL for an unpriced model or unreported usage), latency (NULL on failure), `success` + `error_type` (class name only). Append-only; indexed by `(org_id, created_at)` for #24's monthly instance-key cap. Written by `services.llm_usage.record_llm_usage` |
@@ -451,7 +451,7 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 - AI consumes **normalized findings only**; scan-derived text is treated as untrusted data.
 - AI output is advisory: adjusted severity is shown next to the scanner's severity and never
   auto-closes findings.
-- Triage (#25, ADR 0029) is being built: its reply models live in `ai/schemas.py`
+- Triage (#25, ADR 0029): its reply models live in `ai/schemas.py`
   (`TriageReply` of `FindingTriage`, P1 to P4; stored in `Finding.ai_triage` as `StoredTriage`)
   and its calls in `ai/triage.py`: `TriageBatch` (one asset's findings under batch-local refs
   `F1` to `F99`, never database IDs), `triage_batch(provider, batch)` (one call with prompt
@@ -466,15 +466,32 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 - A triage run (`workers/tasks/ai.py`, use cases in `services/triage.py`): `ai.triage`
   (`run_triage`) gates on settings and budget, then publishes one `ai.triage_batch` job per
   asset with work (`Job.asset_id`) plus an `ai.triage_done` tail and an `ai.triage_failed` error
-  callback through `jobs.enqueue_workflow`. `run_triage_batch` re-checks the budget, makes one
+  callback through `jobs.enqueue_workflow` (or queues `ai.summarize` directly when nothing new
+  needs triage). `run_triage_batch` re-checks the budget, makes one
   call, records usage on success and failure, stores matched judgments and commits; it raises
   only `LLMUnavailable` while Celery may retry, so the run carries on past a failed batch. Batch
   and tail tasks use `workers.base.ChordTask` (kept results, sanitized errors), which
-  `PipelineTask` also builds on.
+  `PipelineTask` also builds on. When batches finish, `finish_triage` (`ai.triage_done`) skips
+  the unused failure job and queues `ai.summarize`.
+- Exposure summary (#26, ADR 0030): `ai/schemas.py` defines `ExposureSummary` (`headline`,
+  `key_risks`, `notable_assets`, `changes`, `next_actions`) and `StoredSummary` (with real
+  finding/asset UUIDs and provenance in `Scan.ai_summary`, migration `0013`). `ai/summary.py`
+  defines `SummaryInput` (no raw evidence: change stats from `parse_diff`, up to 25 active
+  observed findings as `F1`..`F25`, up to 200 active assets under the root as `A1`..`A200`),
+  `build_summary_messages` (prompt `summary/v1`, one `scan_data_block`), `summarize`, and
+  `validate_summary` (maps refs to real IDs and drops unknown or duplicate refs).
+  `services/summary.py` (`run_summary`, task `ai.summarize`, `TrackedTask`) gates with
+  `enforce_triage_budget`, returns without paying twice if `Scan.ai_summary` is already present,
+  records usage with purpose `"summary"` on success and failure, stores the validated summary,
+  and syncs the AI-owned `"notable"` tag on `Asset.tags` under the scan's root without touching
+  other tag values, other roots, or other organizations.
 - The UI reads triage through `services/triage_views.get_scan_triage` (the run's state from its
   jobs, and the scan's judged findings by priority, capped at 100) for the scan page's polled
   `ui.scan_triage` section, and through `finding_views` (`ai_triage` parsed as `StoredTriage`)
-  for the finding page's AI panel. `TRIAGE_STAGES` are left out of every scan job count.
+  for the finding page's AI panel. It reads summaries through `services/summary_views`
+  (`get_scan_summary` for the scan page's polled `ui.scan_summary` card, and
+  `list_latest_root_summaries` for the dashboard's per-root cards). `TRIAGE_STAGES` (which
+  includes `SUMMARY_STAGE`) are left out of every scan job count.
 - Prompts are versioned files `ai/prompts/<purpose>/v<N>.md` (system part, then user part with
   `$placeholders`), loaded by `ai.prompts.load_prompt`; a test pins each file's SHA-256. Scan data
   enters a prompt only through `ai/untrusted.scan_data_block`.
@@ -484,7 +501,7 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
 | Queue | Work | Isolation |
 |---|---|---|
 | `passive` | DNS, CT logs, RDAP, public APIs | normal egress |
-| `ai` | LLM calls: connection tests, triage runs (one call per job) | monthly token budget per org; never fails a scan |
+| `ai` | LLM calls: connection tests, triage runs, exposure summaries (one call per job) | monthly token budget per org; never fails a scan |
 | `fetch` *(later)* | git smart-HTTP fetches | egress to allowlisted forges through ScopeGuard; no access to `sandbox-launcher`; never parses repository content (ADR 0017) |
 | `active` *(later)* | port/web probes on verified targets | separate network, egress rules |
 | `analysis` *(later)* | code/binary analysis (`sandbox_proxy/`, `sandbox_launcher/` and the `sandbox_tools/` archive extractor and binary format detector are implemented, as is the worker-side client `infra/sandbox.py`; the images and the worker are not yet) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |

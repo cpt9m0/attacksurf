@@ -33,7 +33,7 @@ from attacksurf.ai.triage import (
 )
 from attacksurf.config import Settings
 from attacksurf.domain.findings import ACTIVE_STATUSES, SEVERITY_RANK, Severity
-from attacksurf.domain.jobs import JobNotFound, JobTask, PipelineQueue
+from attacksurf.domain.jobs import AIQueue, JobNotFound, JobTask, TaskQueue
 from attacksurf.domain.llm import LLMConfig, LLMError, LLMUnavailable
 from attacksurf.domain.net import DnsResolver
 from attacksurf.domain.scans import JobStatus
@@ -50,8 +50,9 @@ COORDINATOR_STAGE = "triage"
 BATCH_STAGE = "triage_batch"
 DONE_STAGE = "triage_done"
 FAILURE_STAGE = "triage_failure"
+SUMMARY_STAGE = "summary"
 # AI work, not scan work: the scan's own progress leaves these out.
-TRIAGE_STAGES = (COORDINATOR_STAGE, BATCH_STAGE, DONE_STAGE, FAILURE_STAGE)
+TRIAGE_STAGES = (COORDINATOR_STAGE, BATCH_STAGE, DONE_STAGE, FAILURE_STAGE, SUMMARY_STAGE)
 
 
 @dataclass(frozen=True)
@@ -66,7 +67,7 @@ class AssetTriage:
 
 def run_triage(
     session: Session,
-    queue: PipelineQueue,
+    queue: AIQueue,
     org_id: UUID,
     job_id: UUID,
     settings: Settings,
@@ -76,7 +77,9 @@ def run_triage(
     """The `ai.triage` job: gate, then one `ai.triage_batch` job per asset with work.
 
     The batch jobs run in parallel and `ai.triage_done` follows them; if a batch crashes,
-    `ai.triage_failed` runs instead. A redelivered coordinator reuses its job rows.
+    `ai.triage_failed` runs instead. When there is nothing new to triage, `ai.summarize` is
+    queued directly so an unchanged scan still gets an exposure summary (ADR 0030). A
+    redelivered coordinator reuses its job rows.
     """
     config = org_settings.enforce_triage_budget(
         session, org_id, job_id, settings, resolver=resolver
@@ -94,6 +97,7 @@ def run_triage(
     )
     if not asset_ids:
         session.rollback()
+        _queue_summary(session, queue, org_id, scan_id)
         return
     header = tuple(
         _job_task(
@@ -172,11 +176,37 @@ def run_triage_batch(
     session.commit()
 
 
-def finish_triage(session: Session, org_id: UUID, job_id: UUID) -> None:
-    """The `ai.triage_done` job: every batch of the run ended, so its failure job goes unused."""
+def finish_triage(session: Session, queue: TaskQueue, org_id: UUID, job_id: UUID) -> None:
+    """The `ai.triage_done` job: close the unused failure job, then queue `ai.summarize`."""
     scan_id = _scan_of(session, org_id, job_id)
     _close_queued(session, org_id, scan_id, (FAILURE_STAGE,), JobStatus.SKIPPED, error=None)
     session.commit()
+    _queue_summary(session, queue, org_id, scan_id)
+
+
+def _queue_summary(session: Session, queue: TaskQueue, org_id: UUID, scan_id: UUID) -> None:
+    """Queue one `ai.summarize` job per scan; broker errors stay contained (ADR 0030)."""
+    existing = session.scalars(
+        scoped(Job, org_id).where(Job.scan_id == scan_id, Job.stage == SUMMARY_STAGE)
+    ).first()
+    if existing is not None:
+        return
+    try:
+        jobs.create_job(
+            session,
+            queue,
+            org_id=org_id,
+            scan_id=scan_id,
+            stage=SUMMARY_STAGE,
+            task_name="ai.summarize",
+        )
+    except Exception as exc:
+        log.warning(
+            "summary not queued",
+            org_id=str(org_id),
+            scan_id=str(scan_id),
+            error=jobs.describe_error(exc),
+        )
 
 
 def fail_triage(session: Session, org_id: UUID, job_id: UUID) -> None:

@@ -14,6 +14,7 @@ from attacksurf.domain.llm import Message
 # Every prompt file in `ai/prompts/` and its SHA-256. A released prompt is never edited: change
 # it by adding v<N+1> (and its hash here) and switching its callers.
 RELEASED: dict[str, str] = {
+    "summary/v1": "636760311417d544bb97a438a0b812b9621991ecd60fee7072b8f440ad19ef03",
     "triage/v1": "b4c7de8853fcb56f8597cb0d66d9e45c23a492f2936d0c494ae516988a9b493d",
 }
 

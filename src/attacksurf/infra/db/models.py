@@ -293,6 +293,7 @@ class Scan(TenantScoped, Timestamps, Base):
     stats: Mapped[dict[str, Any]] = mapped_column(
         JSONB, default=dict, server_default=text("'{}'::jsonb")
     )
+    ai_summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
 class Job(TenantScoped, Timestamps, Base):

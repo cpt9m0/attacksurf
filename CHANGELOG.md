@@ -6,6 +6,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- AI exposure summary and notable assets (#26, ADR 0030): after triage finishes (or when a scan
+  has nothing new to triage), `ai.summarize` makes one LLM call with the versioned prompt
+  `summary/v1` using change stats, up to 25 observed findings (triaged first, no raw evidence)
+  and up to 200 active assets under the scan's root inside `<scan_data>`. `validate_summary`
+  maps batch-local refs (`F1`..`F25`, `A1`..`A200`) to real finding and asset UUIDs and drops
+  every unknown or duplicate ref before storing `StoredSummary` on `Scan.ai_summary`
+  (`0013_add_scan_ai_summary`). Flagged hosts receive the AI-owned `notable` tag on `Asset.tags`
+  under that root without disturbing other tags or roots. The scan page shows a polled
+  `#scan-summary` card (`ui.scan_summary`) and the dashboard shows a "Latest AI summary" card
+  per active root with its top 3 risks. Summary eval cases (`risky_scan`, `clean_scan`) run
+  alongside triage evals in `make eval`.
 - AI triage (#25, ADR 0029): after a scan completes, `ai.triage` runs one `ai.triage_batch`
   job per asset (at most 20 findings, one LLM call each) with the versioned prompt
   `triage/v1`. Each finding gets an adjusted severity, confidence, false-positive likelihood,
@@ -178,6 +189,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   service (#174).
 
 ### Fixed
+- Delayed AI exposure summaries retain their historical results without overwriting a newer
+  scan's `notable` asset tags: publication is serialized per root, and tag updates use the
+  dashboard's scan ordering (`created_at`, then `id`) (#26).
 - An LLM call that hits its deadline now ends its HTTP request too, instead of leaving it
   running in an abandoned thread: a server that kept trickling bytes could hold threads and
   connections open in a Celery worker indefinitely. Both providers build their SDK client on a

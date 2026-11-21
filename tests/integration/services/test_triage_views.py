@@ -327,7 +327,7 @@ def test_another_orgs_scan_is_not_found(db_session: Session) -> None:
 def test_the_scans_job_count_leaves_ai_jobs_out(db_session: Session) -> None:
     scan = _scan(db_session)
     _job(db_session, scan, "check", JobStatus.COMPLETED)
-    for stage in ("triage", "triage_batch", "triage_done", "triage_failure"):
+    for stage in ("triage", "triage_batch", "triage_done", "triage_failure", "summary"):
         _job(db_session, scan, stage)
 
     detail = scan_views.get_scan_detail(db_session, scan.org_id, scan.id)

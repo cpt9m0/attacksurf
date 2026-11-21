@@ -59,6 +59,7 @@ from attacksurf.services import (
     repos,
     scan_schedules,
     scan_views,
+    summary_views,
     triage_views,
     verifications,
 )
@@ -148,8 +149,12 @@ def _exact_time(value: datetime) -> str:
 
 @bp.get("/")
 def dashboard() -> Response:
+    session = get_session()
+    org_id = _org_id()
     return render_page(
-        "pages/dashboard.html", data=finding_views.get_dashboard(get_session(), _org_id())
+        "pages/dashboard.html",
+        data=finding_views.get_dashboard(session, org_id),
+        summaries=summary_views.list_latest_root_summaries(session, org_id),
     )
 
 
@@ -380,14 +385,32 @@ def create_scan() -> BaseResponse:
 
 @bp.get("/scans/<uuid:scan_id>")
 def scan_detail(scan_id: UUID) -> Response:
+    session = get_session()
+    org_id = _org_id()
     try:
-        detail = scan_views.get_scan_detail(get_session(), _org_id(), scan_id)
-        triage = triage_views.get_scan_triage(get_session(), _org_id(), scan_id)
+        detail = scan_views.get_scan_detail(session, org_id, scan_id)
+        summary = summary_views.get_scan_summary(session, org_id, scan_id)
+        triage = triage_views.get_scan_triage(session, org_id, scan_id)
     except ScanNotFound:
         abort(404)
     return render_page(
-        "pages/scan_detail.html", detail=detail, scan=detail.scan, triage=triage, scan_id=scan_id
+        "pages/scan_detail.html",
+        detail=detail,
+        scan=detail.scan,
+        summary=summary,
+        triage=triage,
+        scan_id=scan_id,
     )
+
+
+@bp.get("/scans/<uuid:scan_id>/summary")
+def scan_summary(scan_id: UUID) -> Response:
+    """The AI exposure summary fragment alone, polled while its run is active (ADR 0030)."""
+    try:
+        summary = summary_views.get_scan_summary(get_session(), _org_id(), scan_id)
+    except ScanNotFound:
+        abort(404)
+    return render_page("pages/_scan_summary.html", summary=summary, scan_id=scan_id)
 
 
 @bp.get("/scans/<uuid:scan_id>/triage")

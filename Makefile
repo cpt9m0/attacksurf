@@ -37,7 +37,7 @@ test-worker: ## Signup and worker smoke checks against the running stack (needs 
 	$(COMPOSE) run --rm -v ./tests:/app/tests -e RUN_WORKER_TESTS=1 \
 		web pytest -m worker --no-cov -p no:cacheprovider tests/e2e
 
-eval: ## AI triage eval set against the LLM in .env (opt-in: a few real calls, your key)
+eval: ## AI triage and summary eval sets against the LLM in .env (opt-in: a few real calls, your key)
 	RUN_LLM_TESTS=1 uv run pytest tests/eval -m llm_live --no-cov -p no:cacheprovider -v -s
 
 check: ## Run all git hooks (lint, format, layer rules, secrets) locally
