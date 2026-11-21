@@ -136,6 +136,17 @@ class Settings(BaseSettings):
     # every sandbox request is refused. May embed credentials, so it is a secret.
     sandbox_launcher_url: SecretStr | None = None
 
+    # Email notifications (#28, ADR 0032): SMTP_HOST unset disables outbound email cleanly.
+    smtp_host: str | None = None
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_user: str | None = None
+    smtp_password: SecretStr | None = None
+    smtp_from: str = "noreply@attacksurf.local"
+    smtp_tls: Literal["starttls", "ssl", "none"] = "starttls"
+    smtp_timeout_seconds: float = Field(default=15.0, gt=0, le=60)
+    # Optional base URL for links in notification emails (e.g. https://attacksurf.example).
+    app_base_url: str | None = None
+
     _secret_key_generated: bool = PrivateAttr(default=False)
 
     @model_validator(mode="after")
@@ -158,6 +169,48 @@ class Settings(BaseSettings):
     @classmethod
     def _empty_ip_asn_path(cls, value: str | None) -> str | None:
         return value.strip() or None if isinstance(value, str) else value
+
+    @field_validator("smtp_host", "smtp_user")
+    @classmethod
+    def _empty_smtp_str(cls, value: str | None) -> str | None:
+        return value.strip() or None if isinstance(value, str) else value
+
+    @field_validator("smtp_from")
+    @classmethod
+    def _validate_smtp_from(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned or any(ch in cleaned for ch in ("\r", "\n")):
+            raise ValueError("SMTP_FROM must be a single-line email address")
+        local, sep, domain = cleaned.partition("@")
+        if not sep or not local or not domain or any(ch.isspace() for ch in cleaned):
+            raise ValueError("SMTP_FROM must be a valid email address")
+        return cleaned
+
+    @field_validator("app_base_url")
+    @classmethod
+    def _validate_app_base_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        message = "APP_BASE_URL must be an http:// or https:// URL with a host"
+        try:
+            parts = urlsplit(cleaned)
+            parts.port  # noqa: B018 - raises ValueError on an invalid port
+        except ValueError:
+            raise ValueError(message) from None
+        valid = (
+            parts.scheme in ("http", "https")
+            and bool(parts.hostname)
+            and parts.username is None
+            and parts.password is None
+            and not parts.query
+            and not parts.fragment
+        )
+        if not valid:
+            raise ValueError(message)
+        return cleaned.rstrip("/")
 
     @field_validator("app_encryption_key")
     @classmethod

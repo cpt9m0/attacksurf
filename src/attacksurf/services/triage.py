@@ -39,7 +39,7 @@ from attacksurf.domain.net import DnsResolver
 from attacksurf.domain.scans import JobStatus
 from attacksurf.infra.db.models import Asset, Evidence, Finding, FindingObservation, Job
 from attacksurf.infra.db.tenancy import get_scoped, scoped
-from attacksurf.services import jobs, org_settings
+from attacksurf.services import jobs, notifications, org_settings
 from attacksurf.services.llm_usage import record_llm_usage
 from attacksurf.services.scans import load_job_scan, root_is_active
 
@@ -85,6 +85,9 @@ def run_triage(
         session, org_id, job_id, settings, resolver=resolver
     )
     if config is None:
+        job = get_scoped(session, Job, job_id, org_id)
+        if job is not None and job.scan_id is not None:
+            notifications.queue_scan_notification(session, queue, org_id, job.scan_id)
         return
     _, scan = load_job_scan(session, org_id, job_id)  # the scan lock: one run plans at a time
     if not root_is_active(session, org_id, scan):
@@ -209,7 +212,9 @@ def _queue_summary(session: Session, queue: TaskQueue, org_id: UUID, scan_id: UU
         )
 
 
-def fail_triage(session: Session, org_id: UUID, job_id: UUID) -> None:
+def fail_triage(
+    session: Session, org_id: UUID, job_id: UUID, *, queue: TaskQueue | None = None
+) -> None:
     """The `ai.triage_failed` job: a batch crashed, so close the run's queued jobs.
 
     The scan completed before triage started and is never touched.
@@ -224,6 +229,8 @@ def fail_triage(session: Session, org_id: UUID, job_id: UUID) -> None:
         error="AI triage stopped after an unexpected error.",
     )
     session.commit()
+    if queue is not None:
+        notifications.queue_scan_notification(session, queue, org_id, scan_id)
 
 
 def assets_to_triage(

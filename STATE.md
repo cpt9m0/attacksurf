@@ -2,32 +2,32 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-21 · **Branch:** `main` · **Issue:** #84 (analysis sandbox)
+**Updated:** 2026-11-20 · **Branch:** `28-email-notifications` · **Issue:** #28 (email digest notifications)
 
 ## Status
-PR #188 (analysis worker and sandbox services, PR 4 of 5 for #84) had its conflicts against main
-resolved on the branch and was squash-merged. The dev `sandbox` profile
-(`worker-analysis` → `sandbox-launcher` → `sandbox-proxy` → Docker, ADR 0031) is on main; prod
-runs none of it until #92.
+Implemented issue #28 (email digest notifications on new/regressed findings, ADR 0032) on branch
+`28-email-notifications`. All unit tests, `ruff`, `pyright`, `lint-imports`, and offline Alembic
+SQL generation pass; database integration tests (`tests/integration/services/test_notifications.py`)
+require PostgreSQL (`TEST_DATABASE_URL` / `make test`) which was not running in this environment.
 
 ## Last task
-- Merged `origin/main` into `84-analysis-worker`: `CHANGELOG.md` (both sides' entries kept),
-  `STATE.md`, `compose.yaml` (kept `SCAN_DEFAULT_FREQUENCY` + the dev-launcher comment),
-  `docs/architecture.md` (kept the `dns_scheduled` profile text + the guard-test sentence) and
-  `tests/unit/scanners/test_profiles.py` (both new tests kept).
-- The PR's ADR was renumbered **0029 → 0031**: while the branch was open, main claimed 0029 for
-  the AI triage stage. The file is now
-  `docs/adr/0031-open-analysis-queue-before-analyzers.md` and every reference (architecture,
-  security, deployment, `compose.prod.yaml`, `services/uploads.py`, CHANGELOG, the guard test)
-  says 0031. The per-commit plans under `docs/plans/84-analysis-sandbox/` still describe
-  commit 0501d21 creating the file as 0029 — that is history; the file is 0031 now.
-- `docs/security.md`'s "Active/analysis queues remain reserved" now says `active` only, matching
-  the merged queue code (`analysis` is a consumed queue in dev).
+- Added `domain/notifications.py` (`EmailSender`, `ScanDigest`, `DigestFinding`, `EmailDeliveryError`),
+  `SMTP_*` and `APP_BASE_URL` settings in `config.py`, and `infra/email.py` (`SmtpEmailSender` +
+  `render_digest_email` with plain-text & autoescaped HTML templates and no external tracking).
+- Added migration `0014_add_notifications.py` (`finding_observations.regressed`,
+  `notification_preferences`, `notification_deliveries`), updated `services/scan_diff.py` to mark
+  regressed observations, and implemented `services/notifications.py` +
+  `workers/tasks/notifications.py` (`passive.notify_scan`).
+- Wired `queue_scan_notification` into the terminal exits of the post-scan AI stage
+  (`services/summary.py`, `services/triage.py`, `services/scans.py`) and excluded `NOTIFY_STAGE`
+  from scan progress counts in `services/scan_views.py`.
+- Added per-user notification preferences UI on `/settings` (`POST /settings/notifications`) and
+  added `mailpit` to `compose.yaml` + `.env.example`.
 
 ## Next step
-#28 (email notifications; depends on #20, #26, #27) is next in epic #31. On the sandbox track,
-PR 5 (`84-sandbox-ci`) follows: fixture analyzer image, a real `sandbox-images.lock` entry, runsc
-CI job.
+Run `make test` (or `TEST_DATABASE_URL=... uv run pytest`) against PostgreSQL to execute
+`tests/integration/services/test_notifications.py` and the full integration suite, then open PR
+for #28. On the sandbox track, PR 5 (`84-sandbox-ci`) remains next.
 
 ## Open threads
 - **Proxy trust:** the proxy has no caller authentication and `worker-analysis` shares the

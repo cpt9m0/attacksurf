@@ -208,6 +208,7 @@ web/ (blueprints: ui, api/v1)   workers/ (Celery tasks)
 | `LLMUsage` | one row per finished LLM call, successful or not: provider, model, `purpose`, `key_source` (`org`/`instance`), input/output tokens, `usage_reported`, `estimated_cost_usd` (snapshotted from `ai/pricing.py` list prices; NULL for an unpriced model or unreported usage), latency (NULL on failure), `success` + `error_type` (class name only). Append-only; indexed by `(org_id, created_at)` for #24's monthly instance-key cap. Written by `services.llm_usage.record_llm_usage` |
 | `OrgSettings` | one row per org (`UniqueConstraint("org_id")`): `ai_enabled`, `provider`, `model`, `base_url`, AES-256-GCM encrypted API key (`SecretCipher`, AAD `org_id`) + `api_key_last4`, optional `monthly_token_budget`. Written by `services.org_settings` |
 | `ScanSchedule` | one recurring-scan preference per root (`UniqueConstraint("org_id", "root_asset_id")`, same-org FK): `profile` (only `dns_scheduled`), `frequency` (`daily`/`weekly`), `enabled` + `next_run_at` (a CHECK keeps them consistent), indexed for the minute tick. `services.scan_schedules.seed_schedule` inserts the registration default (`SCAN_DEFAULT_FREQUENCY`, weekly unless configured otherwise) without overwriting a restored root's saved preference; `save_schedule`/`get_schedule` are the tenant-scoped read/write use cases. Not a history table: scans keep the trigger (`schedule`) and outcome |
+| `NotificationPreference`, `NotificationDelivery` | per-user email digest settings in an org (`email_enabled`, `min_severity`; defaults `true`/`high` when absent) and at-most-once delivery records per `(org_id, scan_id, user_id)` (#28, ADR 0032) |
 | `AuditLog` | append-only trail of security-relevant actions (`services.audit.audit()`, written in the same transaction as the change) |
 
 ## Scan pipeline
@@ -496,7 +497,17 @@ discover ─► per-asset checks (parallel group) ─► persist/normalize ─�
   for the finding page's AI panel. It reads summaries through `services/summary_views`
   (`get_scan_summary` for the scan page's polled `ui.scan_summary` card, and
   `list_latest_root_summaries` for the dashboard's per-root cards). `TRIAGE_STAGES` (which
-  includes `SUMMARY_STAGE`) are left out of every scan job count.
+  includes `SUMMARY_STAGE`) and `NOTIFY_STAGE` are left out of every scan job count.
+- **Email digest notifications (#28, ADR 0032):** `services.notifications.queue_scan_notification`
+  queues one idempotent `passive.notify_scan` job (`stage="notify"`) at every terminal exit of the
+  post-scan AI phase (`ai.summarize` completion/skip/failure, `ai.triage` budget skip or
+  `ai.triage_failed`, and `finalize_scan`'s fallback). `run_scan_notification` builds per-user
+  digests of new (`Finding.first_seen_scan_id == scan_id`) and regressed
+  (`FindingObservation.regressed`) findings meeting the user's `min_severity`, includes
+  `Scan.ai_summary.headline` when present, sends plain-text + HTML emails (no external tracking)
+  via `infra.email.SmtpEmailSender`, and records `NotificationDelivery` per recipient so retries
+  never duplicate. Skips when nothing is new/regressed, the root is archived, or `SMTP_HOST` is
+  unset. Dev Compose includes `mailpit` (`127.0.0.1:8025`) for previewing.
 - Prompts are versioned files `ai/prompts/<purpose>/v<N>.md` (system part, then user part with
   `$placeholders`), loaded by `ai.prompts.load_prompt`; a test pins each file's SHA-256. Scan data
   enters a prompt only through `ai/untrusted.scan_data_block`.

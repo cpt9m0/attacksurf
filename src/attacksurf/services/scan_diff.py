@@ -157,6 +157,16 @@ def _regress(
         .returning(Finding.id, Finding.severity),
         execution_options={"synchronize_session": "fetch"},
     ).all()
+    if rows:
+        session.execute(
+            update(FindingObservation)
+            .where(
+                FindingObservation.org_id == org_id,
+                FindingObservation.scan_id == scan.id,
+                FindingObservation.finding_id.in_([row.id for row in rows]),
+            )
+            .values(regressed=True)
+        )
     return [(row.id, row.severity) for row in rows]
 
 

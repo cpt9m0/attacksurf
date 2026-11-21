@@ -25,7 +25,7 @@ from attacksurf.domain.scans import (
 from attacksurf.infra.db.models import Asset, Job, Org, Scan
 from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.scanners.registry import ScannerRegistry
-from attacksurf.services import jobs
+from attacksurf.services import jobs, notifications
 from attacksurf.services.audit import audit
 
 log = structlog.get_logger(__name__)
@@ -414,6 +414,7 @@ def finalize_scan(
             scan_id=str(event.scan_id),
             error=jobs.describe_error(exc),
         )
+        notifications.queue_scan_notification(session, queue, org_id, event.scan_id)
 
 
 def fail_scan(session: Session, org_id: UUID, scan_id: UUID) -> None:

@@ -55,6 +55,7 @@ from attacksurf.services import (
     binaries,
     finding_views,
     llm_usage,
+    notifications,
     org_settings,
     repos,
     scan_schedules,
@@ -619,6 +620,34 @@ def clear_org_ai_key() -> BaseResponse:
     return _navigate(url_for("ui.settings"))
 
 
+@bp.post("/settings/notifications")
+def save_notification_settings() -> BaseResponse:
+    """Save the signed-in user's email notification preferences for this org (#28)."""
+    email_enabled = "email_enabled" in request.form
+    raw_severity = request.form.get("min_severity", "")
+    submitted = {"email_enabled": email_enabled, "min_severity": raw_severity}
+    try:
+        min_severity = Severity(raw_severity)
+    except ValueError:
+        errors = {"min_severity": "Choose a valid severity threshold."}
+        if is_htmx_request():
+            return render_page(
+                "pages/_notification_settings_form.html",
+                status=422,
+                **_notification_settings_context(form=submitted, errors=errors),
+            )
+        return _settings_page(status=422, notification_form=submitted, notification_errors=errors)
+    notifications.save_notification_preference(
+        get_session(),
+        _org_id(),
+        current_user.session_user.user_id,
+        email_enabled=email_enabled,
+        min_severity=min_severity,
+    )
+    flash("Notification preferences saved.", "success")
+    return _navigate(url_for("ui.settings"))
+
+
 @bp.get("/settings/ai/test")
 def ai_test_status() -> Response:
     """Poll-only connection test status fragment (`#ai-test-status`)."""
@@ -908,12 +937,35 @@ def _ai_test_card(
     )
 
 
+def _notification_settings_context(
+    *,
+    form: dict[str, Any] | None = None,
+    errors: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    resolved_form = form
+    if resolved_form is None:
+        pref = notifications.get_notification_preference(
+            get_session(), _org_id(), current_user.session_user.user_id
+        )
+        resolved_form = {
+            "email_enabled": pref.email_enabled,
+            "min_severity": pref.min_severity.value,
+        }
+    return {
+        "notification_form": resolved_form,
+        "notification_errors": errors or {},
+        "severity_options": [(s.value, s.value.capitalize()) for s in Severity],
+    }
+
+
 def _settings_page(
     *,
     status: int = 200,
     form: dict[str, Any] | None = None,
     errors: dict[str, str] | None = None,
     focus_field: str | None = None,
+    notification_form: dict[str, Any] | None = None,
+    notification_errors: dict[str, str] | None = None,
 ) -> Response:
     session = get_session()
     app_settings = get_settings()
@@ -930,10 +982,15 @@ def _settings_page(
         usage=usage,
         test_status=test_status,
         instance_budget=app_settings.llm_monthly_instance_token_budget,
+        smtp_configured=app_settings.smtp_host is not None,
         **_ai_settings_context(
             form=form,
             errors=errors,
             focus_field=focus_field,
             current=current,
+        ),
+        **_notification_settings_context(
+            form=notification_form,
+            errors=notification_errors,
         ),
     )

@@ -1,0 +1,22 @@
+attacksurf scan digest for {{ digest.root_domain }} ({{ digest.org_name }})
+========================================================================
+Trigger: {{ digest.triggered_by.value }}
+{% if digest.finished_at %}Completed: {{ digest.finished_at.strftime("%Y-%m-%d %H:%M UTC") }}
+{% endif %}
+{% if digest.ai_headline %}
+AI Summary: {{ digest.ai_headline }}
+{% endif %}
+
+Findings ({{ digest.total_matching }} matching your threshold):
+{% for item in digest.findings %}
+- [{{ item.severity.value | upper }}] [{{ item.change | upper }}] {{ item.title }} ({{ item.asset_value }}){% if digest.app_base_url %} -> {{ digest.app_base_url }}/findings/{{ item.finding_id }}{% endif %}
+{% endfor %}
+{% if digest.truncated %}
+... and {{ digest.total_matching - digest.findings | length }} more. View the full scan in attacksurf.
+{% endif %}
+{% if scan_url %}
+View scan: {{ scan_url }}
+{% endif %}
+{% if settings_url %}
+Manage notification preferences: {{ settings_url }}
+{% endif %}

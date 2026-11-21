@@ -10,6 +10,7 @@ from attacksurf.config import Settings, get_settings
 from attacksurf.domain.artifacts import ArtifactPolicy, ArtifactStore
 from attacksurf.domain.cache import ScanCache
 from attacksurf.domain.net import IpIntel, TxtLookup
+from attacksurf.domain.notifications import EmailSender
 from attacksurf.domain.sandbox import SandboxRunner, UnconfiguredSandboxRunner
 from attacksurf.domain.scanners import ScannerGate
 from attacksurf.infra.authoritative_dns import AuthoritativeTxtLookup
@@ -17,6 +18,7 @@ from attacksurf.infra.cache import RedisScanCache
 from attacksurf.infra.crypto import EnvelopeCipher
 from attacksurf.infra.db.session import create_db_engine, create_session_factory
 from attacksurf.infra.dns import DnsPythonResolver
+from attacksurf.infra.email import SmtpEmailSender
 from attacksurf.infra.http import SafeHttpClient
 from attacksurf.infra.ip_intel import Ip2AsnLookup
 from attacksurf.infra.sandbox import LauncherSandboxRunner
@@ -119,6 +121,23 @@ def scanner_gate() -> ScannerGate:
         cache=scan_cache(),
         ip_intel=ip_intel(),
         sandbox=sandbox_runner(),
+    )
+
+
+@lru_cache(maxsize=1)
+def email_sender() -> EmailSender | None:
+    """Outbound SMTP sender (#28); None when SMTP_HOST is unset."""
+    current = settings()
+    if current.smtp_host is None:
+        return None
+    return SmtpEmailSender(
+        host=current.smtp_host,
+        port=current.smtp_port,
+        from_addr=current.smtp_from,
+        tls=current.smtp_tls,
+        user=current.smtp_user,
+        password=current.smtp_password,
+        timeout_seconds=current.smtp_timeout_seconds,
     )
 
 

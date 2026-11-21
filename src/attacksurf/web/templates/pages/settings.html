@@ -111,4 +111,18 @@
   </div>
   {%- endif %}
 </section>
+
+<section class="card card-body" aria-labelledby="notification-settings-title">
+  <h2 id="notification-settings-title">Email notifications</h2>
+  <p class="muted">
+    Receive an email digest for your account in this organization when a completed scan finds new
+    or regressed issues.
+  </p>
+  {%- if not smtp_configured %}
+  <p class="field-hint">
+    Outbound SMTP is not configured on this server, so preferences are saved but emails are not sent yet.
+  </p>
+  {%- endif %}
+  {% include "pages/_notification_settings_form.html" %}
+</section>
 {% endblock %}
