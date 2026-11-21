@@ -70,10 +70,17 @@ The forces mirror ADR 0029, plus two specific to whole-scan summaries:
    `Scan.ai_summary` already present (and valid), it returns without calling the LLM (no second
    payment).
 7. **Notable tag.** Nothing writes `Asset.tags` today, so the AI owns the tag value `"notable"`.
-   When a summary is stored, `"notable"` is added to the active assets under the scan's root that
-   the validated summary flagged, and removed from that root's other assets. No other tag value and
-   no asset outside that root or organization is ever modified. Every query is tenant-scoped. If
-   manual tagging is added later, `"notable"` must be reserved for the AI.
+   When a summary is stored, the root asset row is locked `FOR UPDATE` until commit to serialize
+   publication for that root. Tags are synchronized only if this is the newest completed scan
+   with a stored summary, ordered by `created_at` then `id` (the dashboard's order). An older
+   scan keeps its historical summary and usage, but cannot replace newer tags; a newer scan
+   without a summary does not block tagging. The lock is acquired only after the LLM returns,
+   before adding the usage row (whose foreign-key autoflush would invert scan startup's
+   root-before-organization lock order).
+   `"notable"` is added to the active assets under the scan's root that the validated summary
+   flagged, and removed from that root's other assets. No other tag value and no asset outside
+   that root or organization is ever modified. Every query is tenant-scoped. If manual tagging
+   is added later, `"notable"` must be reserved for the AI.
 8. **Scan progress.** `SUMMARY_STAGE = "summary"` is added to `TRIAGE_STAGES` in
    `services/triage.py`, keeping the summary job out of the scan's own progress counts just like
    triage jobs.

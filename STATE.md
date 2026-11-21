@@ -2,23 +2,36 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-20 · **Branch:** `26-ai-summary` · **Issue:** #26 (AI exposure summary and notable assets)
+**Updated:** 2026-11-21 · **Branch:** `26-ai-summary` · **Issue:** #26 (AI exposure summary)
 
 ## Status
-Done locally: all 8 commits are on `26-ai-summary` (branched from `origin/main` after #186 merged) with lint, format, pyright, import-linter, migration round-trip, and full pytest suite passing.
+PR #187's latest Codex finding is fixed locally; publish the fix and merge once CI passes.
 
 ## Last task
-- Implemented #26 across 8 commits: ADR 0030; `ExposureSummary`/`StoredSummary` contract and schema snapshot; `summary/v1` prompt (pinned SHA-256) with `build_summary_messages`, `summarize`, and `validate_summary`; migration `0013_add_scan_ai_summary`; `services.summary`, `ai.summarize` task, `SUMMARY_STAGE`, and queueing hooks from `run_triage`/`finish_triage`; AI-owned `notable` tag syncing on `Asset.tags`; `services.summary_views`, polled `#scan-summary` card, and per-root "Latest AI summary" dashboard cards; summary eval cases (`risky_scan`, `clean_scan`), offline harness tests, and docs sync.
+- Serialized summary publication with a tenant-scoped root `FOR UPDATE` lock, acquired only
+  after the LLM call and held through summary storage, tag synchronization, and commit.
+- Only the newest completed scan with a stored summary can sync `notable` tags, using the
+  dashboard's `(created_at, id)` order. Older scans retain their historical summary and usage.
+- Regression tests cover out-of-order completion, timestamp ties, a newer unsummarized scan,
+  and real PostgreSQL lock contention with no incidental asset UPDATE to mask a missing lock.
+  Usage is added after the root lock to preserve scan startup's root-before-org lock order;
+  the two-connection regression proves the competing Org lock remains available.
+- Updated ADR 0030 decision 7 and CHANGELOG. No README, DESIGN, or agent-rule changes needed:
+  no new UI, settings, dependencies, or conventions.
+- Local gates: 3,451 passed, 27 opt-in/empty-case skips; coverage 95.92%; ruff check/format,
+  pyright, import-linter (8 contracts), and pre-commit all pass.
 
 ## Next step
-Run live `make eval` with an LLM key in `.env`, verify a real scan on the dev stack shows the summary cards, push `26-ai-summary`, and open the draft PR `feat(ai): add the ai exposure summary` (`Closes #26`) with the eval model/results recorded.
+Push the review fix, verify CI, reply to/resolve Codex thread, and squash-merge PR #187 as
+requested. After merging, #28 (email notifications; depends on #20, #26, #27) is next in epic #31.
 
 ## Open threads
-- Live `make eval` and dev-stack smoke test were not run in this session (no `.env` LLM API key and Docker Desktop daemon was not running).
-- `ai/pricing.py` still has no Claude list prices (carried over from #25).
-- If manual asset tagging is added in a future issue, reserve `"notable"` for AI summaries (ADR 0030).
+- Earlier human-review requests beyond this Codex fix remain: prioritize assets in the
+  200-asset summary input, live eval results, light/dark card screenshots, and the author's
+  AI-assistance acknowledgement. Do not claim those were completed by this task.
+- `ai/pricing.py` still has no Claude list prices.
 
 ## Notes for the next agent
-- `scan_data_block` defaults to `max_items=50`; `build_summary_messages` passes `max_items=MAX_SUMMARY_ASSETS` (200) explicitly.
-- Keep `ai_label(item, at=...)` compatible with both `StoredTriage.triaged_at` and `StoredSummary.generated_at`.
-- `tests/unit/web/conftest.py` and `tests/e2e/web/conftest.py` stub `summary_views.list_latest_root_summaries` alongside `finding_views.get_dashboard` for DB-less web tests.
+- Local verification uses the dedicated `attacksurf187_test` PostgreSQL database on port 5433;
+  never run fixture schema resets against production or a database another session is using.
+- Keep `(created_at, id)` summary recency identical to `services.summary_views`.

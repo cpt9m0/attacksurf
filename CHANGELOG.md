@@ -189,6 +189,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   service (#174).
 
 ### Fixed
+- Delayed AI exposure summaries retain their historical results without overwriting a newer
+  scan's `notable` asset tags: publication is serialized per root, and tag updates use the
+  dashboard's scan ordering (`created_at`, then `id`) (#26).
 - An LLM call that hits its deadline now ends its HTTP request too, instead of leaving it
   running in an abandoned thread: a server that kept trickling bytes could hold threads and
   connections open in a Celery worker indefinitely. Both providers build their SDK client on a

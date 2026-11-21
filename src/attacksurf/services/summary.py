@@ -36,7 +36,7 @@ from attacksurf.domain.findings import ACTIVE_STATUSES, SEVERITY_RANK
 from attacksurf.domain.jobs import JobNotFound
 from attacksurf.domain.llm import LLMConfig, LLMError, LLMUnavailable
 from attacksurf.domain.net import DnsResolver
-from attacksurf.domain.scans import ScanNotFound
+from attacksurf.domain.scans import ScanNotFound, ScanStatus
 from attacksurf.infra.db.models import Asset, Finding, FindingObservation, Job, Scan
 from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.services import jobs, org_settings, scan_views
@@ -105,6 +105,10 @@ def run_summary(
         )
         return
     validated = validate_summary(summary_input, result.parsed)
+    # Publish under the root lock so concurrent completions cannot pass the recency check
+    # against an uncommitted newer summary. Never hold this lock during the LLM call.
+    # Lock before adding usage: its FK autoflush would invert start_scan's root -> org order.
+    session.scalars(scoped(Asset, org_id).where(Asset.id == root_asset_id).with_for_update()).one()
     record_llm_usage(session, org_id, config, purpose=SUMMARY_PURPOSE, outcome=result)
     store_summary(
         session,
@@ -114,12 +118,24 @@ def run_summary(
         config=config,
         generated_at=now or datetime.now(UTC),
     )
-    apply_notable_tags(
-        session,
-        org_id,
-        root_asset_id,
-        [item.asset_id for item in validated.notable_assets],
+    latest_scan_id = session.scalar(
+        scoped(Scan, org_id)
+        .with_only_columns(Scan.id)
+        .where(
+            Scan.root_asset_id == root_asset_id,
+            Scan.status == ScanStatus.COMPLETED,
+            Scan.ai_summary.is_not(None),
+        )
+        .order_by(Scan.created_at.desc(), Scan.id.desc())
+        .limit(1)
     )
+    if latest_scan_id == scan_id:
+        apply_notable_tags(
+            session,
+            org_id,
+            root_asset_id,
+            [item.asset_id for item in validated.notable_assets],
+        )
     session.commit()
 
 

@@ -516,6 +516,61 @@ def test_run_summary_adds_and_removes_notable_tag_while_preserving_other_tags(
     assert _refreshed(db_session, www).tags == ["public"]
 
 
+@pytest.mark.parametrize("same_created_at", [False, True])
+@pytest.mark.parametrize("newer_has_summary", [False, True])
+def test_older_summary_preserves_newer_notable_tags(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    same_created_at: bool,
+    newer_has_summary: bool,
+) -> None:
+    older = _completed_scan(db_session)
+    older.created_at = datetime(2026, 11, 19, tzinfo=UTC)
+    jenkins = _subdomain(db_session, older, "jenkins")
+    staging = _subdomain(db_session, older, "staging")
+    jenkins.tags = ["ci"]
+    staging.tags = ["preprod"]
+    newer = Scan(
+        id=UUID("ffffffff-ffff-7fff-bfff-ffffffffffff"),
+        org_id=older.org_id,
+        root_asset_id=older.root_asset_id,
+        profile=older.profile,
+        status=ScanStatus.COMPLETED,
+        triggered_by=older.triggered_by,
+        created_at=older.created_at if same_created_at else datetime(2026, 11, 20, tzinfo=UTC),
+    )
+    db_session.add(newer)
+    older_job = _job(db_session, older)
+    newer_job = _job(db_session, newer)
+    newer_reply = _reply(
+        key_risks=[],
+        notable_assets=[{"asset_ref": "A3", "reason": "Sensitive staging host."}],
+    )
+    older_reply = _reply(
+        key_risks=[],
+        notable_assets=[{"asset_ref": "A2", "reason": "Exposed Jenkins host."}],
+    )
+    provider = FakeLLMProvider(
+        *([newer_reply, older_reply] if newer_has_summary else [older_reply])
+    )
+    _use_provider(monkeypatch, provider)
+    if newer_has_summary:
+        summary.run_summary(db_session, newer.org_id, newer_job.id, _settings(), retry_allowed=True)
+
+    summary.run_summary(db_session, older.org_id, older_job.id, _settings(), retry_allowed=True)
+
+    stored = summary.stored_summary(_refreshed(db_session, older))
+    assert stored is not None
+    assert [asset.asset_id for asset in stored.notable_assets] == [jenkins.id]
+    assert _refreshed(db_session, jenkins).tags == (
+        ["ci"] if newer_has_summary else ["ci", "notable"]
+    )
+    assert _refreshed(db_session, staging).tags == (
+        ["preprod", "notable"] if newer_has_summary else ["preprod"]
+    )
+    assert len(_usage(db_session, older)) == len(provider.calls)
+
+
 def test_notable_tagging_never_touches_another_root_or_another_org(db_session: Session) -> None:
     acme_scan = _completed_scan(db_session, "acme")
     acme_host = _subdomain(db_session, acme_scan, "jenkins")
