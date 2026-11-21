@@ -22,6 +22,10 @@ class EmailDeliveryError(JobError):
     """Permanent SMTP delivery failure with a sanitized message (no credentials or addresses)."""
 
 
+class EmailRecipientRefused(EmailDeliveryError):
+    """Permanent SMTP refusal for a single recipient address (e.g. 5xx unknown user)."""
+
+
 @dataclass(frozen=True)
 class EmailMessageData:
     """One rendered email ready for the `EmailSender` port."""

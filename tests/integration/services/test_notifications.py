@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from attacksurf.domain.accounts import Role
 from attacksurf.domain.findings import FindingStatus, Severity
 from attacksurf.domain.jobs import TransientJobError
-from attacksurf.domain.notifications import EmailMessageData
+from attacksurf.domain.notifications import EmailMessageData, EmailRecipientRefused
 from attacksurf.domain.scanners import RawFinding, ScanOutput
 from attacksurf.domain.scans import JobStatus, ScanStatus, ScanTrigger
 from attacksurf.infra.db.models import (
@@ -28,13 +28,21 @@ from tests.scanner_fixtures import RULE, FakeCheck
 
 
 class _FakeEmailSender:
-    def __init__(self, *, fail_emails: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_emails: set[str] | None = None,
+        refuse_emails: set[str] | None = None,
+    ) -> None:
         self.outbox: list[EmailMessageData] = []
         self.fail_emails = fail_emails or set()
+        self.refuse_emails = refuse_emails or set()
 
     def send(self, message: EmailMessageData) -> None:
         if message.to_email in self.fail_emails:
             raise TransientJobError("Temporary SMTP error.")
+        if message.to_email in self.refuse_emails:
+            raise EmailRecipientRefused("SMTP recipient refused.")
         self.outbox.append(message)
 
 
@@ -332,3 +340,57 @@ def test_post_ai_skip_queues_notification_once(db_session: Session) -> None:
     # Calling queue_scan_notification again is a no-op.
     notifications.queue_scan_notification(db_session, queue, scan.org_id, scan.id)
     assert len(queue.sent) == 1
+
+
+def test_permanent_recipient_refusal_continues_to_remaining_recipients(
+    db_session: Session,
+) -> None:
+    scan = make_scan(db_session)
+    _add_member(db_session, scan.org_id, "a-bad@acme.example")
+    _add_member(db_session, scan.org_id, "b-good@acme.example")
+    persist_scan_output(
+        db_session,
+        scan,
+        scan.root_asset_id,
+        ScanOutput(findings=(RawFinding(rule_id=RULE.id, severity=Severity.HIGH),)),
+        catalog={RULE.id: RULE},
+        scanner=FakeCheck.name,
+    )
+    scan.status = ScanStatus.COMPLETED
+    job = _notify_job(db_session, scan.org_id, scan.id)
+    db_session.commit()
+    sender = _FakeEmailSender(refuse_emails={"a-bad@acme.example"})
+
+    sent = notifications.run_scan_notification(db_session, scan.org_id, job.id, sender)
+
+    assert sent == 1
+    assert [m.to_email for m in sender.outbox] == ["b-good@acme.example"]
+
+
+def test_claimed_delivery_prevents_concurrent_duplicate_send(db_session: Session) -> None:
+    scan = make_scan(db_session)
+    user = _add_member(db_session, scan.org_id, "a@acme.example")
+    persist_scan_output(
+        db_session,
+        scan,
+        scan.root_asset_id,
+        ScanOutput(findings=(RawFinding(rule_id=RULE.id, severity=Severity.HIGH),)),
+        catalog={RULE.id: RULE},
+        scanner=FakeCheck.name,
+    )
+    scan.status = ScanStatus.COMPLETED
+    job = _notify_job(db_session, scan.org_id, scan.id)
+    db_session.commit()
+
+    # Simulate another worker claiming the delivery right before `sender.send()`.
+    sender = _FakeEmailSender()
+    orig_send = sender.send
+
+    def _race_then_send(msg: EmailMessageData) -> None:
+        orig_send(msg)
+
+    sender.send = _race_then_send  # type: ignore[method-assign]
+    assert notifications._claim_delivery(db_session, scan.org_id, scan.id, user.id) is not None
+    assert notifications._claim_delivery(db_session, scan.org_id, scan.id, user.id) is None
+    assert notifications.run_scan_notification(db_session, scan.org_id, job.id, sender) == 0
+    assert sender.outbox == []

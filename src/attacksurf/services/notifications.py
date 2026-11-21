@@ -10,9 +10,8 @@ from uuid import UUID
 
 import structlog
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from attacksurf.ai.schemas import StoredSummary
@@ -23,6 +22,7 @@ from attacksurf.domain.notifications import (
     DEFAULT_MIN_SEVERITY,
     MAX_DIGEST_FINDINGS,
     DigestFinding,
+    EmailRecipientRefused,
     EmailSender,
     ScanDigest,
 )
@@ -120,7 +120,10 @@ def queue_scan_notification(
     Idempotent: if a `notify` job already exists for `(org_id, scan_id)`, does nothing.
     Broker errors are logged and never propagated so callers (AI or scan finalization) stay safe.
     """
-    scan = get_scoped(session, Scan, scan_id, org_id)
+    scan = session.scalars(
+        scoped(Scan, org_id).where(Scan.id == scan_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).one_or_none()
     if scan is None or scan.status is not ScanStatus.COMPLETED:
         return
     root = session.scalars(
@@ -205,7 +208,7 @@ def run_scan_notification(
     # Release DB locks/transaction before outbound SMTP I/O.
     session.rollback()
 
-    sent = 0
+    counts = {"sent": 0, "refused": 0, "claimed": 0}
     matched_any = False
     for user_id, email, min_severity in recipients:
         threshold = SEVERITY_RANK[min_severity]
@@ -225,17 +228,74 @@ def run_scan_notification(
             truncated=len(matching) > MAX_DIGEST_FINDINGS,
             app_base_url=app_base_url,
         )
-        sender.send(render_digest_email(digest, email))
-        try:
-            session.add(NotificationDelivery(org_id=org_id, scan_id=scan_id, user_id=user_id))
-            session.commit()
-            sent += 1
-        except IntegrityError:
-            session.rollback()
+        outcome = _deliver_recipient(
+            session, sender, org_id=org_id, user_id=user_id, email=email, digest=digest
+        )
+        counts[outcome] += 1
 
     if not matched_any:
         jobs.mark_job_skipped(session, org_id, job_id, "No recipients matched severity threshold.")
-    return sent
+    elif counts["sent"] == 0 and counts["refused"] > 0:
+        raise EmailRecipientRefused("SMTP recipient refused.")
+    return counts["sent"]
+
+
+def _deliver_recipient(
+    session: Session,
+    sender: EmailSender,
+    *,
+    org_id: UUID,
+    user_id: UUID,
+    email: str,
+    digest: ScanDigest,
+) -> str:
+    """Claim `(org_id, scan_id, user_id)` and send; returns `'sent'`, `'refused'`, or `'claimed'`."""  # noqa: E501
+    claim_id = _claim_delivery(session, org_id, digest.scan_id, user_id)
+    if claim_id is None:
+        return "claimed"
+    try:
+        sender.send(render_digest_email(digest, email))
+    except EmailRecipientRefused:
+        _release_delivery(session, org_id, claim_id)
+        log.warning(
+            "digest recipient refused",
+            org_id=str(org_id),
+            scan_id=str(digest.scan_id),
+            user_id=str(user_id),
+        )
+        return "refused"
+    except Exception:
+        _release_delivery(session, org_id, claim_id)
+        raise
+    return "sent"
+
+
+def _claim_delivery(session: Session, org_id: UUID, scan_id: UUID, user_id: UUID) -> UUID | None:
+    """Atomically claim `(org_id, scan_id, user_id)` before SMTP I/O; None if already claimed."""
+    claim_id = session.scalar(
+        insert(NotificationDelivery)
+        .values(org_id=org_id, scan_id=scan_id, user_id=user_id)
+        .on_conflict_do_nothing(
+            index_elements=[
+                NotificationDelivery.org_id,
+                NotificationDelivery.scan_id,
+                NotificationDelivery.user_id,
+            ]
+        )
+        .returning(NotificationDelivery.id)
+    )
+    session.commit()
+    return claim_id
+
+
+def _release_delivery(session: Session, org_id: UUID, delivery_id: UUID) -> None:
+    """Release an uncompleted delivery claim so a retry or later run can re-attempt it."""
+    session.execute(
+        delete(NotificationDelivery).where(
+            NotificationDelivery.org_id == org_id, NotificationDelivery.id == delivery_id
+        )
+    )
+    session.commit()
 
 
 def _load_digest_findings(session: Session, org_id: UUID, scan_id: UUID) -> list[DigestFinding]:

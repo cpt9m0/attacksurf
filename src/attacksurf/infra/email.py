@@ -12,6 +12,7 @@ from attacksurf.domain.jobs import TransientJobError
 from attacksurf.domain.notifications import (
     EmailDeliveryError,
     EmailMessageData,
+    EmailRecipientRefused,
     ScanDigest,
 )
 
@@ -36,6 +37,10 @@ def _clean_header(value: str, *, label: str) -> str:
 def _sanitize_subject(subject: str) -> str:
     single_line = " ".join(subject.replace("\r", " ").replace("\n", " ").split())
     return single_line[:_MAX_SUBJECT_LENGTH]
+
+
+def _is_transient_code(code: int) -> bool:
+    return _SMTP_TRANSIENT_MIN <= code < _SMTP_TRANSIENT_MAX
 
 
 def render_digest_email(digest: ScanDigest, to_email: str) -> EmailMessageData:
@@ -93,42 +98,21 @@ class SmtpEmailSender:
         self._timeout_seconds = timeout_seconds
 
     def send(self, message: EmailMessageData) -> None:
-        to_addr = _clean_header(message.to_email, label="To")
-        subject = _clean_header(message.subject, label="Subject")
-        mime = EmailMessage()
-        mime["From"] = self._from_addr
-        mime["To"] = to_addr
-        mime["Subject"] = subject
-        mime["Auto-Submitted"] = "auto-generated"
-        mime.set_content(message.text_body, subtype="plain", charset="utf-8")
-        mime.add_alternative(message.html_body, subtype="html", charset="utf-8")
-
+        mime = self._build_mime(message)
         try:
-            if self._tls == "ssl":
-                client: smtplib.SMTP = smtplib.SMTP_SSL(
-                    self._host,
-                    self._port,
-                    timeout=self._timeout_seconds,
-                    context=ssl.create_default_context(),
-                )
-            else:
-                client = smtplib.SMTP(self._host, self._port, timeout=self._timeout_seconds)
-            with client:
-                if self._tls == "starttls":
-                    client.ehlo()
-                    client.starttls(context=ssl.create_default_context())
-                    client.ehlo()
-                if self._user and self._password is not None:
-                    client.login(self._user, self._password.get_secret_value())
-                client.send_message(mime)
+            self._send_mime(mime)
         except smtplib.SMTPAuthenticationError as exc:
             raise EmailDeliveryError("SMTP authentication failed.") from exc
         except smtplib.SMTPRecipientsRefused as exc:
-            raise EmailDeliveryError("SMTP recipient refused.") from exc
+            if any(_is_transient_code(code) for code, _msg in exc.recipients.values()):
+                raise TransientJobError("Temporary SMTP recipient error.") from exc
+            raise EmailRecipientRefused("SMTP recipient refused.") from exc
         except smtplib.SMTPSenderRefused as exc:
+            if _is_transient_code(exc.smtp_code):
+                raise TransientJobError("Temporary SMTP sender error.") from exc
             raise EmailDeliveryError("SMTP sender refused.") from exc
         except smtplib.SMTPResponseException as exc:
-            if _SMTP_TRANSIENT_MIN <= exc.smtp_code < _SMTP_TRANSIENT_MAX:
+            if _is_transient_code(exc.smtp_code):
                 raise TransientJobError("Temporary SMTP server error.") from exc
             raise EmailDeliveryError("SMTP server rejected message.") from exc
         except (
@@ -141,3 +125,34 @@ class SmtpEmailSender:
             raise EmailDeliveryError("SMTP delivery failed.") from exc
         except (TimeoutError, OSError) as exc:
             raise TransientJobError("SMTP connection failed.") from exc
+
+    def _build_mime(self, message: EmailMessageData) -> EmailMessage:
+        to_addr = _clean_header(message.to_email, label="To")
+        subject = _clean_header(message.subject, label="Subject")
+        mime = EmailMessage()
+        mime["From"] = self._from_addr
+        mime["To"] = to_addr
+        mime["Subject"] = subject
+        mime["Auto-Submitted"] = "auto-generated"
+        mime.set_content(message.text_body, subtype="plain", charset="utf-8")
+        mime.add_alternative(message.html_body, subtype="html", charset="utf-8")
+        return mime
+
+    def _send_mime(self, mime: EmailMessage) -> None:
+        if self._tls == "ssl":
+            client: smtplib.SMTP = smtplib.SMTP_SSL(
+                self._host,
+                self._port,
+                timeout=self._timeout_seconds,
+                context=ssl.create_default_context(),
+            )
+        else:
+            client = smtplib.SMTP(self._host, self._port, timeout=self._timeout_seconds)
+        with client:
+            if self._tls == "starttls":
+                client.ehlo()
+                client.starttls(context=ssl.create_default_context())
+                client.ehlo()
+            if self._user and self._password is not None:
+                client.login(self._user, self._password.get_secret_value())
+            client.send_message(mime)
