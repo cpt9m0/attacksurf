@@ -4,11 +4,13 @@ import pytest
 from flask import Flask
 from flask.testing import FlaskClient
 
+from attacksurf.domain.findings import Severity
 from attacksurf.domain.llm import ProviderKind
 from attacksurf.services import (
     asset_views,
     finding_views,
     llm_usage,
+    notifications,
     org_settings,
     scan_views,
     summary_views,
@@ -84,6 +86,13 @@ def _no_assets(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda *_args, **_kw: org_settings.AITestStatus(org_settings.AITestState.NONE),
     )
     monkeypatch.setattr(llm_usage, "get_usage_summary", lambda *_args, **_kw: empty_usage)
+    monkeypatch.setattr(
+        notifications,
+        "get_notification_preference",
+        lambda *_args, **_kw: notifications.NotificationPreferenceView(
+            email_enabled=True, min_severity=Severity.HIGH
+        ),
+    )
 
 
 @pytest.fixture
