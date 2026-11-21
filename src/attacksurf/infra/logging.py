@@ -22,27 +22,31 @@ _SENSITIVE_KEY = re.compile(
     r"base[-_]?url",
     re.I,
 )
-# Redact credentials embedded inside URLs (e.g. https://user:pass@host/v1).
-_URL_CREDENTIALS = re.compile(r"([a-z][a-z0-9+.-]*://)([^/\s:@]+(?::[^@\s]*)?)@", re.I)
+# Redact credentials embedded inside URLs (e.g. https://user:pass@host/v1 or redis://:pass@host).
+_URL_CREDENTIALS = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^/\s:@]+(?::[^/\s@]*)?|:[^/\s@]+)@", re.I)
 REDACTED = "***"
 
 log = structlog.get_logger(__name__)
 
 
-def _scrub_value(value: Any) -> Any:
+def is_sensitive_key(key: str) -> bool:
+    """Return True when a mapping key looks like a credential, token, or secret URL."""
+    return bool(_SENSITIVE_KEY.search(key))
+
+
+def scrub_value(value: Any) -> Any:
+    """Recursively mask sensitive keys and URL credentials inside structured payloads."""
     if isinstance(value, str):
         return _URL_CREDENTIALS.sub(rf"\1{REDACTED}@", value)
     if isinstance(value, Mapping):
         return {
-            key: REDACTED
-            if isinstance(key, str) and _SENSITIVE_KEY.search(key)
-            else _scrub_value(item)
+            key: REDACTED if isinstance(key, str) and is_sensitive_key(key) else scrub_value(item)
             for key, item in value.items()
         }
     if isinstance(value, list):
-        return [_scrub_value(item) for item in value]
+        return [scrub_value(item) for item in value]
     if isinstance(value, tuple):
-        return tuple(_scrub_value(item) for item in value)
+        return tuple(scrub_value(item) for item in value)
     return value
 
 
@@ -50,10 +54,10 @@ def redact_secrets(
     _logger: Any, _method: str, event_dict: MutableMapping[str, Any]
 ) -> MutableMapping[str, Any]:
     for key in list(event_dict):
-        if _SENSITIVE_KEY.search(key):
+        if is_sensitive_key(key):
             event_dict[key] = REDACTED
         else:
-            event_dict[key] = _scrub_value(event_dict[key])
+            event_dict[key] = scrub_value(event_dict[key])
     return event_dict
 
 

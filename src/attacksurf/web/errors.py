@@ -6,6 +6,7 @@ import structlog
 from flask import Flask, Response, g, jsonify, request
 from werkzeug.exceptions import HTTPException, InternalServerError
 
+from attacksurf.infra.sentry import capture_exception
 from attacksurf.web.rendering import render_page
 from attacksurf.web.uploads import refused_upload_form
 
@@ -59,4 +60,5 @@ def _error_page(error: HTTPException, code: int) -> Response:
 
 def _handle_unexpected_error(error: Exception) -> Response:
     log.exception("unhandled exception", path=request.path)
+    capture_exception(error)
     return _handle_http_error(InternalServerError())

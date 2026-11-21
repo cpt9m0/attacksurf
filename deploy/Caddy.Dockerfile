@@ -5,4 +5,9 @@
 ARG CADDY_VERSION=2.11.9@sha256:0c2243efcf437ab7f7a978f1027fcf0d4f9be8a75df27b1b3fbc5dbe0ffa8cf0
 
 FROM caddy:${CADDY_VERSION}
+RUN addgroup -g 10001 -S caddy \
+ && adduser -u 10001 -G caddy -S -D -H caddy
+ENV XDG_CONFIG_HOME=/tmp/caddy-config \
+    XDG_DATA_HOME=/tmp/caddy-data
 COPY Caddyfile /etc/caddy/Caddyfile
+USER caddy

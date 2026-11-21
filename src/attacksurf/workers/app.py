@@ -4,10 +4,11 @@ import logging
 from typing import Any
 
 from celery import Celery
-from celery.signals import setup_logging, worker_process_init
+from celery.signals import beat_init, setup_logging, worker_init, worker_process_init
 
 from attacksurf.infra.logging import configure_logging
 from attacksurf.infra.queue import celery_config
+from attacksurf.infra.sentry import init_sentry
 from attacksurf.scanners.dns import axfr as _dns_axfr  # noqa: F401
 from attacksurf.scanners.dns import caa as _dns_caa  # noqa: F401
 
@@ -54,3 +55,9 @@ def _fresh_db_pool(**_kwargs: Any) -> None:
     # the fork.
     runtime.scan_cache.cache_clear()
     runtime.sandbox_runner.cache_clear()
+
+
+@worker_init.connect
+@beat_init.connect
+def _init_worker_sentry(**_kwargs: Any) -> None:
+    init_sentry(runtime.settings(), enable_celery=True)

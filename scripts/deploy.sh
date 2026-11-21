@@ -185,6 +185,7 @@ rollback() {
       return 1
     }
     export WEB_IMAGE="attacksurf-web:$prev_short"
+    export SENTRY_RELEASE="$prev_short"
     compose build web || {
       log "CRITICAL: rebuild of $prev_sha failed; manual intervention required"
       return 1
@@ -192,6 +193,7 @@ rollback() {
   elif [ -n "$prev_image" ] && docker image inspect "$prev_image" >/dev/null 2>&1; then
     log "no previous SHA recorded; restoring the pre-deploy image $prev_image"
     export WEB_IMAGE="$prev_image"
+    export SENTRY_RELEASE=""
   else
     log "CRITICAL: no rollback target (no recorded SHA, no pre-deploy image); prod may be broken"
     return 1
@@ -221,6 +223,17 @@ write_deployed_sha() {
   mv -f "$DEPLOYED_SHA_FILE.tmp" "$DEPLOYED_SHA_FILE"
 }
 
+prune_old_images() {
+  local current_image=$1 prev_image=${2:-} img
+  while IFS= read -r img; do
+    [ -n "$img" ] || continue
+    [ "$img" = "$current_image" ] && continue
+    [ -n "$prev_image" ] && [ "$img" = "$prev_image" ] && continue
+    docker image rm "$img" >/dev/null 2>&1 || true
+  done < <(docker image ls --format '{{.Repository}}:{{.Tag}}' 'attacksurf-web' 2>/dev/null || true)
+  docker image prune -f >/dev/null 2>&1 || true
+}
+
 # --- main --------------------------------------------------------------------
 
 main() {
@@ -242,6 +255,7 @@ main() {
   target=$(resolve_target "${1:-}")
   target_short=$(git_ rev-parse --short=12 "$target")
   export WEB_IMAGE="attacksurf-web:$target_short"
+  export SENTRY_RELEASE="$target_short"
 
   deployed=$(cat "$DEPLOYED_SHA_FILE" 2>/dev/null || true)
   web_container=$(compose ps -q web 2>/dev/null | head -n1 || true)
@@ -310,6 +324,7 @@ main() {
   fi
 
   write_deployed_sha "$target"
+  prune_old_images "$WEB_IMAGE" "$prev_image"
   log "deployed $target ($WEB_IMAGE) — recorded in $DEPLOYED_SHA_FILE"
 }
 

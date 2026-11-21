@@ -730,3 +730,70 @@ def test_whitespace_only_old_encryption_keys_treated_as_unset(
 
     assert settings.app_encryption_old_keys is None
     assert settings.app_encryption_old_key_bytes == ()
+
+
+def test_sentry_settings_defaults() -> None:
+    settings = make_settings()
+
+    assert settings.sentry_dsn is None
+    assert settings.sentry_environment is None
+    assert settings.sentry_release is None
+    assert settings.sentry_traces_sample_rate == 0.0
+
+
+def test_sentry_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
+    dsn = "https://publickey@o1.ingest.sentry.io/42"
+    clean_env.setenv("SENTRY_DSN", dsn)
+    clean_env.setenv("SENTRY_ENVIRONMENT", "staging")
+    clean_env.setenv("SENTRY_RELEASE", "v0.1.0")
+    clean_env.setenv("SENTRY_TRACES_SAMPLE_RATE", "0.25")
+
+    settings = settings_from_env()
+
+    assert settings.sentry_dsn is not None
+    assert settings.sentry_dsn.get_secret_value() == dsn
+    assert "publickey" not in repr(settings)
+    assert "publickey" not in settings.model_dump_json()
+    assert settings.sentry_environment == "staging"
+    assert settings.sentry_release == "v0.1.0"
+    assert settings.sentry_traces_sample_rate == 0.25
+
+
+@pytest.mark.parametrize(
+    "dsn",
+    [
+        "not-a-dsn",
+        "ftp://publickey@sentry.example/1",
+        "https://sentry.example",
+        "https://sentry.example/",
+        "https://publickey@sentry.example/1?debug=1",
+        "https://publickey@sentry.example:99999/1",
+    ],
+)
+def test_invalid_sentry_dsn_rejected_without_echoing_value(
+    clean_env: pytest.MonkeyPatch, dsn: str
+) -> None:
+    clean_env.setenv("SENTRY_DSN", dsn)
+
+    with pytest.raises(ValidationError, match="SENTRY_DSN") as excinfo:
+        settings_from_env()
+
+    assert dsn not in str(excinfo.value)
+
+
+def test_whitespace_sentry_fields_treated_as_unset() -> None:
+    settings = make_settings(
+        sentry_dsn=SecretStr("   "),
+        sentry_environment="  ",
+        sentry_release="  ",
+    )
+
+    assert settings.sentry_dsn is None
+    assert settings.sentry_environment is None
+    assert settings.sentry_release is None
+
+
+@pytest.mark.parametrize("rate", [-0.1, 1.1])
+def test_sentry_traces_sample_rate_rejects_out_of_range(rate: float) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(sentry_traces_sample_rate=rate)

@@ -6,6 +6,25 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Production deployment hardening, backups, optional Sentry, and GHCR releases (#29):
+  - Hardened `compose.prod.yaml` with `read_only: true`, `cap_drop: [ALL]`, PID/CPU/memory
+    limits, bounded `json-file` log rotation, `internal: true` network isolation for
+    `postgres`/`redis`/`caddy`/`migrate`, Redis `--maxmemory 192mb --maxmemory-policy noeviction`,
+    non-root `caddy` (`uid 10001`), and Gunicorn tuning (`--timeout 120`, `--max-requests 1000`,
+    `--worker-tmp-dir /dev/shm`) with `/tmp` `tmpfs` headroom (`320m`) for uploads; `scripts/deploy.sh`
+    now passes `SENTRY_RELEASE` and prunes older `attacksurf-web` images while retaining the
+    previous release for instant rollback.
+  - Added optional, env-gated Sentry error tracking (`SENTRY_DSN`, `SENTRY_ENVIRONMENT`,
+    `SENTRY_RELEASE`, `SENTRY_TRACES_SAMPLE_RATE`) via `infra.sentry` (`sentry-sdk[flask,celery]`)
+    with `send_default_pii=False`, `include_local_variables=False`, and `before_send` /
+    `before_breadcrumb` scrubbing reusing `infra.logging` credential/key redaction.
+  - Added nightly off-box PostgreSQL backups (`scripts/backup.sh`, `deploy/backup.env.example`,
+    `deploy/systemd/attacksurf-backup.{service,timer,tmpfiles.conf}`) via `rclone` with optional
+    client-side `age` encryption and retention pruning, plus `scripts/restore.sh` (`--verify-only`
+    throwaway-DB drill and `--live` recovery).
+  - Added tag-triggered (`v*.*.*`) multi-arch (`linux/amd64`, `linux/arm64`) GHCR release workflow
+    (`.github/workflows/release.yml`) and documented host hardening (SSH, UFW,
+    `unattended-upgrades`, `fail2ban`), log rotation, and restore verification in `docs/deployment.md`.
 - Email digest notifications (#28, ADR 0032): `passive.notify_scan` runs at the end of the
   post-scan AI phase (or its skip/failure exits) and sends each opted-in org member a plain-text
   + HTML digest (no external tracking) of new and regressed findings (`FindingObservation.regressed`,

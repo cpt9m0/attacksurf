@@ -1,10 +1,17 @@
-# Production stack for https://attacksurf.dev (issue #132).
+# Production stack for https://attacksurf.dev (issues #132, #29).
 # Traffic: Cloudflare edge -> Cloudflare Tunnel (cloudflared) -> caddy:80 -> web:5000 (gunicorn).
 # No inbound ports are published: cloudflared dials out, everything else is internal-only.
 # Usage: docs/deployment.md.
 # SECRETS_DIR overrides where the secret files live (default /etc/attacksurf); only for a
 # non-root local staging run, never in production.
 name: attacksurf-prod
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+    compress: "true"
 
 x-app: &app
   build:
@@ -14,9 +21,18 @@ x-app: &app
   # `docker compose -f compose.prod.yaml build` usable without the deploy script.
   image: ${WEB_IMAGE:-attacksurf:prod}
   restart: unless-stopped
+  read_only: true
   security_opt:
     - no-new-privileges:true
-  networks: [internal]
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=64m
+  pids_limit: 128
+  cpus: "1.0"
+  mem_limit: 512m
+  logging: *logging
+  networks: [internal, egress]
   # The app env file (SECRET_KEY, DNS, LLM, ...); secrets stay in Docker secrets, never here.
   env_file: [./deploy/attacksurf.env]
   # Redis and Postgres passwords come from the same secret files the servers use, so the
@@ -40,6 +56,8 @@ x-app: &app
     REDIS_URL: "redis://:__REDIS_PASS__@redis:6379/0"
     # Pinned: must match the artifact-store volume mount below.
     ARTIFACT_STORE_ROOT: /var/lib/attacksurf/artifact-store
+    # Optional Sentry release tag injected by scripts/deploy.sh when deploying a SHA.
+    SENTRY_RELEASE: ${SENTRY_RELEASE:-}
   volumes:
     # Encrypted uploads (ADR 0028). Without it they would live in the container's writable
     # layer and vanish on every deploy while their database rows stay.
@@ -60,10 +78,21 @@ services:
     environment:
       TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token
     secrets: [tunnel_token]
+    read_only: true
     security_opt:
       - no-new-privileges:true
-    networks: [internal]
-    depends_on: [caddy]
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    pids_limit: 64
+    cpus: "0.5"
+    mem_limit: 128m
+    logging: *logging
+    networks: [internal, egress]
+    depends_on:
+      caddy:
+        condition: service_healthy
 
   caddy:
     build:
@@ -71,23 +100,70 @@ services:
       dockerfile: Caddy.Dockerfile
     image: attacksurf-caddy:prod
     restart: unless-stopped
+    read_only: true
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Non-root uid 10001 binds :80 without NET_BIND_SERVICE so Cloudflare Tunnel routes stay http://caddy:80.
+    sysctls:
+      - net.ipv4.ip_unprivileged_port_start=80
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    pids_limit: 64
+    cpus: "0.5"
+    mem_limit: 128m
+    logging: *logging
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "80"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
     networks: [internal]
-    depends_on: [web]
+    depends_on:
+      web:
+        condition: service_healthy
 
   # One-off: `docker compose -f compose.prod.yaml run --rm migrate` on every deploy.
   migrate:
     <<: *app
     restart: "no"
     command: ["alembic", "upgrade", "head"]
+    pids_limit: 64
+    networks: [internal]
     depends_on:
       postgres:
         condition: service_healthy
 
   web:
     <<: *app
-    command: ["gunicorn", "attacksurf.app:create_app()", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "4"]
+    # Werkzeug spools multipart uploads > 500 KiB to /tmp; tmpfs counts against mem_limit.
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=320m
+    cpus: "1.5"
+    mem_limit: 1g
+    command:
+      - gunicorn
+      - attacksurf.app:create_app()
+      - --bind
+      - 0.0.0.0:5000
+      - --workers
+      - "2"
+      - --threads
+      - "4"
+      - --timeout
+      - "120"
+      - --graceful-timeout
+      - "30"
+      - --keep-alive
+      - "5"
+      - --max-requests
+      - "1000"
+      - --max-requests-jitter
+      - "100"
+      - --worker-tmp-dir
+      - /dev/shm
     expose: ["5000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=2)"]
@@ -133,6 +209,9 @@ services:
   # Useless without `worker-passive` (and vice versa): beat only queues, the worker consumes.
   beat:
     <<: *app
+    pids_limit: 64
+    cpus: "0.5"
+    mem_limit: 256m
     # Schedule state in /tmp: the image's /app is not meant to be written at runtime.
     command:
       ["celery", "-A", "attacksurf.workers.app", "beat", "--loglevel", "INFO",
@@ -149,6 +228,23 @@ services:
   postgres:
     image: postgres:18@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
     restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    # Official entrypoint fixes pgdata permissions and drops root via gosu.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /var/run/postgresql:rw,noexec,nosuid,size=16m
+    pids_limit: 128
+    cpus: "1.0"
+    mem_limit: 1g
+    logging: *logging
     environment:
       POSTGRES_USER: attacksurf
       POSTGRES_DB: attacksurf
@@ -168,6 +264,24 @@ services:
   redis:
     image: redis:8@sha256:1f88291b4c57bdf249f02eb085a8669889b2d2954e91d4de5118a5da6b78dd53
     restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    # Official entrypoint drops root to `redis` via gosu.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+      - SETPCAP
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+      - /data:rw,noexec,nosuid,size=16m
+    pids_limit: 64
+    cpus: "0.5"
+    mem_limit: 256m
+    logging: *logging
     # The image entrypoint drops privileges to `redis` before exec'ing the server. It must keep
     # running: replacing it with a shell would leave redis-server as root. The secret is read
     # into a variable first and exported in a *separate* statement: in `VAR=... exec cmd "$VAR"`
@@ -176,7 +290,7 @@ services:
     entrypoint:
       - sh
       - -c
-      - REDIS_PASSWORD="$$(cat /run/secrets/redis_password)"; export REDIS_PASSWORD; exec docker-entrypoint.sh redis-server --requirepass "$$REDIS_PASSWORD" --save "" --appendonly no
+      - REDIS_PASSWORD="$$(cat /run/secrets/redis_password)"; export REDIS_PASSWORD; exec docker-entrypoint.sh redis-server --requirepass "$$REDIS_PASSWORD" --save "" --appendonly no --maxmemory 192mb --maxmemory-policy noeviction
       - --
     secrets: [redis_password]
     healthcheck:
@@ -198,6 +312,8 @@ secrets:
 
 networks:
   internal:
+    internal: true
+  egress:
 
 volumes:
   pgdata:

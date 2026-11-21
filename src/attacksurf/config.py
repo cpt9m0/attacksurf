@@ -147,6 +147,12 @@ class Settings(BaseSettings):
     # Optional base URL for links in notification emails (e.g. https://attacksurf.example).
     app_base_url: str | None = None
 
+    # Optional error tracking (#29). SENTRY_DSN unset keeps Sentry disabled.
+    sentry_dsn: SecretStr | None = None
+    sentry_environment: str | None = None
+    sentry_release: str | None = None
+    sentry_traces_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+
     _secret_key_generated: bool = PrivateAttr(default=False)
 
     @model_validator(mode="after")
@@ -165,10 +171,35 @@ class Settings(BaseSettings):
             self._secret_key_generated = True
         return self
 
-    @field_validator("ip_asn_db_path")
+    @field_validator("ip_asn_db_path", "sentry_environment", "sentry_release")
     @classmethod
-    def _empty_ip_asn_path(cls, value: str | None) -> str | None:
+    def _empty_optional_str(cls, value: str | None) -> str | None:
         return value.strip() or None if isinstance(value, str) else value
+
+    @field_validator("sentry_dsn")
+    @classmethod
+    def _validate_sentry_dsn(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
+        raw = value.get_secret_value().strip()
+        if not raw:
+            return None
+        message = "SENTRY_DSN must be an http:// or https:// Sentry DSN URL"
+        try:
+            parts = urlsplit(raw)
+            parts.port  # noqa: B018 - raises ValueError for an invalid port
+        except ValueError:
+            raise ValueError(message) from None
+        valid = (
+            parts.scheme in ("http", "https")
+            and bool(parts.hostname)
+            and parts.path not in ("", "/")
+            and not parts.query
+            and not parts.fragment
+        )
+        if not valid:
+            raise ValueError(message)
+        return value if raw == value.get_secret_value() else SecretStr(raw)
 
     @field_validator("smtp_host", "smtp_user")
     @classmethod

@@ -14,10 +14,26 @@ to `main` reaches production within one interval. The host pulls; nothing dials 
 - Every line the script prints — including the deployed SHA — goes to the journal under
   `attacksurf-deploy`.
 
-`docs/deployment.md` covers what the script does and how to recover by hand; this file is only
-the unit installation.
+`docs/deployment.md` covers what the scripts do and how to recover by hand; this file covers
+installing and operating the `attacksurf-deploy` and `attacksurf-backup` systemd units.
 
-## Prerequisites
+## Backup unit (`attacksurf-backup`)
+
+`attacksurf-backup.timer` runs `scripts/backup.sh` nightly at `03:15 UTC` (+ up to 15 min jitter,
+`Persistent=true`) under `flock` on `/var/lock/attacksurf-backup.lock`.
+
+```bash
+sudo install -m 644 deploy/systemd/attacksurf-backup.tmpfiles.conf /etc/tmpfiles.d/
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/attacksurf-backup.tmpfiles.conf
+sudo install -m 644 deploy/systemd/attacksurf-backup.service \
+                     deploy/systemd/attacksurf-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now attacksurf-backup.timer
+sudo systemctl start attacksurf-backup              # run once now and verify
+journalctl -u attacksurf-backup -n 50 --no-pager
+```
+
+## Deploy unit prerequisites
 
 1. `/opt/attacksurf` holds the repository checkout and `deploy/attacksurf.env` symlinks to
    `/etc/attacksurf/attacksurf.env`. `scripts/deploy.sh` must exist and be executable: the
