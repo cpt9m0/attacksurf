@@ -206,26 +206,31 @@ results in the PR. Override the format for one run as above, e.g.
 
 ### Running the sandbox services locally
 
-Both read the process environment only (no `.env`). On a host without gVisor, allow `runc` for
-dev:
+The sandbox proxy, the launcher and `worker-analysis` (ADR 0016) are opt-in: they start only with
+the `sandbox` profile, and `make up` leaves them out.
 
 ```bash
-echo '{}' > /tmp/sandbox-images.lock           # no analyzer images exist yet
-export SANDBOX_ALLOW_RUNC=true SANDBOX_ARTIFACT_ROOT=/tmp/artifacts SANDBOX_IMAGES_LOCK=/tmp/sandbox-images.lock
-uv run python -m attacksurf.sandbox_proxy &    # needs the Docker socket; port 8790
-SANDBOX_PROXY_URL=http://127.0.0.1:8790 SANDBOX_LAUNCHER_HOST=127.0.0.1 \
-  uv run python -m attacksurf.sandbox_launcher # port 8791
-curl -i 127.0.0.1:8791/healthz                 # 200
+docker compose --profile sandbox up -d --wait    # proxy, launcher and worker-analysis, all healthy
+docker compose --profile sandbox logs sandbox-launcher
+make down                                        # stops everything, profile services included
 ```
 
-The catalog is empty until the first analyzer ships, so a `POST /runs` for any analyzer is a 404.
-Without a reachable proxy, or without `runsc` (and no `runc` fallback), the launcher exits
-non-zero. Compose wiring comes with the analysis worker (#84).
+- **Runtime:** `SANDBOX_ALLOW_RUNC` defaults to `true` in dev, so a host without gVisor still
+  works (a host with `runsc` uses it). Compose reads `.env` for this substitution, so a `.env`
+  that sets it to `false` makes the launcher exit with "no permitted container runtime".
+- **Staging folder:** `SANDBOX_ARTIFACT_ROOT` (default `/tmp/attacksurf-sandbox`) is mounted at
+  the same path on the host and in the containers, because Docker resolves the analyzer's bind
+  source on the host.
+- **Empty catalog:** no analyzer images exist until PR 5, so a `POST /runs` for any analyzer is a
+  404.
+- **Launcher URL:** Compose sets `SANDBOX_LAUNCHER_URL` on `worker-analysis` only. The other
+  workers keep it unset and refuse every sandbox request.
+- **Dropped jobs:** until the analysis tasks are registered (#87/#101), `worker-analysis`
+  discards the upload jobs it receives. Their rows stay `queued`, as they do without the worker.
 
-To let the Celery workers use a launcher you run yourself, set `SANDBOX_LAUNCHER_URL` in `.env`
-to an `http://host[:port]` the worker containers can reach (not `127.0.0.1`, which inside a
-container is the container itself). Unset, which is the default, they refuse every sandbox
-request.
+To debug the launcher outside Docker, run `uv run python -m attacksurf.sandbox_launcher` with
+`SANDBOX_PROXY_URL` (the proxy, port 8790), `SANDBOX_LAUNCHER_HOST=127.0.0.1`,
+`SANDBOX_ARTIFACT_ROOT` and `SANDBOX_IMAGES_LOCK` set in the environment.
 
 ## Everyday commands
 

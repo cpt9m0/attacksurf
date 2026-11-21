@@ -14,6 +14,7 @@ from attacksurf.sandbox_launcher.catalog import (
 )
 from attacksurf.sandbox_proxy import policy
 
+ROOT = Path(__file__).resolve().parents[3]
 DIGEST = "ghcr.io/acme/echo@sha256:" + "a" * 64
 OTHER_DIGEST = "sha256:" + "b" * 64
 SPEC = AnalyzerSpec(name="echo", command=("/analyze", "/input"))
@@ -49,6 +50,10 @@ def write_lock(tmp_path: Path, content: str) -> Path:
 
 def test_catalog_starts_empty() -> None:
     assert CATALOG == ()
+
+
+def test_the_committed_images_lock_runs_no_analyzer() -> None:
+    assert load_catalog(ROOT / "sandbox-images.lock") == {}
 
 
 def test_load_catalog_with_no_specs_returns_nothing(tmp_path: Path) -> None:

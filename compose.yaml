@@ -30,8 +30,8 @@ x-app: &app
     LLM_ALLOWED_BASE_HOSTS: ${LLM_ALLOWED_BASE_HOSTS:-}
     SCAN_MAX_STARTS_PER_HOUR: ${SCAN_MAX_STARTS_PER_HOUR:-}
     SCAN_DEFAULT_FREQUENCY: ${SCAN_DEFAULT_FREQUENCY:-weekly}
-    # Unset (the default here): the workers refuse every sandbox request. This stack has no
-    # sandbox launcher yet, so point it at one you run yourself (http://host[:port] only).
+    # Unset (the default here): the workers refuse every sandbox request. Only `worker-analysis`
+    # sets it, to the opt-in launcher; any other value is http://host[:port] only.
     SANDBOX_LAUNCHER_URL: ${SANDBOX_LAUNCHER_URL:-}
   volumes:
     - ./src:/app/src  # hot reload
@@ -42,6 +42,21 @@ x-app: &app
       condition: service_healthy
     redis:
       condition: service_healthy
+
+# The sandbox services (ADR 0016): no app env file, no database or Redis URL, no encryption key.
+# They read the process environment only, so nothing from `.env` reaches them.
+x-sandbox: &sandbox
+  build:
+    context: .
+    target: dev
+  image: attacksurf:dev
+  profiles: [sandbox]
+  networks: [sandbox]
+  environment: &sandbox-env
+    ENV: dev
+    # Dev hosts rarely have gVisor; a host with `runsc` still uses it. Refused when ENV=prod.
+    SANDBOX_ALLOW_RUNC: ${SANDBOX_ALLOW_RUNC:-true}
+    SANDBOX_ARTIFACT_ROOT: ${SANDBOX_ARTIFACT_ROOT:-/tmp/attacksurf-sandbox}
 
 services:
   web:
@@ -99,6 +114,37 @@ services:
     healthcheck:
       <<: *worker-health
       test: ["CMD-SHELL", "celery -A attacksurf.workers.app inspect ping -d ai@$$HOSTNAME --timeout 5"]
+  # Opt-in (`sandbox` profile). Consumes `analysis` (ADR 0031) and is the only app service that
+  # knows the launcher. Until #87/#101 register the analysis tasks, Celery drops the upload jobs
+  # it receives and their rows stay `queued`.
+  worker-analysis:
+    <<: *worker
+    profiles: [sandbox]
+    command:
+      ["celery", "-A", "attacksurf.workers.app", "worker", "-Q", "analysis", "-c", "2",
+       "-n", "analysis@%h", "--loglevel", "INFO"]
+    healthcheck:
+      <<: *worker-health
+      test: ["CMD-SHELL", "celery -A attacksurf.workers.app inspect ping -d analysis@$$HOSTNAME --timeout 5"]
+    # `default` for Postgres and Redis, `sandbox` for the launcher (ADR 0016).
+    networks: [default, sandbox]
+    environment:
+      <<: *app-env
+      SANDBOX_LAUNCHER_URL: http://sandbox-launcher:8791
+      SANDBOX_ARTIFACT_ROOT: ${SANDBOX_ARTIFACT_ROOT:-/tmp/attacksurf-sandbox}
+    # Lists are replaced by a merge, so the `x-app` ones are repeated. The staging folder is
+    # read-write here (it stages decrypted artifacts) and read-only in the launcher.
+    volumes:
+      - ./src:/app/src
+      - artifact-store:/var/lib/attacksurf/artifact-store
+      - ${SANDBOX_ARTIFACT_ROOT:-/tmp/attacksurf-sandbox}:${SANDBOX_ARTIFACT_ROOT:-/tmp/attacksurf-sandbox}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      sandbox-launcher:
+        condition: service_healthy
   beat:
     <<: *app
     # Schedule state in /tmp: the image's /app is not meant to be written at runtime.
@@ -112,6 +158,46 @@ services:
       timeout: 10s
       start_period: 20s
       retries: 3
+
+  # Opt-in: `docker compose --profile sandbox up -d --wait`. The only service with the Docker
+  # socket; the launcher fixes the analyzer command, this proxy only checks what Docker is asked.
+  sandbox-proxy:
+    <<: *sandbox
+    command: ["python", "-m", "attacksurf.sandbox_proxy"]
+    volumes:
+      - ./src:/app/src:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    # The image's HEALTHCHECK probes port 5000. The proxy has no health route, so a TCP connect
+    # shows it is listening without sending anything to Docker.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8790), 2).close()"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+  # Opt-in. No socket: it asks the proxy. Mounts the staging folder read-only, at the same path
+  # as on the host, because Docker resolves the analyzer's bind source on the host.
+  sandbox-launcher:
+    <<: *sandbox
+    command: ["python", "-m", "attacksurf.sandbox_launcher"]
+    volumes:
+      - ./src:/app/src:ro
+      - ${SANDBOX_ARTIFACT_ROOT:-/tmp/attacksurf-sandbox}:${SANDBOX_ARTIFACT_ROOT:-/tmp/attacksurf-sandbox}:ro
+    depends_on:
+      sandbox-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8791/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+networks:
+  # No route to the internet or the host. Postgres and Redis are not on it.
+  sandbox:
+    internal: true
 
 volumes:
   pgdata:

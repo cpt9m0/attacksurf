@@ -20,6 +20,7 @@ from attacksurf.sandbox_proxy.policy import (
     validate_create,
 )
 
+ROOT = Path(__file__).resolve().parents[3]
 IMAGE = "ghcr.io/acme/echo@sha256:" + "a" * 64
 OSV_IMAGE = "ghcr.io/acme/osv@sha256:" + "b" * 64
 OTHER_IMAGE = "ghcr.io/acme/evil@sha256:" + "c" * 64
@@ -308,6 +309,10 @@ def test_load_images_reads_digests_and_finds_the_osv_image(tmp_path: Path) -> No
     lock.write_text(json.dumps({"fixture.echo": IMAGE, "osv-scanner": OSV_IMAGE}))
 
     assert load_images(lock) == (frozenset({IMAGE, OSV_IMAGE}), OSV_IMAGE)
+
+
+def test_the_committed_images_lock_allows_no_image() -> None:
+    assert load_images(ROOT / "sandbox-images.lock") == (frozenset(), None)
 
 
 @pytest.mark.parametrize(

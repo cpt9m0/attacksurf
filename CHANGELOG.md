@@ -6,6 +6,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Analysis worker and sandbox services in the dev stack (#84): `worker-analysis`,
+  `sandbox-launcher` and `sandbox-proxy` run behind the opt-in Compose `sandbox` profile on an
+  internal network, the `analysis` queue is consumed from now on (ADR 0031), and an empty
+  `sandbox-images.lock` ships in the image, so no analyzer can run yet. Prod runs none of it
+  until #92.
 - AI exposure summary and notable assets (#26, ADR 0030): after triage finishes (or when a scan
   has nothing new to triage), `ai.summarize` makes one LLM call with the versioned prompt
   `summary/v1` using change stats, up to 25 observed findings (triaged first, no raw evidence)

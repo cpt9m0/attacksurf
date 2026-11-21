@@ -1,4 +1,5 @@
-"""The production profile must name a registered plugin and carry the discovery cap."""
+"""Production profiles must name registered plugins, carry the discovery cap, and select no
+analysis scanner."""
 
 from attacksurf.domain.scope import HttpPermission
 from attacksurf.scanners.dns import axfr as _axfr  # noqa: F401
@@ -56,3 +57,16 @@ def test_scheduled_profile_is_dns_only_and_not_public() -> None:
         assert not scanner.grant.zone_transfer
         assert not scanner.grant.sandbox_analyzers
         assert not scanner.grant.rdap
+
+
+def test_no_profile_selects_an_analysis_scanner() -> None:
+    for profile in PROFILES.values():
+        for name in profile.discover + profile.checks:
+            scanner = registry.get(name)
+
+            needs_analyzer = scanner.queue == "analysis" or bool(scanner.grant.sandbox_analyzers)
+
+            assert not needs_analyzer, (
+                f"profile {profile.name!r} selects {name!r}, which needs a sandbox analyzer; "
+                "no profile may until the first analyzer ships (ADR 0031 / #92)"
+            )

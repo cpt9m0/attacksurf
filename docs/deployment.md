@@ -489,6 +489,18 @@ healthchecks: worker probes use `celery inspect ping` targeting `passive@$HOSTNA
 `ai@$HOSTNAME`; the beat probe checks the broker connection. All substitute the Redis password
 from the secret at probe time, the same way the entrypoint does for the main process. An unhealthy worker fails the deploy and rolls back.
 
+## Analysis sandbox (not deployed yet)
+
+Production runs none of the sandbox services: `sandbox-proxy`, `sandbox-launcher` and
+`worker-analysis` exist only in the dev `compose.yaml` (ADR 0031). Until #92 adds them, upload
+jobs stay queued. This is a checklist for that change, not steps to follow now:
+
+- register `runsc` (gVisor) in the VPS `/etc/docker/daemon.json`; prod refuses `runc`;
+- pick a host staging folder and mount it at the same path in the worker and the launcher;
+- give the proxy's Docker socket group to uid 10001 (`group_add`);
+- remember that `deploy.sh` waits for every service to be healthy, so a sandbox service that
+  cannot start fails the deploy and rolls it back.
+
 ## Known gaps on this host
 
 The stack runs `web`, both workers and `beat` plus the database and Redis. Backups and
