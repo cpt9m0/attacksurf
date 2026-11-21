@@ -14,6 +14,7 @@ from pydantic import Field, PrivateAttr, SecretStr, field_validator, model_valid
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from attacksurf.domain.llm import ProviderKind
+from attacksurf.domain.scans import ScanScheduleDefault
 from attacksurf.domain.scope import is_blocked_address
 
 MIN_PROD_SECRET_KEY_LENGTH = 32
@@ -102,6 +103,9 @@ class Settings(BaseSettings):
     # rate limiting; leave 0 when the app is reached directly.
     proxy_count: int = Field(default=0, ge=0, le=5)
 
+    # New root registrations only: a saved per-root schedule always wins (#27).
+    scan_default_frequency: ScanScheduleDefault = "weekly"
+
     # Instance LLM config (ADR 0019): orgs without their own key use it, capped (#24). Model
     # names come only from config, so there is no default; no key or no model means AI is off.
     llm_provider: ProviderKind = ProviderKind.ANTHROPIC
@@ -109,6 +113,8 @@ class Settings(BaseSettings):
     llm_base_url: SecretStr | None = None
     llm_api_key: SecretStr | None = None
     llm_monthly_instance_token_budget: int = Field(default=500_000, ge=0)
+    # Also send `info` findings to AI triage (#25, ADR 0029); off to save tokens.
+    llm_triage_include_info: bool = False
     # Comma-separated exact hostnames (e.g. localhost,ollama.internal) permitted for self-hosted
     # org LLM base URLs, bypassing the public-HTTPS SSRF guard.
     llm_allowed_base_hosts: str = ""

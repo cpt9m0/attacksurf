@@ -142,6 +142,11 @@ Scans (#21): `SCAN_MAX_STARTS_PER_HOUR` caps scan starts per organization per pr
 trailing hour (default 10); failed starts count too. Upload scans (`code`, `binary_static`)
 have their own profiles and limiter.
 
+Recurring scans (#27): `SCAN_DEFAULT_FREQUENCY` seeds a schedule for **new** root domains
+only: `weekly` (default), `daily`, or `off`. Existing roots keep their saved setting; an
+admin turns it on or off on the root's overview, and the default does not change domains
+that already exist.
+
 ### DNS resolution (#16)
 
 `DNS_RESOLVERS` is a comma-separated list of public recursive resolvers (default
@@ -158,7 +163,8 @@ organisation details empty. Reverse DNS is always attempted for resolved address
 
 `LLM_PROVIDER` (`anthropic` or `openai_compat`), `LLM_MODEL`, `LLM_BASE_URL` and `LLM_API_KEY`
 are the instance config: orgs without their own key use it (ADR 0019), capped per org by
-`LLM_MONTHLY_INSTANCE_TOKEN_BUDGET` (default `500000` tokens per UTC month). Orgs can configure
+`LLM_MONTHLY_INSTANCE_TOKEN_BUDGET` (default `500000` tokens per UTC month). AI triage skips
+`info` findings unless `LLM_TRIAGE_INCLUDE_INFO=true` (ADR 0029). Orgs can configure
 their own provider, model, optional `base_url` and BYO API key under `/settings` when
 `APP_ENCRYPTION_KEY` is configured (`APP_ENCRYPTION_OLD_KEYS` accepts comma-separated prior keys
 for rotation decryption). Custom org `base_url` hosts must be HTTPS and resolve to public IPs
@@ -186,6 +192,17 @@ RUN_LLM_TESTS=1 uv run pytest tests/e2e/test_openai_compat_live.py -m llm_live -
 LLM_PROVIDER=anthropic LLM_BASE_URL=https://api.meta.ai RUN_LLM_TESTS=1 \
     uv run pytest tests/e2e/test_anthropic_live.py -m llm_live --no-cov
 ```
+
+### Evaluating the triage prompt (`make eval`)
+
+`make eval` sends the triage eval set to the LLM in your `.env`, one call per case, and prints
+each case's verdict. A case is one asset's batch in `tests/fixtures/ai/triage_eval/` with the
+judgments a good model must give (ranges of priority, false-positive likelihood and severity).
+It is opt-in (`llm_live`) and never runs in CI; `tests/unit/ai/test_eval_harness.py` checks the
+cases and the harness offline. The cases are synthetic, so `muse-spark-1.3-contributor` is fine
+here. Before releasing a new prompt version, run both versions and record the model and the
+results in the PR. Override the format for one run as above, e.g.
+`LLM_PROVIDER=anthropic LLM_BASE_URL=https://api.meta.ai make eval`.
 
 ### Running the sandbox services locally
 

@@ -51,10 +51,22 @@ own key) **triages, prioritizes, and explains** them in plain language with fix 
   (filters, search, open findings per asset) and the asset graph: domain → subdomain → CNAME → IP
 - **Scan control**: start a scan from the UI or the API, watch its progress live, cancel it,
   and review what changed (new / fixed / regressed findings, new and disappeared assets)
+- **Findings triage**: the findings list filtered by severity, status, rule, asset and root
+  domain (or only what the latest scan found), a detail page with the escaped evidence,
+  remediation and timeline, accept-risk / false-positive decisions with a required comment,
+  bulk actions, CSV/JSON export, and a dashboard with open findings by severity, the newest
+  ones and each root's last scan
 
 ### Platform
-- **AI triage**: severity adjustment, false-positive likelihood, remediation steps, exposure summaries
-- **Continuous monitoring**: scheduled rescans with new / fixed / regressed diffs and email alerts
+- **AI triage & exposure summaries**: after each scan, an LLM judges every new or changed finding
+  (severity in context, false-positive likelihood, P1 to P4 priority and fix steps) and then
+  writes a plain-language exposure summary (headline, top risks linked to real findings, sensitive
+  hosts flagged with the `notable` tag, changes since the last scan, and next actions) shown on
+  the scan page and dashboard. Every output is labeled as AI-generated, never changes a finding,
+  never fails a scan, stays within each org's monthly token budget and never pays twice for an
+  unchanged finding or already-summarized scan
+- **Continuous monitoring**: per-domain daily or weekly rescans of read-only DNS configuration
+  checks, with an admin opt-out and the same new / fixed / regressed diffs
 - **Bring your own LLM**: Anthropic or any OpenAI-compatible endpoint (OpenAI, OpenRouter, vLLM, ...)
 - **Safe by design**: ownership verification before any active check, SSRF protection, no exploitation
 - **Self-hosted**: one `docker compose up` on a single VPS; your data stays with you

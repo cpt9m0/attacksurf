@@ -1,0 +1,23 @@
+{
+  "why": "Acceptance criterion of #25: a benign finding is flagged as a likely false positive. The scanner only guessed common DKIM selectors, the domain sends through Mailgun (which names its own selectors), and DMARC rejects mail without strict DKIM alignment, which a working domain could not survive without DKIM.",
+  "asset": {"value": "acme.example", "type": "domain"},
+  "findings": [
+    {
+      "ref": "F1",
+      "rule_id": "dns.email.dkim_not_found",
+      "title": "No DKIM selector found",
+      "description": "None of the probed DKIM selectors publishes a key, so mail from the domain likely carries no DKIM signature. Only common selectors are probed, so this is a hint, not proof that DKIM is absent.",
+      "severity": "low",
+      "confidence": "low",
+      "location": "",
+      "evidence": [
+        {"kind": "raw", "data": {"selectors_probed": ["default", "google", "selector1", "selector2", "k1", "mail"], "selectors_found": []}},
+        {"kind": "dns_record", "data": {"record": "TXT", "name": "acme.example", "values": ["v=spf1 include:mailgun.org -all"]}},
+        {"kind": "dns_record", "data": {"record": "TXT", "name": "_dmarc.acme.example", "values": ["v=DMARC1; p=reject; adkim=s; rua=mailto:dmarc@acme.example"]}}
+      ]
+    }
+  ],
+  "expect": {
+    "F1": {"priority": ["P3", "P4"], "false_positive": ["high"], "severity_at_most": "low"}
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "why": "Acceptance criterion of #26: a clean scan with no findings and only ordinary hosts produces no invented key risks and no false notable assets.",
+  "root_domain": "clean.example",
+  "changes": {
+    "new_findings": {"total": 0, "by_severity": {}},
+    "fixed_findings": {"total": 0, "by_severity": {}},
+    "regressed_findings": {"total": 0, "by_severity": {}},
+    "total_findings": {"total": 0, "by_severity": {}},
+    "new_assets": {"total": 0, "names": []},
+    "disappeared_assets": {"total": 0, "names": []}
+  },
+  "findings": [],
+  "assets": [
+    {"ref": "A1", "name": "clean.example", "type": "domain"},
+    {"ref": "A2", "name": "www.clean.example", "type": "subdomain"}
+  ],
+  "expect": {
+    "max_key_risks": 0,
+    "max_notable_assets": 0
+  }
+}

@@ -1,0 +1,132 @@
+{% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
+{% from "components/ai_panel.html" import ai_triage_panel %}
+{% from "components/badges.html" import severity_badge, status_pill %}
+{% from "components/form.html" import csrf_field, select_field %}
+{% from "components/time.html" import relative_time %}
+{% block title %}{{ finding.title }}{% endblock %}
+{% block content %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+  <a href="{{ url_for('ui.findings') }}">Findings</a>
+  / <a class="mono" href="{{ url_for('ui.asset_detail', asset_id=finding.asset_id) }}">{{ finding.asset_value }}</a>
+</nav>
+
+<div class="page-header">
+  <h1>{{ finding.title }}</h1>
+  <span>{{ severity_badge(finding.severity) }} {{ status_pill(finding.status) }}</span>
+</div>
+
+<dl class="meta card card-body">
+  <div><dt>Asset</dt><dd><a class="mono" href="{{ url_for('ui.asset_detail', asset_id=finding.asset_id) }}">{{ finding.asset_value }}</a></dd></div>
+  <div><dt>Root domain</dt><dd>
+    {%- if finding.root_id %}<a class="mono" href="{{ url_for('ui.asset_detail', asset_id=finding.root_id) }}">{{ finding.root_value }}</a>
+    {%- else %}<span class="mono">{{ finding.root_value }}</span>{% endif %}</dd></div>
+  <div><dt>Rule</dt><dd><code>{{ finding.rule_id }}</code></dd></div>
+  {%- if finding.location %}
+  <div><dt>Location</dt><dd class="mono">{{ finding.location }}</dd></div>
+  {%- endif %}
+  <div><dt>Confidence</dt><dd>{{ finding.confidence }}</dd></div>
+  {%- if finding.scanner %}
+  <div><dt>Scanner</dt><dd><code>{{ finding.scanner }}</code></dd></div>
+  {%- endif %}
+  <div><dt>First seen</dt><dd>{{ relative_time(finding.first_seen) }}</dd></div>
+  <div><dt>Last seen</dt><dd>{{ relative_time(finding.last_seen) }}</dd></div>
+  {%- if finding.fixed_at %}
+  <div><dt>Fixed</dt><dd>{{ relative_time(finding.fixed_at) }}</dd></div>
+  {%- endif %}
+  <div><dt>Observed in</dt><dd>{{ detail.observations }} scan{{ "" if detail.observations == 1 else "s" }}</dd></div>
+</dl>
+
+<section class="card card-body" aria-labelledby="finding-description">
+  <h2 id="finding-description">What this means</h2>
+  <p class="prose">{{ detail.description }}</p>
+</section>
+
+<section aria-labelledby="finding-evidence">
+  <h2 id="finding-evidence">Evidence</h2>
+  {%- if detail.evidence %}
+  {%- if detail.evidence_total > detail.evidence | length %}
+  <p class="muted" role="status">Showing the most recent {{ detail.evidence | length }} of {{ detail.evidence_total }} evidence records.</p>
+  {%- endif %}
+  {%- for item in detail.evidence %}
+  <article class="card card-body evidence" aria-label="{{ item.title }}">
+    <h3>{{ item.title }} <span class="muted">{{ relative_time(item.captured_at) }}</span></h3>
+    {%- if item.fields %}
+    <dl class="meta">
+      {%- for field in item.fields %}
+      <div><dt>{{ field.label }}</dt><dd class="mono">{{ field.value }}</dd></div>
+      {%- endfor %}
+    </dl>
+    {%- endif %}
+    {%- if item.body %}<pre class="evidence-body">{{ item.body }}</pre>{% endif %}
+    {%- if item.truncated %}<p class="muted">Truncated for display; the full record is stored with the scan.</p>{% endif %}
+  </article>
+  {%- endfor %}
+  {%- else %}
+  <div class="card card-body"><p class="muted">No evidence was captured for this finding.</p></div>
+  {%- endif %}
+</section>
+
+{%- if detail.remediation %}
+<section class="card card-body" aria-labelledby="finding-remediation">
+  <h2 id="finding-remediation">How to fix it</h2>
+  <p class="prose">{{ detail.remediation }}</p>
+</section>
+{%- endif %}
+
+{%- if detail.references %}
+<section class="card card-body" aria-labelledby="finding-references">
+  <h2 id="finding-references">References</h2>
+  <ul class="reference-list">
+    {%- for reference in detail.references %}
+    <li>
+      {%- if reference.startswith("https://") or reference.startswith("http://") %}
+      <a href="{{ reference }}" rel="noopener noreferrer" target="_blank">{{ reference }}</a>
+      {%- else %}{{ reference }}{% endif %}
+    </li>
+    {%- endfor %}
+  </ul>
+</section>
+{%- endif %}
+
+<section class="card card-body ai-panel" aria-labelledby="finding-ai">
+  <h2 id="finding-ai">AI triage</h2>
+  {%- if detail.ai_triage %}
+  {{ ai_triage_panel(detail.ai_triage, finding.severity, stale=detail.ai_triage_stale) }}
+  {%- else %}
+  <p class="muted">AI triage hasn't run for this finding yet. Scans stay fully usable without it.</p>
+  {%- endif %}
+</section>
+
+<section class="card card-body" aria-labelledby="finding-timeline">
+  <h2 id="finding-timeline">Timeline</h2>
+  <ol class="timeline">
+    <li><span class="muted">First seen</span> {{ relative_time(finding.first_seen) }}</li>
+    <li><span class="muted">Last observed</span> {{ relative_time(finding.last_seen) }}{% if finding.status == "regressed" %} <span class="muted">(came back after being fixed)</span>{% endif %}</li>
+    {%- if finding.fixed_at %}
+    <li><span class="muted">Fixed by a scan</span> {{ relative_time(finding.fixed_at) }}</li>
+    {%- endif %}
+    {%- for event in detail.events %}
+    <li>
+      <span class="muted">{{ event.action }}</span> {{ relative_time(event.at) }}
+      {%- if event.actor %} <span class="muted">by {{ event.actor }}</span>{% endif %}
+      {%- if event.comment %}<span class="timeline-note">{{ event.comment }}</span>{% endif %}
+    </li>
+    {%- endfor %}
+  </ol>
+</section>
+
+<section class="card card-body" aria-labelledby="finding-actions">
+  <h2 id="finding-actions">Change status</h2>
+  <p class="muted">Scans mark findings fixed or regressed. Accepting risk or marking a false positive needs a comment and is recorded in the audit log.</p>
+  <form method="post" action="{{ url_for('ui.change_finding_status', finding_id=finding.id) }}" class="form">
+    {{ csrf_field() }}
+    {{ select_field("status", "New status", status_options, "") }}
+    <div class="field">
+      <label for="f-comment">Comment</label>
+      <textarea id="f-comment" name="comment" rows="3" maxlength="2000" aria-describedby="f-comment-hint"></textarea>
+      <p class="field-hint" id="f-comment-hint">Required to accept risk or mark a false positive.</p>
+    </div>
+    <button type="submit" class="btn btn-secondary">Update finding</button>
+  </form>
+</section>
+{% endblock %}

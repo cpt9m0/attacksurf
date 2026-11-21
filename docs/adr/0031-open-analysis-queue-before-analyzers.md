@@ -1,6 +1,7 @@
-# 0029. Open the analysis queue before any analyzer exists
+# 0031. Open the analysis queue before any analyzer exists
 
-- Status: accepted (supersedes ADR 0016's reserved analysis queue consequence)
+- Status: accepted (supersedes ADR 0016's reserved analysis queue consequence); renumbered from
+  0029 after main claimed that number for the AI triage stage
 - Date: 2026-11-19
 
 ## Context

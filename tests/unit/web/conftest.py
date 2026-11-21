@@ -5,7 +5,14 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from attacksurf.domain.llm import ProviderKind
-from attacksurf.services import asset_views, llm_usage, org_settings, scan_views
+from attacksurf.services import (
+    asset_views,
+    finding_views,
+    llm_usage,
+    org_settings,
+    scan_views,
+    summary_views,
+)
 from attacksurf.services.auth import SessionUser
 from tests.conftest import LoginAs, make_session_user
 
@@ -32,6 +39,23 @@ def _no_scans(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(scan_views, "list_scans", lambda *_args, **_kw: no_scans)
     monkeypatch.setattr(scan_views, "active_scan_for_root", lambda *_args, **_kw: None)
     monkeypatch.setattr(asset_views, "list_root_domains", lambda *_args, **_kw: ())
+    # Findings and the dashboard read the database too; render an empty org here.
+    no_findings = finding_views.FindingPage(items=(), page=1, pages=1, total=0)
+    monkeypatch.setattr(finding_views, "list_findings", lambda *_args, **_kw: no_findings)
+    monkeypatch.setattr(
+        finding_views,
+        "list_filter_options",
+        lambda *_args, **_kw: finding_views.FindingFilterOptions(roots=(), rules=()),
+    )
+    empty_dashboard = finding_views.DashboardData(
+        open_findings=0,
+        by_severity=(),
+        newest=(),
+        active_assets=0,
+        roots=(),
+    )
+    monkeypatch.setattr(finding_views, "get_dashboard", lambda *_args, **_kw: empty_dashboard)
+    monkeypatch.setattr(summary_views, "list_latest_root_summaries", lambda *_args, **_kw: ())
     default_settings = org_settings.OrgSettingsView(
         ai_enabled=True,
         provider=ProviderKind.ANTHROPIC,

@@ -492,7 +492,7 @@ from the secret at probe time, the same way the entrypoint does for the main pro
 ## Analysis sandbox (not deployed yet)
 
 Production runs none of the sandbox services: `sandbox-proxy`, `sandbox-launcher` and
-`worker-analysis` exist only in the dev `compose.yaml` (ADR 0029). Until #92 adds them, upload
+`worker-analysis` exist only in the dev `compose.yaml` (ADR 0031). Until #92 adds them, upload
 jobs stay queued. This is a checklist for that change, not steps to follow now:
 
 - register `runsc` (gVisor) in the VPS `/etc/docker/daemon.json`; prod refuses `runc`;

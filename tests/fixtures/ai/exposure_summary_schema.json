@@ -1,0 +1,110 @@
+{
+  "$defs": {
+    "KeyRisk": {
+      "additionalProperties": false,
+      "description": "One top risk citing a finding from the input.",
+      "properties": {
+        "finding_ref": {
+          "description": "The finding's reference exactly as given in the input, for example F1.",
+          "pattern": "^F[1-9][0-9]?$",
+          "title": "Finding Ref",
+          "type": "string"
+        },
+        "why": {
+          "description": "Why this finding matters to the security team, in one or two sentences.",
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Why",
+          "type": "string"
+        }
+      },
+      "required": [
+        "finding_ref",
+        "why"
+      ],
+      "title": "KeyRisk",
+      "type": "object"
+    },
+    "NotableAsset": {
+      "additionalProperties": false,
+      "description": "One host from the input that looks sensitive or worth checking first.",
+      "properties": {
+        "asset_ref": {
+          "description": "The asset's reference exactly as given in the input, for example A1.",
+          "pattern": "^A[1-9][0-9]{0,2}$",
+          "title": "Asset Ref",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why this host looks sensitive or worth inspecting first.",
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "asset_ref",
+        "reason"
+      ],
+      "title": "NotableAsset",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A short exposure summary for the scanned domain.",
+  "properties": {
+    "changes": {
+      "description": "What changed since the previous scan (new, fixed, or regressed findings and assets), or that nothing changed.",
+      "maxLength": 600,
+      "minLength": 1,
+      "title": "Changes",
+      "type": "string"
+    },
+    "headline": {
+      "description": "One short sentence capturing the domain's current exposure.",
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Headline",
+      "type": "string"
+    },
+    "key_risks": {
+      "description": "Up to five top risks, ranked most urgent first, each citing a finding from the input.",
+      "items": {
+        "$ref": "#/$defs/KeyRisk"
+      },
+      "maxItems": 5,
+      "title": "Key Risks",
+      "type": "array"
+    },
+    "next_actions": {
+      "description": "Concrete next steps for the security team, most urgent first.",
+      "items": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 5,
+      "title": "Next Actions",
+      "type": "array"
+    },
+    "notable_assets": {
+      "description": "Up to ten hosts from the input whose names suggest sensitive, internal, or legacy services (such as admin, jenkins, vpn, staging, or old).",
+      "items": {
+        "$ref": "#/$defs/NotableAsset"
+      },
+      "maxItems": 10,
+      "title": "Notable Assets",
+      "type": "array"
+    }
+  },
+  "required": [
+    "headline",
+    "key_risks",
+    "notable_assets",
+    "changes",
+    "next_actions"
+  ],
+  "title": "ExposureSummary",
+  "type": "object"
+}

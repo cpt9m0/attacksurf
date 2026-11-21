@@ -4,39 +4,24 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from celery.exceptions import Retry
 
 from attacksurf.domain.rules import RULES
 from attacksurf.domain.scanners import ScannerError
 from attacksurf.infra.events import dispatcher
 from attacksurf.infra.queue import CeleryTaskQueue
-from attacksurf.scanners.profiles import PROFILES
+from attacksurf.scanners.profiles import WORKER_PROFILES
 from attacksurf.scanners.registry import registry
-from attacksurf.services import jobs, org_settings, scan_diff, scans
+from attacksurf.services import jobs, scan_diff, scans
 from attacksurf.services.scanner_jobs import run_check
 from attacksurf.workers import runtime
 from attacksurf.workers.app import app
-from attacksurf.workers.base import TrackedTask
+from attacksurf.workers.base import ChordTask
 
 
-class PipelineTask(TrackedTask):
-    ignore_result = False  # required for Redis chords, including failed/skipped scanner receipts
+class PipelineTask(ChordTask):
+    """A scan pipeline stage: a failure that escapes it fails the scan."""
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        try:
-            return super().__call__(*args, **kwargs)
-        except Retry as exc:
-            # The backend stores retry exceptions too (e.g. a DB URL in a driver error).
-            safe = ScannerError(jobs.describe_error(exc.exc)) if exc.exc is not None else None
-            raise Retry(
-                exc=safe,
-                when=exc.when,
-                is_eager=getattr(exc, "is_eager", False),
-                sig=getattr(exc, "sig", None),
-            ) from None
-        except Exception as exc:
-            # ChordError embeds repr(exception), so sanitize before Celery sees the failure.
-            raise ScannerError(jobs.describe_error(exc)) from None
+    sanitized_error = ScannerError
 
     def on_failure(self, exc: Exception, task_id: str, args: Any, kwargs: Any, einfo: Any) -> None:
         super().on_failure(exc, task_id, args, kwargs, einfo)
@@ -67,7 +52,7 @@ def _dispatch(org_id: str, job_id: str) -> None:
             UUID(org_id),
             UUID(job_id),
             registry=registry,
-            profiles=PROFILES,
+            profiles=WORKER_PROFILES,
         )
 
 
@@ -83,7 +68,7 @@ def scan(self: PipelineTask, *, org_id: str, job_id: str) -> None:
             events=dispatcher,
             catalog=RULES,
             retry_allowed=self.request.retries < (self.max_retries or 0),
-            profiles=PROFILES,
+            profiles=WORKER_PROFILES,
         )
 
 
@@ -101,21 +86,17 @@ def diff(*, org_id: str, job_id: str) -> None:
 
 @app.task(base=PipelineTask, name="passive.triage")
 def triage(*, org_id: str, job_id: str) -> None:
-    """Check AI settings and monthly token budget (#24); actual AI triage belongs to #25."""
-    with runtime.session_factory()() as session:
-        org_settings.enforce_triage_budget(
-            session,
-            UUID(org_id),
-            UUID(job_id),
-            runtime.settings(),
-            resolver=runtime.dns_resolver(),
-        )
+    """No-op kept for one release: chains published before ADR 0029 still name this stage.
+
+    Triage now runs after the scan as `ai.triage`; completing this job lets `finalize` run.
+    Delete it once no chain from before that release can still be queued.
+    """
 
 
 @app.task(base=PipelineTask, name="passive.finalize")
 def finalize(*, org_id: str, job_id: str) -> None:
     with runtime.session_factory()() as session:
-        scans.finalize_scan(session, UUID(org_id), UUID(job_id), dispatcher)
+        scans.finalize_scan(session, CeleryTaskQueue(app), UUID(org_id), UUID(job_id), dispatcher)
 
 
 @app.task(base=PipelineTask, name="passive.fail_scan")

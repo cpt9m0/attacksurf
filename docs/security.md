@@ -23,6 +23,12 @@ their security data. Both make it a target. These rules apply to all code.
   only active check is one AXFR request per nameserver of a **verified** zone apex, and only the
   number of records in the first response is kept — zone content is never stored. RDAP is
   queried only for the scanned domain's registration, through IANA's bootstrap registry.
+- **Scheduled rescans (#27)** run only the internal `dns_scheduled` profile: read-only
+  `dns.resolve`, `dns.email` and `dns.dnssec` through ScopeGuard. There is no CT discovery, no
+  target HTTP, no zone transfer and no sandbox analysis, and resolution still obeys the same
+  per-root `MAX_DISCOVERED_ASSETS` cap as `dns_passive`. The profile is absent from the
+  user-selectable `PROFILES`, so neither the UI nor `/api/v1` can ask for it. Schedules are
+  tenant-scoped and only an org admin can change one.
 - **Out of scope, always:** exploitation, brute forcing, credential attacks, DoS, actually
   claiming takeover-able resources, and scanning of third-party targets.
 
@@ -42,7 +48,7 @@ their security data. Both make it a target. These rules apply to all code.
 | Uploaded binaries and mobile apps (#101) | same route gates as archives (body ceiling, CSRF, login, rate limit, encryption key); the upload must start with ELF, `MZ`, Mach-O, universal Mach-O or zip magic bytes (415 otherwise, before anything is stored or any asset exists); the app and workers never execute, emulate, parse, unpack or decrypt it: the web process only hashes it, and the asset value is that SHA-256, so no attacker-chosen text becomes an identifier; the file name is kept for display only (last path component, no control characters, 255 chars) and always rendered escaped; the stored artifact's digest must equal the hashed one or it is deleted; format detection (`sandbox_tools.detect`) runs only inside the sandbox, reads fixed-size headers and a zip's central directory (refused whole above 4 MiB or 50,000 entries, so no name is ever judged cut short), never decompresses entry data, never follows a symlink and prints only numbers and fixed words; a zip whose end record and directory disagree, or that is both an APK and an IPA, is rejected rather than guessed at; the org quota is checked before the asset is created. Known gaps: the leading-bytes gate lets through anything with a matching magic (a Java class file, any zip, a DOS program) and such an upload sits encrypted and unanalysed until it is purged; the `binary_static` scan stays queued until #101; the same file uploaded twice is stored twice (two artifacts, both counted against the quota); an upload that fails after the quota check (storage unavailable, digest mismatch, a concurrent upload taking the last of the quota) leaves its binary asset without an artifact, and for a re-upload the newer file name; zip entries with zip64 extra fields are accepted as long as the end record is not zip64 |
 | Information leaks in errors | error pages show static text only; 500s show the request ID, details go to logs |
 | Credentials in asset values | URL assets with `user:pass@` are rejected, never stored; error messages don't echo them |
-| Prompt injection via scan data | scan data is delimited and size-capped in prompts, output is schema-validated, AI cannot take actions |
+| Prompt injection via scan data | scan data enters prompts only through `ai/untrusted.scan_data_block`: one JSON document in `<scan_data>` tags with `<`, `>`, `&` and non-ASCII escaped (no value can close the block or hide invisible characters) and strings, collections and nesting capped; output is schema-validated (extra fields rejected); AI cannot take actions |
 | Secret leakage / forged sessions | env vars and connection URLs typed as `SecretStr` (masked in repr); `ENV=prod` refuses to start unless `SECRET_KEY` is ≥ 32 chars and not a placeholder such as `change-me`; org API keys are encrypted in the DB via `infra.crypto.SecretCipher` (AES-256-GCM under `APP_ENCRYPTION_KEY`, bound with `org_id` AAD, supporting decryption via `APP_ENCRYPTION_OLD_KEYS` for key rotation, with `api_key_last4` stored separately); settings errors never print the rejected value; structlog redacts secret-looking keys (`api_key`, `base_url`, URL credentials, `encryption_key`, `old_keys`, etc.); stored keys are never returned or rendered back in full |
 | Stored artifacts read from disk, a backup or the sandbox mount | every uploaded/fetched artifact is encrypted in chunks with AES-256-GCM under its own random key, which is wrapped by `APP_ENCRYPTION_KEY` (bound to org and artifact ID) and kept in the `artifacts` row, never on disk; a changed, truncated, reordered or swapped file fails authentication; deleting an artifact, or the asset/org it belongs to, removes that key, so a leftover file can't be decrypted; ciphertext lives in `ARTIFACT_STORE_ROOT`, which may not overlap the sandbox-mounted `SANDBOX_ARTIFACT_ROOT`; plaintext exists only while staged for one run (stale copies swept after 1 h); per-artifact size and per-org quota are enforced while reading; without the key storage refuses to store or read but still deletes; retention defaults to delete-after-analysis with a 24 h ceiling. Known gaps: `APP_ENCRYPTION_KEY` is not required at boot and artifact keys do not yet rotate via `APP_ENCRYPTION_OLD_KEYS` (org API keys do); prod runs `beat`/`worker-passive` (#174) so the purge runs there, while `worker-ai` is still missing; prod keeps ciphertext in the `artifact-store` volume, which has no backup yet (ADR 0028) |
 | Malicious archive *(extractor implemented, not wired to a run until #87)* | `sandbox_tools.extract` runs only inside the sandbox, never in a worker: its own loop over zip and tar(.gz/.bz2/.xz) entries (format by magic bytes) that never creates links and writes files `0600`, directories `0700`, so setuid/setgid/sticky bits don't survive; symlinks, hard links, device nodes and FIFOs are skipped with a reason in the manifest; absolute paths, `..`, NUL, backslash or undecodable names, duplicate paths (including a file under an earlier link or file), corrupt or truncated archives, a tar that doesn't end in zero blocks up to the end of its stream, a zip entry whose deflate stream ends before or after its declared size, a zip directory entry that carries data, old-GNU sparse tar members, zip local headers that differ from the central directory, encrypted zip entries and compression methods other than stored/deflate reject the whole artifact and remove what was written, because a partial tree would read as clean; caps (512 MiB total, 64 MiB per file, 100,000 entries counting files, skipped entries and every directory created, depth 32, 200 bytes written per archive byte) count bytes as they are written, never declared sizes, and for tar the same size budget (plus 4 KiB of header room per entry) covers every decompressed byte the parser reads, including members it skips; a zip entry is a directory only if its name ends in `/`, so a directory mode can't hide a file; any other parser failure is a rejection; nested archives stay files. Known gaps: zip data not listed in the central directory is ignored; a tar extension header is held in memory up to that size budget and a huge zip central directory has no cap, so the sandbox memory limit is what stops them (ADR 0017) |
@@ -83,7 +89,8 @@ still validate every address, and only those feed the pinned HTTP client. A scan
 lock so overlapping scans can't each claim the full allowance and a check on a discovered
 subdomain cannot claim a fresh one; a policy error fails only its job.
 
-Active/analysis queues remain reserved and cannot be selected in a scan profile; active checks
+The `active` queue remains reserved and cannot be selected in a scan profile, and a unit test
+keeps analysis scanners out of every profile until #92 (ADR 0031); active checks
 run only on assets whose root domain proved ownership by DNS TXT (ADR 0014). CT discovery's
 random-label wildcard probes use the same guarded DNS adapter and DNS budget; a wildcard marker
 (`Asset.details["wildcard"] = true`) is data for later resolution, never a finding or a claim
@@ -147,7 +154,7 @@ must confirm the artifact belongs to the org before asking. What it guarantees:
   only outside prod with `SANDBOX_ALLOW_RUNC=true`, and logs `sandbox_launcher_runc_fallback`. If
   the proxy can't be asked, it exits rather than retry. Dev Compose defaults to
   `SANDBOX_ALLOW_RUNC=true` (weaker isolation than `runsc`); prod refuses it.
-- **Dev topology (ADR 0029, prod has none yet).** Behind the opt-in `sandbox` profile, the
+- **Dev topology (ADR 0031, prod has none yet).** Behind the opt-in `sandbox` profile, the
   `sandbox` network is `internal` (no route outside; Postgres and Redis are not on it). Only
   `sandbox-proxy` mounts the Docker socket. The launcher and proxy read the process environment
   only, so no `.env`, database URL or encryption key reaches them. `worker-analysis` is on both
@@ -185,9 +192,25 @@ already registered (rate-limited); login never does.
 Only normalized findings (rule, severity, asset name, trimmed evidence) and aggregate stats.
 When an admin clicks "Test connection" on `/settings`, a minimal structured health-check probe
 (`{"ok": true}`) is sent with no tenant data. Never sent: credentials, API keys, raw uploads.
-Each AI feature documents its payload here as it is added. Orgs can disable AI or bring their own
+Each AI feature documents its payload here as it is added:
+
+- **Triage** (#25, ADR 0029, prompt `triage/v1`), one call per asset batch of at most 20
+  findings: the asset's name and type; per finding a batch-local reference (`F1`, `F2`, ...), the
+  rule ID, title, description, scanner severity and confidence, location, and up to 5 evidence
+  items, each string capped at 2,000 characters. All of it goes inside one escaped `<scan_data>`
+  block. Never sent: database IDs, org or user data, other assets' findings.
+- **Exposure summary** (#26, ADR 0030, prompt `summary/v1`), one call per completed scan after
+  triage: the root domain, aggregate scan change stats from `Scan.stats` (new, fixed, regressed,
+  and total finding counts by severity; new and disappeared asset counts and up to 25 names), up
+  to 25 active findings observed by this scan under batch-local refs (`F1`..`F25`, with rule ID,
+  title, scanner severity, asset name, and for non-stale triages the priority, adjusted severity,
+  false-positive likelihood, and rationale capped at 300 characters), and up to 200 active assets
+  under the scan's root (`A1`..`A200`, name and type). All of it goes inside one escaped
+  `<scan_data>` block. Never sent: raw evidence, database IDs, org or user data, other roots'
+  assets, or other organizations' data.
+ Orgs can disable AI or bring their own
 provider key; monthly UTC token budgets (`LLM_MONTHLY_INSTANCE_TOKEN_BUDGET` for the instance key
-and optional per-org caps) skip AI triage gracefully once reached.
+and optional per-org caps) skip AI triage and summaries gracefully once reached.
 
 What is stored about each call (`llm_usage`): provider, model, purpose, whose key paid, token
 counts, estimated cost, latency, and on failure the error's class name. Never the prompt, the

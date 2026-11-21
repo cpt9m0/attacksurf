@@ -40,3 +40,7 @@ class PipelineQueue(Protocol):
     ) -> None:
         """Publish a parallel group followed by a chain, after all job rows commit."""
         ...
+
+
+class AIQueue(TaskQueue, PipelineQueue, Protocol):
+    """Queue port for AI coordination: publishes both single tasks and triage workflows."""

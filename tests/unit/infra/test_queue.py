@@ -37,7 +37,7 @@ def test_task_name_prefix_is_the_queue(task_name: str, queue: str) -> None:
 
 
 def test_analysis_is_consumed_and_only_active_checks_stay_reserved() -> None:
-    # ADR 0029: the analysis queue opens before any analyzer exists; active checks stay closed.
+    # ADR 0031: the analysis queue opens before any analyzer exists; active checks stay closed.
     assert "analysis" in QUEUES
     assert RESERVED_QUEUES == ("active",)
 
@@ -147,6 +147,16 @@ def test_beat_schedules_the_artifact_purge_every_ten_minutes() -> None:
     assert entry["task"] == "passive.purge_expired_artifacts"
     assert entry["schedule"].minute == {0, 10, 20, 30, 40, 50}
     assert len(entry["schedule"].hour) == 24
+
+
+def test_beat_dispatches_recurring_scans_every_minute() -> None:
+    app = create_celery(make_settings(redis_url=SecretStr("redis://redis.test:6379/2")))
+
+    entry = app.conf.beat_schedule["enqueue-due-scans"]
+
+    assert entry["task"] == "passive.enqueue_due_scans"
+    assert entry["schedule"].minute == set(range(60))
+    assert entry["schedule"].hour == set(range(24))
 
 
 def test_every_beat_entry_names_a_registered_task_on_a_consumed_queue() -> None:

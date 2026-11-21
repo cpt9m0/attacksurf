@@ -99,7 +99,7 @@ services:
   # Consumes the `passive` queue: ownership checks, dns_passive scans, artifact purge (#174).
   # Without it every `passive.verify_ownership` job stays queued and the ownership card
   # polls forever. `worker-analysis` and the sandbox services stay out until the first analysis
-  # task (#92, ADR 0029).
+  # task (#92, ADR 0031).
   worker-passive:
     <<: *app
     command:

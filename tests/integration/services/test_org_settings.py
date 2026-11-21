@@ -783,7 +783,7 @@ def test_enforce_triage_budget_allows_valid_and_skips_errors(db_session: Session
     enc_settings = make_settings(app_encryption_key=SecretStr(APP_KEY_1))
     no_enc_settings = make_settings()
 
-    # Within budget returns True.
+    # Within budget returns the config the triage calls use.
     ok_job = jobs.create_job(
         db_session, queue, org_id=scan.org_id, scan_id=scan.id, stage="triage", task_name="t1"
     )
@@ -792,13 +792,15 @@ def test_enforce_triage_budget_allows_valid_and_skips_errors(db_session: Session
         llm_model="muse-spark-1.3",
         llm_monthly_instance_token_budget=1_000,
     )
-    assert enforce_triage_budget(db_session, scan.org_id, ok_job.id, inst_settings) is True
+    config = enforce_triage_budget(db_session, scan.org_id, ok_job.id, inst_settings)
+    assert config is not None
+    assert (config.model, config.source) == ("muse-spark-1.3", KeySource.INSTANCE)
 
     # Disabled AI skips triage with notice.
     disabled_job = jobs.create_job(
         db_session, queue, org_id=scan.org_id, scan_id=scan.id, stage="triage", task_name="t2"
     )
-    assert enforce_triage_budget(db_session, scan.org_id, disabled_job.id, no_enc_settings) is False
+    assert enforce_triage_budget(db_session, scan.org_id, disabled_job.id, no_enc_settings) is None
     disabled_row = db_session.get(Job, disabled_job.id)
     assert disabled_row is not None
     assert disabled_row.status is JobStatus.SKIPPED
@@ -819,7 +821,7 @@ def test_enforce_triage_budget_allows_valid_and_skips_errors(db_session: Session
     err_job = jobs.create_job(
         db_session, queue, org_id=scan.org_id, scan_id=scan.id, stage="triage", task_name="t3"
     )
-    assert enforce_triage_budget(db_session, scan.org_id, err_job.id, no_enc_settings) is False
+    assert enforce_triage_budget(db_session, scan.org_id, err_job.id, no_enc_settings) is None
     err_row = db_session.get(Job, err_job.id)
     assert err_row is not None
     assert err_row.status is JobStatus.SKIPPED

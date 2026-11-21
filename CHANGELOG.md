@@ -8,9 +8,43 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ### Added
 - Analysis worker and sandbox services in the dev stack (#84): `worker-analysis`,
   `sandbox-launcher` and `sandbox-proxy` run behind the opt-in Compose `sandbox` profile on an
-  internal network, the `analysis` queue is consumed from now on (ADR 0029), and an empty
+  internal network, the `analysis` queue is consumed from now on (ADR 0031), and an empty
   `sandbox-images.lock` ships in the image, so no analyzer can run yet. Prod runs none of it
   until #92.
+- AI exposure summary and notable assets (#26, ADR 0030): after triage finishes (or when a scan
+  has nothing new to triage), `ai.summarize` makes one LLM call with the versioned prompt
+  `summary/v1` using change stats, up to 25 observed findings (triaged first, no raw evidence)
+  and up to 200 active assets under the scan's root inside `<scan_data>`. `validate_summary`
+  maps batch-local refs (`F1`..`F25`, `A1`..`A200`) to real finding and asset UUIDs and drops
+  every unknown or duplicate ref before storing `StoredSummary` on `Scan.ai_summary`
+  (`0013_add_scan_ai_summary`). Flagged hosts receive the AI-owned `notable` tag on `Asset.tags`
+  under that root without disturbing other tags or roots. The scan page shows a polled
+  `#scan-summary` card (`ui.scan_summary`) and the dashboard shows a "Latest AI summary" card
+  per active root with its top 3 risks. Summary eval cases (`risky_scan`, `clean_scan`) run
+  alongside triage evals in `make eval`.
+- AI triage (#25, ADR 0029): after a scan completes, `ai.triage` runs one `ai.triage_batch`
+  job per asset (at most 20 findings, one LLM call each) with the versioned prompt
+  `triage/v1`. Each finding gets an adjusted severity, confidence, false-positive likelihood,
+  a P1 to P4 priority, rationale, exploitation notes and fix steps, stored in
+  `Finding.ai_triage` and shown in an AI panel on the finding page and a polled section on the
+  scan page. Scan data reaches the model only as escaped, capped JSON in `<scan_data>` with
+  batch-local refs; replies are schema-validated and unknown refs dropped; judgments are cached
+  by prompt version, model and everything the prompt shows about the finding (fingerprint,
+  evidence digest, scanner severity and confidence, title, description); the budget is checked
+  before every call; `LLM_TRIAGE_INCLUDE_INFO` opts `info` findings in. `make eval` runs the
+  eval set against the LLM in `.env`.
+- Recurring scans (#27): one per-root schedule (`0012_add_scan_schedules`), weekly by default
+  for new domains (`SCAN_DEFAULT_FREQUENCY`), a minute beat tick that claims due rows with
+  `FOR UPDATE SKIP LOCKED` and starts the read-only `dns_scheduled` profile through
+  `start_scan`, and an admin-only card on the root's overview to change or turn it off.
+- Findings UI (#22): a filterable, sortable findings list with bulk status actions and
+  CSV/JSON export that warns when the download cap is exceeded; a detail page with
+  escaped evidence (DNS records, HTTP snippets, raw JSON), remediation, references,
+  timeline and an AI-triage placeholder; accept-risk /
+  false-positive decisions that require a comment and are audited, plus reopen; a dashboard
+  with open findings by severity, the newest findings, the asset count and each root's last
+  scan; and `/api/v1/findings` list/detail/status/bulk endpoints. Status comments live in
+  the audit log, so no schema change was needed; scans keep owning `fixed`/`regressed`.
 - Production `worker-ai` consumes Settings connection tests from the `ai` queue, with a
   secret-aware targeted healthcheck that gates deployment (#24).
 - Organization AI settings, encrypted BYO API keys, SSRF-guarded custom `base_url`s, monthly UTC token budget enforcement, and monthly AI usage breakdown on `/settings` (`0011_add_org_settings`, `SecretCipher` with `APP_ENCRYPTION_OLD_KEYS` rotation, `validate_llm_base_url`, `services.org_settings`, `services.llm_usage.get_usage_summary`, `LLM_MONTHLY_INSTANCE_TOKEN_BUDGET`, `LLM_ALLOWED_BASE_HOSTS`, #24).
@@ -160,6 +194,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   service (#174).
 
 ### Fixed
+- Delayed AI exposure summaries retain their historical results without overwriting a newer
+  scan's `notable` asset tags: publication is serialized per root, and tag updates use the
+  dashboard's scan ordering (`created_at`, then `id`) (#26).
 - An LLM call that hits its deadline now ends its HTTP request too, instead of leaving it
   running in an abandoned thread: a server that kept trickling bytes could hold threads and
   connections open in a Celery worker indefinitely. Both providers build their SDK client on a
@@ -240,6 +277,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   silently.
 
 ### Changed
+- Scans complete before AI triage starts (#25, ADR 0029): the chain ends at `finalize`, which
+  queues the `ai.triage` job, so AI failures never fail a scan. `passive.triage` stays one
+  release as a no-op for chains queued before the deploy. AI jobs are left out of a scan's job
+  count, and `PipelineTask`'s chord-member behavior moved to `workers.base.ChordTask`.
 - The runtime image moves to Python 3.15 (`python:3.15-slim`) and CI also tests 3.15; this
   needs `pydantic` 2.14.1, whose pinned `pydantic-core` 2.50.1 ships CPython 3.15 wheels, and
   `grimp` 3.18 so `import-linter` installs on 3.15 (#154).

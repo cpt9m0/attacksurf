@@ -1,6 +1,7 @@
 """Scans and their jobs: one scan run per root asset, split into per-stage/per-scanner jobs."""
 
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
 
@@ -43,6 +44,15 @@ class ScanStatus(StrEnum):
 class ScanTrigger(StrEnum):
     USER = "user"
     SCHEDULE = "schedule"
+
+
+class ScheduleFrequency(StrEnum):
+    DAILY = "daily"
+    WEEKLY = "weekly"
+
+
+# "off" is a creation-time default only: a saved schedule is either daily or weekly.
+ScanScheduleDefault = Literal["off", "daily", "weekly"]
 
 
 class JobStatus(StrEnum):

@@ -1,0 +1,74 @@
+{#- The scan's AI exposure summary (ADR 0030). Runs after triage completes, so this section polls
+    itself (`hx-get` to `ui.scan_summary`) while the scan is active, for a minute after it
+    completes, while triage is running, and while `ai.summarize` is queued or running. Once done
+    (or skipped/failed), polling stops. Every value stays autoescaped: AI text can echo scan data. -#}
+{%- from "components/ai_panel.html" import ai_label -%}
+{%- from "components/badges.html" import severity_badge -%}
+<section class="card" id="scan-summary" aria-labelledby="scan-summary-title"
+         {%- if summary.active %} hx-get="{{ url_for('ui.scan_summary', scan_id=scan_id) }}"
+         hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML" hx-sync="this:replace"{% endif %}
+         aria-busy="{{ 'true' if summary.active else 'false' }}">
+  <div class="card-header">
+    <h2 class="card-title" id="scan-summary-title">AI exposure summary</h2>
+    {%- if summary.state == "pending" %} <span class="pill pill-active" role="status">Queued…</span>
+    {%- elif summary.state == "running" %} <span class="pill pill-active" role="status">Summarizing…</span>
+    {%- endif %}
+  </div>
+  <div class="card-body">
+    {%- if summary.state == "awaiting_scan" %}
+    <p class="muted" role="status">AI exposure summary starts once triage completes.</p>
+    {%- elif summary.state == "not_started" %}
+    <p class="muted">No AI exposure summary ran for this scan.</p>
+    {%- elif summary.notice %}
+    <p class="muted" role="status">{{ summary.notice }}</p>
+    {%- elif summary.summary %}
+    <div class="ai-summary">
+      {{ ai_label(summary.summary, summary.summary.generated_at) }}
+      <p class="ai-summary-headline">{{ summary.summary.headline }}</p>
+
+      {%- if summary.key_risks %}
+      <h3>Key risks</h3>
+      <ul class="ai-summary-list">
+        {%- for risk in summary.key_risks %}
+        <li>
+          <div class="ai-summary-item-head">
+            {{ severity_badge(risk.severity) }}
+            <a href="{{ url_for('ui.finding_detail', finding_id=risk.finding_id) }}">{{ risk.title }}</a>
+            <span class="muted mono">{{ risk.asset_value }}</span>
+          </div>
+          <p class="prose">{{ risk.why }}</p>
+        </li>
+        {%- endfor %}
+      </ul>
+      {%- endif %}
+
+      {%- if summary.notable_assets %}
+      <h3>Notable assets</h3>
+      <ul class="ai-summary-list">
+        {%- for asset in summary.notable_assets %}
+        <li>
+          <div class="ai-summary-item-head">
+            <a class="mono" href="{{ url_for('ui.asset_detail', asset_id=asset.asset_id) }}">{{ asset.value }}</a>
+            <span class="pill pill-neutral">notable</span>
+          </div>
+          <p class="prose">{{ asset.reason }}</p>
+        </li>
+        {%- endfor %}
+      </ul>
+      {%- endif %}
+
+      <h3>Changes since last scan</h3>
+      <p class="prose">{{ summary.summary.changes }}</p>
+
+      {%- if summary.summary.next_actions %}
+      <h3>Next actions</h3>
+      <ol class="ai-steps">
+        {%- for action in summary.summary.next_actions %}
+        <li>{{ action }}</li>
+        {%- endfor %}
+      </ol>
+      {%- endif %}
+    </div>
+    {%- endif %}
+  </div>
+</section>

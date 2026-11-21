@@ -49,6 +49,24 @@ def test_scan_quota_rejects_out_of_range(value: str) -> None:
         make_settings(scan_max_starts_per_hour=value)  # type: ignore[arg-type]
 
 
+def test_scan_schedule_setting_defaults_to_weekly() -> None:
+    assert make_settings().scan_default_frequency == "weekly"
+
+
+@pytest.mark.parametrize("raw", ["daily", "weekly", "off"])
+def test_scan_schedule_setting_reads_environment(clean_env: pytest.MonkeyPatch, raw: str) -> None:
+    clean_env.setenv("SCAN_DEFAULT_FREQUENCY", raw)
+
+    assert settings_from_env().scan_default_frequency == raw
+
+
+def test_scan_schedule_setting_rejects_an_unknown_frequency(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("SCAN_DEFAULT_FREQUENCY", "monthly")
+
+    with pytest.raises(ValidationError, match="scan_default_frequency"):
+        settings_from_env()
+
+
 def test_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
     clean_env.setenv("ENV", "prod")
     clean_env.setenv("SECRET_KEY", PROD_SECRET_KEY)
@@ -628,6 +646,16 @@ def test_llm_budget_accepts_zero_and_rejects_negative() -> None:
     assert make_settings(llm_monthly_instance_token_budget=0).llm_monthly_instance_token_budget == 0
     with pytest.raises(ValidationError):
         make_settings(llm_monthly_instance_token_budget=-1)
+
+
+def test_triage_skips_info_findings_by_default() -> None:
+    assert make_settings().llm_triage_include_info is False
+
+
+def test_triage_info_findings_can_be_switched_on(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("LLM_TRIAGE_INCLUDE_INFO", "true")
+
+    assert settings_from_env().llm_triage_include_info is True
 
 
 def test_malformed_old_encryption_key_is_rejected_without_echoing_it(

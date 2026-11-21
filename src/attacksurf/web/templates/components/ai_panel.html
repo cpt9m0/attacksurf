@@ -1,0 +1,61 @@
+{%- from "components/badges.html" import severity_badge -%}
+{%- from "components/time.html" import relative_time -%}
+
+{#- AI triage output (ADR 0029; DESIGN.md "AI panel"). Always labeled as AI-generated with its
+    model and prompt version, and shown beside the scanner's severity: the AI never changes a
+    finding. Every value stays autoescaped: model text can echo scan data. -#}
+{% set _priorities = {
+  "P1": ("P1 · act now", "bad"),
+  "P2": ("P2 · within days", "active"),
+  "P3": ("P3 · plan the fix", "neutral"),
+  "P4": ("P4 · when convenient", "neutral"),
+} %}
+
+{% macro priority_pill(priority) -%}
+{%- set label, tone = _priorities.get(priority, (priority, "neutral")) -%}
+<span class="pill pill-{{ tone }}">{{ label }}</span>
+{%- endmacro %}
+
+{% macro ai_label(item, at=None) -%}
+{%- set timestamp = at if at is not none else item.triaged_at -%}
+<p class="ai-label">AI-generated with <span class="mono">{{ item.model }}</span> and prompt
+  <span class="mono">{{ item.prompt_version }}</span>, {{ relative_time(timestamp) }}.
+  A person decides what to do with it.</p>
+{%- endmacro %}
+
+{#- A judgment whose finding changed since (`stale`) stays visible, marked outdated: the new
+    run that replaces it may be skipped or fail. -#}
+{% macro stale_marker() -%}
+<span class="ai-stale-tag">Outdated</span>
+{%- endmacro %}
+
+{% macro ai_triage_panel(triage, scanner_severity, stale=False) -%}
+<div class="ai-triage">
+  {{ ai_label(triage) }}
+  {%- if stale %}
+  <p class="ai-stale" role="note">{{ stale_marker() }} This finding's severity, wording or evidence
+    changed after this assessment. AI triage judges it again on its next run; until then, read
+    this one with care.</p>
+  {%- endif %}
+  <dl class="meta">
+    <div><dt>Priority</dt><dd>{{ priority_pill(triage.priority) }}</dd></div>
+    <div><dt>AI severity</dt><dd>{{ severity_badge(triage.adjusted_severity) }}
+      <span class="muted">scanner:</span> {{ severity_badge(scanner_severity) }}</dd></div>
+    <div><dt>False positive</dt><dd>{{ triage.false_positive_likelihood }} likelihood</dd></div>
+    <div><dt>AI confidence</dt><dd>{{ triage.confidence }}</dd></div>
+  </dl>
+  <p class="prose">{{ triage.rationale }}</p>
+  {%- if triage.exploitability %}
+  <h3>How it could be exploited</h3>
+  <p class="prose">{{ triage.exploitability }}</p>
+  {%- endif %}
+  {%- if triage.remediation_steps %}
+  <h3>Suggested fix</h3>
+  <ol class="ai-steps">
+    {%- for step in triage.remediation_steps %}
+    <li>{{ step }}</li>
+    {%- endfor %}
+  </ol>
+  {%- endif %}
+</div>
+{%- endmacro %}

@@ -29,6 +29,7 @@ x-app: &app
     LLM_MONTHLY_INSTANCE_TOKEN_BUDGET: ${LLM_MONTHLY_INSTANCE_TOKEN_BUDGET:-}
     LLM_ALLOWED_BASE_HOSTS: ${LLM_ALLOWED_BASE_HOSTS:-}
     SCAN_MAX_STARTS_PER_HOUR: ${SCAN_MAX_STARTS_PER_HOUR:-}
+    SCAN_DEFAULT_FREQUENCY: ${SCAN_DEFAULT_FREQUENCY:-weekly}
     # Unset (the default here): the workers refuse every sandbox request. Only `worker-analysis`
     # sets it, to the opt-in launcher; any other value is http://host[:port] only.
     SANDBOX_LAUNCHER_URL: ${SANDBOX_LAUNCHER_URL:-}
@@ -113,7 +114,7 @@ services:
     healthcheck:
       <<: *worker-health
       test: ["CMD-SHELL", "celery -A attacksurf.workers.app inspect ping -d ai@$$HOSTNAME --timeout 5"]
-  # Opt-in (`sandbox` profile). Consumes `analysis` (ADR 0029) and is the only app service that
+  # Opt-in (`sandbox` profile). Consumes `analysis` (ADR 0031) and is the only app service that
   # knows the launcher. Until #87/#101 register the analysis tasks, Celery drops the upload jobs
   # it receives and their rows stay `queued`.
   worker-analysis:

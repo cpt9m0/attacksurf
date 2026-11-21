@@ -1,6 +1,6 @@
 # 0016. Sandbox for code and binary analysis
 
-- Status: accepted; the reserved-queue consequence superseded by [0029](0029-open-analysis-queue-before-analyzers.md)
+- Status: accepted; the reserved-queue consequence superseded by [0031](0031-open-analysis-queue-before-analyzers.md)
 - Date: 2026-11-04
 
 The proxy's allowed calls are amended by [ADR 0023](0023-sandbox-runtime-check.md): one

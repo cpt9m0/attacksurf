@@ -12,8 +12,9 @@ from sqlalchemy.orm import Session
 from attacksurf.domain.accounts import Role
 from attacksurf.domain.assets import AssetSource, AssetType
 from attacksurf.domain.ids import uuid7
-from attacksurf.infra.db.models import Asset, Membership, User
+from attacksurf.infra.db.models import Asset, Membership, ScanSchedule, User
 from attacksurf.services.assets import record_asset
+from tests.helpers import make_settings
 
 _CSRF = re.compile(r'name="csrf_token" value="([^"]+)"')
 
@@ -126,6 +127,23 @@ def test_add_twice_is_a_conflict(alice: FlaskClient) -> None:
 
     assert response.status_code == 409
     assert response.get_json()["message"] == "example.com is already in your assets."
+
+
+def test_api_registration_applies_configured_schedule_default(
+    db_app: Flask, alice: FlaskClient, db_session: Session
+) -> None:
+    # `web.auth` stores the settings under this key; routes read them through `get_settings()`.
+    db_app.extensions["auth_settings"] = make_settings(scan_default_frequency="off")
+
+    created = _add(alice, "example.com")
+
+    asset = db_session.scalars(select(Asset).where(Asset.value == "example.com")).one()
+    assert str(asset.id) == created["id"]
+    schedule = db_session.scalars(
+        select(ScanSchedule).where(ScanSchedule.root_asset_id == asset.id)
+    ).one()
+    assert not schedule.enabled
+    assert schedule.next_run_at is None
 
 
 def test_add_without_csrf_token_is_rejected(alice: FlaskClient) -> None:
