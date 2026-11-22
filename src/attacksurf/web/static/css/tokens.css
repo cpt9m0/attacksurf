@@ -1,22 +1,28 @@
 /*
  * Design tokens (DESIGN.md §3). The ONLY place raw values live; app.css uses var(--…).
- * TODO(DESIGN.md): neutral, contrast-checked placeholders until the Claude Design pass.
- * Replace values here; names are the contract.
+ * All foreground/background pairs are verified ≥ 4.5:1 WCAG 2.2 AA in both themes
+ * (tests/unit/web/test_design_tokens.py).
  */
 :root {
   color-scheme: light;
 
-  --color-bg: #f6f7f9;
+  --color-bg: #f4f6f9;
   --color-surface: #ffffff;
-  --color-surface-2: #eef0f3;
-  --color-border: #d5d9e0;
-  --color-text: #1b1f27;
-  --color-text-muted: #545b68;
+  --color-surface-2: #edf0f5;
+  --color-surface-hover: #f8fafc;
+  --color-border: #d0d7e2;
+  --color-text: #111827;
+  --color-text-muted: #4b5563;
   --color-primary: #1d4ed8;
+  --color-primary-hover: #1e40af;
+  --color-primary-subtle: #eff6ff;
   --color-primary-contrast: #ffffff;
   --color-success: #166534;
   --color-warning: #92400e;
+  --color-warning-bg: #fffbeb;
   --color-danger: #b91c1c;
+  --color-danger-hover: #991b1b;
+  --color-danger-bg: #fef2f2;
 
   /* Severity: text (fg) on badge background (bg), ≥ 4.5:1 in both themes. */
   --sev-critical-fg: #991b1b;
@@ -28,7 +34,18 @@
   --sev-low-fg: #1e40af;
   --sev-low-bg: #dbeafe;
   --sev-info-fg: #334155;
-  --sev-info-bg: #f1f5f9;
+  --sev-info-bg: #e2e8f0;
+
+  /* Status pills: semantic tinted background + border + high-contrast label. */
+  --pill-good-fg: #166534;
+  --pill-good-bg: #dcfce7;
+  --pill-good-border: #86efac;
+  --pill-bad-fg: #991b1b;
+  --pill-bad-bg: #fee2e2;
+  --pill-bad-border: #fca5a5;
+  --pill-active-fg: #1e40af;
+  --pill-active-bg: #dbeafe;
+  --pill-active-border: #93c5fd;
 
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
@@ -60,24 +77,33 @@
   --focus-ring-width: 2px;
   --focus-ring-offset: 2px;
   --opacity-disabled: 0.6;
+  --transition-fast: 120ms ease;
 
   --line-height-body: 1.5;
   --line-height-heading: 1.25;
   --line-height-badge: 1.75;
-  --measure: 32rem; /* max line length for prose */
+  --measure: 36rem;
+  /* max line length for prose */
+  --progress-height: 0.5rem;
+  --evidence-max-height: 22rem;
 
   --icon-size: 1.1em;
   --icon-size-lg: 2.5rem;
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 6%);
-  --shadow-md: 0 4px 12px rgb(0 0 0 / 10%);
-  --color-backdrop: rgb(15 18 24 / 45%); /* behind modal dialogs */
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 6%), 0 1px 1px rgb(15 23 42 / 4%);
+  --shadow-md: 0 4px 12px rgb(15 23 42 / 12%), 0 2px 4px rgb(15 23 42 / 6%);
+  --color-backdrop: rgb(15 18 24 / 50%);
+  /* behind modal dialogs */
 
-  --nav-width: 13rem;
+  --nav-width: 13.5rem;
   --auth-card-width: 26rem;
-  --user-menu-min-width: 10rem; /* topbar: below this the user menu wraps to its own row */
-  --field-min-width: 18rem; /* inline forms: a field wraps below this */
-  --filter-min-width: 10rem; /* filter bar controls */
-  --meta-column-min-width: 12rem; /* detail page metadata grid */
+  --user-menu-min-width: 10rem;
+  /* topbar: below this the user menu wraps to its own row */
+  --field-min-width: 18rem;
+  /* inline forms: a field wraps below this */
+  --filter-min-width: 10rem;
+  /* filter bar controls */
+  --meta-column-min-width: 12rem;
+  /* detail page metadata grid */
   /* Mobile breakpoint: 48rem. CSS can't read custom properties in @media, so app.css repeats it. */
 }
 
@@ -85,17 +111,23 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --color-bg: #0f1218;
-  --color-surface: #171b23;
-  --color-surface-2: #1f2430;
-  --color-border: #2e3442;
-  --color-text: #e6e8ec;
-  --color-text-muted: #a3aab8;
-  --color-primary: #7aa2ff;
-  --color-primary-contrast: #0b1020;
+  --color-bg: #0b0e14;
+  --color-surface: #131822;
+  --color-surface-2: #1c2331;
+  --color-surface-hover: #181f2c;
+  --color-border: #2a3346;
+  --color-text: #f1f5f9;
+  --color-text-muted: #94a3b8;
+  --color-primary: #60a5fa;
+  --color-primary-hover: #93c5fd;
+  --color-primary-subtle: #172554;
+  --color-primary-contrast: #081020;
   --color-success: #4ade80;
   --color-warning: #fbbf24;
+  --color-warning-bg: #271705;
   --color-danger: #f87171;
+  --color-danger-hover: #fca5a5;
+  --color-danger-bg: #2d0a0a;
 
   --sev-critical-fg: #fecaca;
   --sev-critical-bg: #450a0a;
@@ -105,29 +137,45 @@
   --sev-medium-bg: #422006;
   --sev-low-fg: #bfdbfe;
   --sev-low-bg: #172554;
-  --sev-info-fg: #cbd5e1;
+  --sev-info-fg: #e2e8f0;
   --sev-info-bg: #1e293b;
 
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
-  --shadow-md: 0 4px 12px rgb(0 0 0 / 50%);
-  --color-backdrop: rgb(0 0 0 / 60%);
+  --pill-good-fg: #bbf7d0;
+  --pill-good-bg: #052e16;
+  --pill-good-border: #166534;
+  --pill-bad-fg: #fecaca;
+  --pill-bad-bg: #450a0a;
+  --pill-bad-border: #991b1b;
+  --pill-active-fg: #bfdbfe;
+  --pill-active-bg: #172554;
+  --pill-active-border: #1e40af;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 45%);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 60%);
+  --color-backdrop: rgb(0 0 0 / 65%);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
 
-    --color-bg: #0f1218;
-    --color-surface: #171b23;
-    --color-surface-2: #1f2430;
-    --color-border: #2e3442;
-    --color-text: #e6e8ec;
-    --color-text-muted: #a3aab8;
-    --color-primary: #7aa2ff;
-    --color-primary-contrast: #0b1020;
+    --color-bg: #0b0e14;
+    --color-surface: #131822;
+    --color-surface-2: #1c2331;
+    --color-surface-hover: #181f2c;
+    --color-border: #2a3346;
+    --color-text: #f1f5f9;
+    --color-text-muted: #94a3b8;
+    --color-primary: #60a5fa;
+    --color-primary-hover: #93c5fd;
+    --color-primary-subtle: #172554;
+    --color-primary-contrast: #081020;
     --color-success: #4ade80;
     --color-warning: #fbbf24;
+    --color-warning-bg: #271705;
     --color-danger: #f87171;
+    --color-danger-hover: #fca5a5;
+    --color-danger-bg: #2d0a0a;
 
     --sev-critical-fg: #fecaca;
     --sev-critical-bg: #450a0a;
@@ -137,11 +185,21 @@
     --sev-medium-bg: #422006;
     --sev-low-fg: #bfdbfe;
     --sev-low-bg: #172554;
-    --sev-info-fg: #cbd5e1;
+    --sev-info-fg: #e2e8f0;
     --sev-info-bg: #1e293b;
 
-    --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
-    --shadow-md: 0 4px 12px rgb(0 0 0 / 50%);
-    --color-backdrop: rgb(0 0 0 / 60%);
+    --pill-good-fg: #bbf7d0;
+    --pill-good-bg: #052e16;
+    --pill-good-border: #166534;
+    --pill-bad-fg: #fecaca;
+    --pill-bad-bg: #450a0a;
+    --pill-bad-border: #991b1b;
+    --pill-active-fg: #bfdbfe;
+    --pill-active-bg: #172554;
+    --pill-active-border: #1e40af;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 45%);
+    --shadow-md: 0 4px 12px rgb(0 0 0 / 60%);
+    --color-backdrop: rgb(0 0 0 / 65%);
   }
 }

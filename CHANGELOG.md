@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- All-page hermetic Playwright screenshot harness (`scripts/capture_screenshots.py`, `make screenshots`, `tests/e2e/web/ui_fixtures.py`) rendering 20 canonical UI screens/states across light & dark themes at desktop (`1440×900`) and mobile (`390×844`) viewports with an HTML gallery and overflow diagnostics, plus automated WCAG 2.2 AA contrast & dark-theme parity verification (`tests/unit/web/test_design_tokens.py`) and comprehensive UI/UX improvements:
+  - Upgraded `tokens.css` and `app.css` with contrast-verified light/dark surface hierarchy, semantic tinted status pills (`pill-good`, `pill-bad`, `pill-active`), interactive hover states, styled native `<progress>` and file inputs, card-aligned table margins, and `tabular-nums` metrics.
+  - Consolidated `/assets` intake forms (*Add a domain*, *Upload a codebase*, *Upload a binary or mobile app*) into a compact tabbed intake card (`Alpine.data("assetIntake")`, graceful no-JS fallback) to bring the asset inventory above the fold.
+  - Added primary CTA (`Add a domain`) to the Dashboard empty state, theme toggle and `shield-check` brand icon to signed-out auth pages, copy button (`Alpine.data("copyField")`) and scroll cap to Finding Detail evidence blocks, active sidebar nav highlighting on Scan Detail and Finding Detail, clickable finding links on the Asset Detail *Findings* tab, debounced live search and baseline alignment on the Findings *Asset* filter, and fixed `.card > .card-header`, `.field.field-check`, `.dns-chain`, and `.page-actions` layout issues.
 - Production deployment hardening, backups, optional Sentry, and GHCR releases (#29):
   - Hardened `compose.prod.yaml` with `read_only: true`, `cap_drop: [ALL]`, PID/CPU/memory
     limits, bounded `json-file` log rotation, `internal: true` network isolation for

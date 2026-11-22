@@ -104,8 +104,8 @@ class NavItem:
 NAV_ITEMS = (
     NavItem("ui.dashboard", "Dashboard", "layout-dashboard"),
     NavItem("ui.assets", "Assets", "globe", subpages=("ui.asset_detail",)),
-    NavItem("ui.scans", "Scans", "radar"),
-    NavItem("ui.findings", "Findings", "bug"),
+    NavItem("ui.scans", "Scans", "radar", subpages=("ui.scan_detail",)),
+    NavItem("ui.findings", "Findings", "bug", subpages=("ui.finding_detail",)),
     NavItem("ui.settings", "Settings", "settings"),
 )
 # Binary assets don't exist yet (#101), so they aren't offered as a filter.

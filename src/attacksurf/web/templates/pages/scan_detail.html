@@ -10,10 +10,10 @@
 <div class="page-header">
   <h1>Scan of <span class="mono">{{ scan.root_value }}</span></h1>
   <span id="scan-status">{{ parts.scan_status(scan) }}</span>
+  <div id="scan-actions">{{ parts.scan_actions(scan, detail.can_cancel) }}</div>
 </div>
 
 <div id="scan-meta">{{ parts.scan_meta(scan) }}</div>
-<div id="scan-actions">{{ parts.scan_actions(scan, detail.can_cancel) }}</div>
 
 {% include "pages/_scan_progress.html" %}
 {% include "pages/_scan_summary.html" %}

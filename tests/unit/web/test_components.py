@@ -161,6 +161,16 @@ def test_form_field_autofocus_is_opt_in(app: Flask) -> None:
     assert " autofocus" not in render(app, source, f=False)
 
 
+def test_form_field_placeholder_is_escaped(app: Flask) -> None:
+    source = (
+        '{% from "components/form.html" import form_field %}'
+        '{{ form_field("v", "V", placeholder=p) }}'
+    )
+
+    assert 'placeholder="Hostname &lt;x&gt;"' in render(app, source, p="Hostname <x>")
+    assert "placeholder=" not in render(app, source, p=None)
+
+
 def test_confirm_dialog_uses_registered_alpine_component_and_csrf(app: Flask) -> None:
     html = render(
         app,
