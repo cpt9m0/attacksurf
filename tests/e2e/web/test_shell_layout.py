@@ -14,7 +14,7 @@ from typing import Protocol
 
 import pytest
 from flask.testing import FlaskClient
-from playwright.sync_api import Browser, Error, Page, sync_playwright
+from playwright.sync_api import Browser, Error, Page, expect, sync_playwright
 
 from tests.e2e.web.conftest import LONG_EMAIL
 from tests.e2e.web.ui_fixtures import (
@@ -215,3 +215,30 @@ def test_scan_detail_card_headers_are_padded_and_nav_stays_highlighted(shell: Sh
     assert metrics["paddingLeft"] >= 16
     assert metrics["paddingTop"] >= 12
     assert metrics["activeNavHref"] == "/scans"
+
+
+def test_finding_detail_copy_button_copies_evidence_body(shell: Shell) -> None:
+    with patch_populated_ui():
+        page = shell(f"/findings/{FINDING_1_ID}", "light", width=WIDE_WIDTH)
+
+    page.evaluate(
+        """() => {
+            window.__copiedText = null;
+            Object.defineProperty(navigator, "clipboard", {
+                value: {
+                    writeText(text) {
+                        window.__copiedText = text;
+                        return Promise.resolve();
+                    },
+                },
+                configurable: true,
+            });
+        }"""
+    )
+    copy_btn = page.locator(".evidence").first.locator("button")
+    expected = page.locator(".evidence .evidence-body").first.inner_text()
+    copy_btn.click()
+
+    expect(copy_btn).to_have_attribute("aria-pressed", "true")
+    expect(copy_btn).to_have_text("Copied")
+    assert page.evaluate("() => window.__copiedText") == expected

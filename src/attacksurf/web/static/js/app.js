@@ -51,17 +51,17 @@ document.addEventListener("alpine:init", function () {
       },
       copy: function () {
         var self = this;
-          var source = this.$refs.value || this.$el.querySelector(".evidence-body");
-          if (!source || !navigator.clipboard) return;
-          navigator.clipboard.writeText(source.textContent).then(function () {
-            self.copied = true;
-            window.setTimeout(function () {
-              self.copied = false;
-            }, 2000);
-          });
-        },
+        var source = this.$refs.value || this.$root.querySelector(".evidence-body");
+        if (!source || !navigator.clipboard) return;
+        navigator.clipboard.writeText(source.textContent).then(function () {
+          self.copied = true;
+          window.setTimeout(function () {
+            self.copied = false;
+          }, 2000);
+        });
+      },
     };
-    });
+  });
 
   // pages/assets.html: tabbed intake card ("Add a domain" | "Upload a codebase" | "Upload a binary").
   // Without JS all three panels remain visible in the DOM.
