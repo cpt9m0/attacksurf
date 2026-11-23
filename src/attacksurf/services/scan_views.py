@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session, aliased
 
 from attacksurf.domain.findings import Severity
@@ -29,6 +29,10 @@ _POST_SCAN_STAGES = (*TRIAGE_STAGES, NOTIFY_STAGE)
 PAGE_SIZE = 25
 # Diff asset lists shown on the scan page; `total` always holds the real count.
 MAX_DIFF_ASSETS = 100
+# Job rows returned by `get_scan_detail`: keeps 1k-subdomain polls bounded while exact totals
+# still reflect every job via SQL aggregation.
+MAX_DETAIL_JOBS = 200
+_STAGE_JOBS = ("discover", "discovery", "checks", "persist", "diff", "finalize", "failure")
 _SEVERITIES = (
     Severity.CRITICAL,
     Severity.HIGH,
@@ -120,6 +124,7 @@ class ScanDetail:
     by_status: tuple[tuple[str, int], ...]
     can_cancel: bool
     diff: DiffSummary | None
+    jobs_truncated: bool = False
 
 
 def list_scans(session: Session, org_id: UUID, flt: ScanFilter, page: int = 1) -> ScanPage:
@@ -210,14 +215,36 @@ def get_scan_detail(session: Session, org_id: UUID, scan_id: UUID) -> ScanDetail
     if row is None:
         raise ScanNotFound(str(scan_id))
     scan, root_value = row
+    status_rows = session.execute(
+        scoped(Job, org_id)
+        .where(Job.scan_id == scan_id, Job.stage.not_in(_POST_SCAN_STAGES))
+        .with_only_columns(Job.status, func.count())
+        .group_by(Job.status)
+    ).all()
+    counts = {status: int(count) for status, count in status_rows}
+    jobs_total = sum(counts.values())
+    finished = sum(counts.get(status, 0) for status in job_lifecycle.FINISHED)
+    jobs_truncated = jobs_total > MAX_DETAIL_JOBS
+
     asset = aliased(Asset)
-    job_rows = session.execute(
+    job_query = (
         scoped(Job, org_id)
         .add_columns(asset.value)
         .outerjoin(asset, (asset.id == Job.asset_id) & (asset.org_id == org_id))
         .where(Job.scan_id == scan_id, Job.stage.not_in(_POST_SCAN_STAGES))
-        .order_by(Job.created_at, Job.id)
-    ).all()
+    )
+    if jobs_truncated:
+        priority = case(
+            (Job.status == JobStatus.FAILED, 0),
+            (Job.status == JobStatus.RUNNING, 1),
+            (Job.status == JobStatus.QUEUED, 2),
+            (Job.stage.in_(_STAGE_JOBS), 3),
+            else_=4,
+        )
+        job_query = job_query.order_by(priority, Job.created_at, Job.id).limit(MAX_DETAIL_JOBS)
+    else:
+        job_query = job_query.order_by(Job.created_at, Job.id)
+    job_rows = session.execute(job_query).all()
     jobs = tuple(
         JobRow(
             id=job.id,
@@ -233,18 +260,15 @@ def get_scan_detail(session: Session, org_id: UUID, scan_id: UUID) -> ScanDetail
         )
         for job, asset_value in job_rows
     )
-    counts: dict[JobStatus, int] = {}
-    for job in jobs:
-        counts[job.status] = counts.get(job.status, 0) + 1
-    finished = sum(counts.get(status, 0) for status in job_lifecycle.FINISHED)
     return ScanDetail(
-        scan=_scan_row(scan, root_value or "", finished, len(jobs)),
+        scan=_scan_row(scan, root_value or "", finished, jobs_total),
         jobs=jobs,
         jobs_finished=finished,
-        jobs_total=len(jobs),
+        jobs_total=jobs_total,
         by_status=tuple((status.value, counts.get(status, 0)) for status in JobStatus),
         can_cancel=scan.status not in TERMINAL,
         diff=parse_diff(scan.stats),
+        jobs_truncated=jobs_truncated,
     )
 
 

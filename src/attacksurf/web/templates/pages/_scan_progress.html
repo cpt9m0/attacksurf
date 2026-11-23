@@ -59,6 +59,9 @@
         </tbody>
       </table>
     </div>
+    {%- if detail.jobs_truncated %}
+    <p class="muted">Showing {{ detail.jobs | length }} of {{ detail.jobs_total }} jobs (failures, active jobs and pipeline stages first).</p>
+    {%- endif %}
     {%- endif %}
 
     {%- if detail.diff %}
