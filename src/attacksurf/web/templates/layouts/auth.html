@@ -1,15 +1,24 @@
 {#- Signed-out pages (login, signup): no app navigation. Same CSP rules as the shell. -#}
 {%- from "components/flash.html" import flash_messages -%}
+{%- from "components/icon.html" import icon -%}
 <!doctype html>
 <html lang="en">
+
 <head>
   {% include "layouts/_head.html" %}
   <title>{% block title %}{% endblock %} · attacksurf</title>
 </head>
+
 <body hx-headers='{{ {"X-CSRFToken": csrf_token()} | tojson }}'>
   <main class="auth-page" id="content">
+    <div class="auth-topbar">
+      <button type="button" class="btn btn-ghost theme-toggle" x-data="themeToggle" @click="toggle"
+        aria-label="Dark mode" aria-pressed="false" :aria-pressed="pressed">
+        <span class="icon-sun">{{ icon("sun") }}</span><span class="icon-moon">{{ icon("moon") }}</span>
+      </button>
+    </div>
     <div class="auth-card card">
-      <p class="brand">attacksurf</p>
+      <p class="brand">{{ icon("shield-check") }} attacksurf</p>
       {{ flash_messages() }}
       {% block content %}{% endblock %}
     </div>
@@ -18,4 +27,5 @@
     </footer>
   </main>
 </body>
+
 </html>

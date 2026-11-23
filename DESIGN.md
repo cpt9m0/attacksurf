@@ -1,10 +1,10 @@
 # DESIGN.md: attacksurf web UI design system
 
-> **Status: foundation built (#6), visual values are placeholders.** Structure, constraints and
-> token *names* are final. Token *values* live in `src/attacksurf/web/static/css/tokens.css` as
-> neutral, contrast-checked placeholders marked `TODO(DESIGN.md)`; the Claude Design pass replaces
-> them there (and in the tables below) without touching templates. Agents: follow what's defined,
-> don't invent new values; use existing tokens.
+> **Status: foundation + visual tokens implemented (#6).** Structure, constraints, token names
+> and WCAG 2.2 AA contrast-checked light/dark values live in
+> `src/attacksurf/web/static/css/tokens.css` (verified by
+> `tests/unit/web/test_design_tokens.py`). Agents: follow what's defined, don't invent new raw
+> values in `app.css`; use existing tokens.
 
 ## 1. Principles
 
@@ -36,23 +36,29 @@ Defined once as CSS custom properties on `:root`, overridden under `[data-theme=
 ### Color
 | Token | Purpose | Light | Dark |
 |---|---|---|---|
-| `--color-bg` | page background | TBD | TBD |
-| `--color-surface` | cards, tables | TBD | TBD |
-| `--color-border` | dividers | TBD | TBD |
-| `--color-text` | primary text | TBD | TBD |
-| `--color-text-muted` | secondary text | TBD | TBD |
-| `--color-primary` | actions, links, focus | TBD | TBD |
-| `--color-success` / `--color-warning` / `--color-danger` | status | TBD | TBD |
-| `--color-backdrop` | behind modal dialogs | TBD | TBD |
+| `--color-bg` | page background | `#f4f6f9` | `#0b0e14` |
+| `--color-surface` | cards, tables | `#ffffff` | `#131822` |
+| `--color-surface-2` | nested surfaces, table headers | `#edf0f5` | `#1c2331` |
+| `--color-surface-hover` | interactive row/card hover | `#f8fafc` | `#181f2c` |
+| `--color-border` | dividers | `#d0d7e2` | `#2a3346` |
+| `--color-text` | primary text | `#111827` | `#f1f5f9` |
+| `--color-text-muted` | secondary text | `#4b5563` | `#94a3b8` |
+| `--color-primary` / `--color-primary-hover` | actions, links, focus | `#1d4ed8` / `#1e40af` | `#60a5fa` / `#93c5fd` |
+| `--color-primary-subtle` | active nav / active bulk bar tint | `#eff6ff` | `#172554` |
+| `--color-success` / `--color-warning` / `--color-danger` | status | `#166534` / `#92400e` / `#b91c1c` | `#4ade80` / `#fbbf24` / `#f87171` |
+| `--pill-good-fg/-bg/-border` | positive status pill | `#166534` / `#dcfce7` / `#86efac` | `#bbf7d0` / `#052e16` / `#166534` |
+| `--pill-bad-fg/-bg/-border` | negative status pill | `#991b1b` / `#fee2e2` / `#fca5a5` | `#fecaca` / `#450a0a` / `#991b1b` |
+| `--pill-active-fg/-bg/-border` | in-flight status pill | `#1e40af` / `#dbeafe` / `#93c5fd` | `#bfdbfe` / `#172554` / `#1e40af` |
+| `--color-backdrop` | behind modal dialogs | `rgb(15 18 24 / 50%)` | `rgb(0 0 0 / 65%)` |
 
 ### Severity scale (core)
-| Token | Severity | Color | Icon/shape (non-color cue) |
+| Token | Severity | Color (Light fg / bg · Dark fg / bg) | Icon/shape (non-color cue) |
 |---|---|---|---|
-| `--sev-critical-fg/-bg` | critical | TBD (placeholder: red) | `octagon-alert` |
-| `--sev-high-fg/-bg` | high | TBD (placeholder: orange) | `triangle-alert` |
-| `--sev-medium-fg/-bg` | medium | TBD (placeholder: amber) | `circle-alert` |
-| `--sev-low-fg/-bg` | low | TBD (placeholder: blue) | `circle-arrow-down` |
-| `--sev-info-fg/-bg` | info | TBD (placeholder: slate) | `info` |
+| `--sev-critical-fg/-bg` | critical | `#991b1b` / `#fee2e2` · `#fecaca` / `#450a0a` | `octagon-alert` |
+| `--sev-high-fg/-bg` | high | `#9a3412` / `#ffedd5` · `#fed7aa` / `#431407` | `triangle-alert` |
+| `--sev-medium-fg/-bg` | medium | `#854d0e` / `#fef9c3` · `#fef08a` / `#422006` | `circle-alert` |
+| `--sev-low-fg/-bg` | low | `#1e40af` / `#dbeafe` · `#bfdbfe` / `#172554` | `circle-arrow-down` |
+| `--sev-info-fg/-bg` | info | `#334155` / `#e2e8f0` · `#e2e8f0` / `#1e293b` | `info` |
 
 All severity colors must reach 4.5:1 contrast for text on their badge background in both themes.
 
@@ -179,18 +185,18 @@ Specs (visuals) stay TBD.
 
 ## 8. Accessibility checklist
 
-- [ ] Contrast AA in both themes
-- [ ] Visible focus ring (`--color-primary`)
-- [ ] All interactive elements reachable by keyboard
-- [ ] HTMX updates announced (`aria-live` on status regions)
-- [ ] Tables have proper headers; icons have labels
+- [x] Contrast AA in both themes (`tests/unit/web/test_design_tokens.py`)
+- [x] Visible focus ring (`--color-primary`)
+- [x] All interactive elements reachable by keyboard
+- [x] HTMX updates announced (`aria-live` on status regions)
+- [x] Tables have proper headers; icons have labels
 
 ## 9. Open items (to complete with Claude Design)
 
 - [ ] Brand: logo, name lockup, favicon, social preview image
-- [ ] Color palette + severity scale (light/dark), contrast-verified
-- [ ] Typography and spacing scales
-- [ ] Component specs for the table above
+- [x] Color palette + severity scale (light/dark), contrast-verified
+- [x] Typography and spacing scales
+- [x] Component specs for the table above
 - [x] Key screens: dashboard, asset list/detail, scan progress, findings list/detail, settings
-  (scan progress, like the rest, has structure only; visual values are still placeholders)
+  (all screens rendered & regression-checked via `scripts/capture_screenshots.py` and `tests/e2e/web/`)
 - [x] Decide CSS approach (#6): plain CSS + tokens

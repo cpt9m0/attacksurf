@@ -14,9 +14,15 @@ from typing import Protocol
 
 import pytest
 from flask.testing import FlaskClient
-from playwright.sync_api import Browser, Error, Page, sync_playwright
+from playwright.sync_api import Browser, Error, Page, expect, sync_playwright
 
 from tests.e2e.web.conftest import LONG_EMAIL
+from tests.e2e.web.ui_fixtures import (
+    FINDING_1_ID,
+    ROOT_ID,
+    SCAN_DONE_ID,
+    patch_populated_ui,
+)
 
 pytestmark = [
     pytest.mark.web_e2e,
@@ -149,3 +155,90 @@ def test_mobile_nav_scrolls_inside_itself(shell: Shell) -> None:
 
     assert nav["scroll"] > nav["client"]  # the row is wider than the screen, by design
     assert nav["overflow"] == "auto"
+
+
+POPULATED_PATHS = (
+    "/",
+    "/assets",
+    f"/assets/{ROOT_ID}",
+    f"/assets/{ROOT_ID}?tab=findings",
+    "/scans",
+    f"/scans/{SCAN_DONE_ID}",
+    "/findings",
+    f"/findings/{FINDING_1_ID}",
+    "/settings",
+)
+
+
+@pytest.mark.parametrize("width", [PHONE_WIDTH, WIDE_WIDTH])
+@pytest.mark.parametrize("theme", THEMES)
+@pytest.mark.parametrize("path", POPULATED_PATHS)
+def test_populated_pages_fit_viewport_without_horizontal_overflow(
+    shell: Shell, path: str, theme: str, width: int
+) -> None:
+    with patch_populated_ui():
+        page = shell(path, theme, width=width)
+
+    scroll_width, inner_width = page.evaluate(
+        "() => [document.documentElement.scrollWidth, window.innerWidth]"
+    )
+    assert inner_width == width
+    assert scroll_width <= inner_width, (
+        f"{path} ({width}px, {theme}) overflowed at {scroll_width}px"
+    )
+
+
+def test_asset_detail_findings_tab_links_to_finding_detail(shell: Shell) -> None:
+    with patch_populated_ui():
+        page = shell(f"/assets/{ROOT_ID}?tab=findings", "light", width=WIDE_WIDTH)
+
+    href = page.locator("table.data tbody tr a").first.get_attribute("href")
+    assert href == f"/findings/{FINDING_1_ID}"
+
+
+def test_scan_detail_card_headers_are_padded_and_nav_stays_highlighted(shell: Shell) -> None:
+    with patch_populated_ui():
+        page = shell(f"/scans/{SCAN_DONE_ID}", "light", width=WIDE_WIDTH)
+
+    metrics = page.evaluate(
+        """() => {
+            const el = document.querySelector('#scan-progress > .card-header');
+            const header = getComputedStyle(el);
+            const activeNav = document.querySelector('.sidenav a[aria-current="true"]');
+            return {
+                paddingLeft: parseFloat(header.paddingLeft),
+                paddingTop: parseFloat(header.paddingTop),
+                activeNavHref: activeNav ? activeNav.getAttribute('href') : null,
+            };
+        }"""
+    )
+    assert metrics["paddingLeft"] >= 16
+    assert metrics["paddingTop"] >= 12
+    assert metrics["activeNavHref"] == "/scans"
+
+
+def test_finding_detail_copy_button_copies_evidence_body(shell: Shell) -> None:
+    with patch_populated_ui():
+        page = shell(f"/findings/{FINDING_1_ID}", "light", width=WIDE_WIDTH)
+
+    page.evaluate(
+        """() => {
+            window.__copiedText = null;
+            Object.defineProperty(navigator, "clipboard", {
+                value: {
+                    writeText(text) {
+                        window.__copiedText = text;
+                        return Promise.resolve();
+                    },
+                },
+                configurable: true,
+            });
+        }"""
+    )
+    copy_btn = page.locator(".evidence").first.locator("button")
+    expected = page.locator(".evidence .evidence-body").first.inner_text()
+    copy_btn.click()
+
+    expect(copy_btn).to_have_attribute("aria-pressed", "true")
+    expect(copy_btn).to_have_text("Copied")
+    assert page.evaluate("() => window.__copiedText") == expected

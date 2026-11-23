@@ -34,28 +34,72 @@ document.addEventListener("alpine:init", function () {
     };
   });
 
-  // components/verification.html: copy the TXT record into the owner's DNS provider. The
-  // Clipboard API needs a secure context; elsewhere the field stays selectable by hand.
-  // The template binds to these properties (no inline expressions, like themeToggle).
+  // components/verification.html and pages/finding_detail.html: copy a DNS TXT record or
+  // evidence block to the clipboard. The Clipboard API needs a secure context; elsewhere the
+  // code block stays selectable by hand.
   window.Alpine.data("copyField", function () {
     return {
       copied: false,
       get label() {
         return this.copied ? "Copied" : "Copy record";
       },
+      get evidenceLabel() {
+        return this.copied ? "Copied" : "Copy";
+      },
       get pressed() {
         return this.copied ? "true" : "false";
       },
       copy: function () {
         var self = this;
-        var text = this.$refs.value.textContent;
-        if (!navigator.clipboard) return;
-        navigator.clipboard.writeText(text).then(function () {
+        var source = this.$refs.value || this.$root.querySelector(".evidence-body");
+        if (!source || !navigator.clipboard) return;
+        navigator.clipboard.writeText(source.textContent).then(function () {
           self.copied = true;
           window.setTimeout(function () {
             self.copied = false;
           }, 2000);
         });
+      },
+    };
+  });
+
+  // pages/assets.html: tabbed intake card ("Add a domain" | "Upload a codebase" | "Upload a binary").
+  // Without JS all three panels remain visible in the DOM.
+  window.Alpine.data("assetIntake", function () {
+    return {
+      tab: "domain",
+      init: function () {
+        var initial = this.$el.dataset.initialTab;
+        if (initial === "repo" || initial === "binary" || initial === "domain") {
+          this.tab = initial;
+        }
+      },
+      get domainSelected() {
+        return this.tab === "domain" ? "true" : "false";
+      },
+      get repoSelected() {
+        return this.tab === "repo" ? "true" : "false";
+      },
+      get binarySelected() {
+        return this.tab === "binary" ? "true" : "false";
+      },
+      get domainHidden() {
+        return this.tab !== "domain";
+      },
+      get repoHidden() {
+        return this.tab !== "repo";
+      },
+      get binaryHidden() {
+        return this.tab !== "binary";
+      },
+      selectDomain: function () {
+        this.tab = "domain";
+      },
+      selectRepo: function () {
+        this.tab = "repo";
+      },
+      selectBinary: function () {
+        this.tab = "binary";
       },
     };
   });
@@ -133,6 +177,10 @@ document.addEventListener("change", function (event) {
       selected === 0
         ? "None selected"
         : selected + (selected === 1 ? " finding selected" : " findings selected");
+  }
+  var bar = form.querySelector(".bulk-bar");
+  if (bar) {
+    bar.setAttribute("data-has-selection", selected > 0 ? "true" : "false");
   }
   var all = form.querySelector("[data-bulk-all]");
   if (all) {

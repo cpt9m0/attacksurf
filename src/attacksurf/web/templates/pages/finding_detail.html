@@ -16,24 +16,56 @@
 </div>
 
 <dl class="meta card card-body">
-  <div><dt>Asset</dt><dd><a class="mono" href="{{ url_for('ui.asset_detail', asset_id=finding.asset_id) }}">{{ finding.asset_value }}</a></dd></div>
-  <div><dt>Root domain</dt><dd>
-    {%- if finding.root_id %}<a class="mono" href="{{ url_for('ui.asset_detail', asset_id=finding.root_id) }}">{{ finding.root_value }}</a>
-    {%- else %}<span class="mono">{{ finding.root_value }}</span>{% endif %}</dd></div>
-  <div><dt>Rule</dt><dd><code>{{ finding.rule_id }}</code></dd></div>
+  <div>
+    <dt>Asset</dt>
+    <dd><a class="mono" href="{{ url_for('ui.asset_detail', asset_id=finding.asset_id) }}">{{ finding.asset_value }}</a>
+    </dd>
+  </div>
+  <div>
+    <dt>Root domain</dt>
+    <dd>
+      {%- if finding.root_id %}<a class="mono" href="{{ url_for('ui.asset_detail', asset_id=finding.root_id) }}">{{
+        finding.root_value }}</a>
+      {%- else %}<span class="mono">{{ finding.root_value }}</span>{% endif %}</dd>
+  </div>
+  <div>
+    <dt>Rule</dt>
+    <dd><code>{{ finding.rule_id }}</code></dd>
+  </div>
   {%- if finding.location %}
-  <div><dt>Location</dt><dd class="mono">{{ finding.location }}</dd></div>
+  <div>
+    <dt>Location</dt>
+    <dd class="mono">{{ finding.location }}</dd>
+  </div>
   {%- endif %}
-  <div><dt>Confidence</dt><dd>{{ finding.confidence }}</dd></div>
+  <div>
+    <dt>Confidence</dt>
+    <dd>{{ finding.confidence }}</dd>
+  </div>
   {%- if finding.scanner %}
-  <div><dt>Scanner</dt><dd><code>{{ finding.scanner }}</code></dd></div>
+  <div>
+    <dt>Scanner</dt>
+    <dd><code>{{ finding.scanner }}</code></dd>
+  </div>
   {%- endif %}
-  <div><dt>First seen</dt><dd>{{ relative_time(finding.first_seen) }}</dd></div>
-  <div><dt>Last seen</dt><dd>{{ relative_time(finding.last_seen) }}</dd></div>
+  <div>
+    <dt>First seen</dt>
+    <dd>{{ relative_time(finding.first_seen) }}</dd>
+  </div>
+  <div>
+    <dt>Last seen</dt>
+    <dd>{{ relative_time(finding.last_seen) }}</dd>
+  </div>
   {%- if finding.fixed_at %}
-  <div><dt>Fixed</dt><dd>{{ relative_time(finding.fixed_at) }}</dd></div>
+  <div>
+    <dt>Fixed</dt>
+    <dd>{{ relative_time(finding.fixed_at) }}</dd>
+  </div>
   {%- endif %}
-  <div><dt>Observed in</dt><dd>{{ detail.observations }} scan{{ "" if detail.observations == 1 else "s" }}</dd></div>
+  <div>
+    <dt>Observed in</dt>
+    <dd>{{ detail.observations }} scan{{ "" if detail.observations == 1 else "s" }}</dd>
+  </div>
 </dl>
 
 <section class="card card-body" aria-labelledby="finding-description">
@@ -45,25 +77,41 @@
   <h2 id="finding-evidence">Evidence</h2>
   {%- if detail.evidence %}
   {%- if detail.evidence_total > detail.evidence | length %}
-  <p class="muted" role="status">Showing the most recent {{ detail.evidence | length }} of {{ detail.evidence_total }} evidence records.</p>
+  <p class="muted" role="status">Showing the most recent {{ detail.evidence | length }} of {{ detail.evidence_total }}
+    evidence records.</p>
   {%- endif %}
   {%- for item in detail.evidence %}
-  <article class="card card-body evidence" aria-label="{{ item.title }}">
-    <h3>{{ item.title }} <span class="muted">{{ relative_time(item.captured_at) }}</span></h3>
-    {%- if item.fields %}
-    <dl class="meta">
-      {%- for field in item.fields %}
-      <div><dt>{{ field.label }}</dt><dd class="mono">{{ field.value }}</dd></div>
-      {%- endfor %}
-    </dl>
+    <article class="card card-body evidence" aria-label="{{ item.title }}" {% if item.body %} x-data="copyField" {%
+      endif %}>
+      <div class="evidence-head">
+        <h3>{{ item.title }} <span class="muted">{{ relative_time(item.captured_at) }}</span></h3>
+        {%- if item.body %}
+        <button type="button" class="btn btn-secondary" @click="copy" aria-pressed="false" :aria-pressed="pressed">
+          <span x-text="evidenceLabel">Copy</span>
+        </button>
+        {%- endif %}
+      </div>
+      {%- if item.fields %}
+      <dl class="meta">
+        {%- for field in item.fields %}
+        <div>
+          <dt>{{ field.label }}</dt>
+          <dd class="mono">{{ field.value }}</dd>
+        </div>
+        {%- endfor %}
+      </dl>
+      {%- endif %}
+      {%- if item.body %}
+      <pre class="evidence-body">{{ item.body }}</pre>{% endif %}
+      {%- if item.truncated %}<p class="muted">Truncated for display; the full record is stored with the scan.</p>{%
+      endif %}
+    </article>
+    {%- endfor %}
+    {%- else %}
+    <div class="card card-body">
+      <p class="muted">No evidence was captured for this finding.</p>
+    </div>
     {%- endif %}
-    {%- if item.body %}<pre class="evidence-body">{{ item.body }}</pre>{% endif %}
-    {%- if item.truncated %}<p class="muted">Truncated for display; the full record is stored with the scan.</p>{% endif %}
-  </article>
-  {%- endfor %}
-  {%- else %}
-  <div class="card card-body"><p class="muted">No evidence was captured for this finding.</p></div>
-  {%- endif %}
 </section>
 
 {%- if detail.remediation %}
@@ -101,7 +149,8 @@
   <h2 id="finding-timeline">Timeline</h2>
   <ol class="timeline">
     <li><span class="muted">First seen</span> {{ relative_time(finding.first_seen) }}</li>
-    <li><span class="muted">Last observed</span> {{ relative_time(finding.last_seen) }}{% if finding.status == "regressed" %} <span class="muted">(came back after being fixed)</span>{% endif %}</li>
+    <li><span class="muted">Last observed</span> {{ relative_time(finding.last_seen) }}{% if finding.status ==
+      "regressed" %} <span class="muted">(came back after being fixed)</span>{% endif %}</li>
     {%- if finding.fixed_at %}
     <li><span class="muted">Fixed by a scan</span> {{ relative_time(finding.fixed_at) }}</li>
     {%- endif %}
@@ -117,7 +166,8 @@
 
 <section class="card card-body" aria-labelledby="finding-actions">
   <h2 id="finding-actions">Change status</h2>
-  <p class="muted">Scans mark findings fixed or regressed. Accepting risk or marking a false positive needs a comment and is recorded in the audit log.</p>
+  <p class="muted">Scans mark findings fixed or regressed. Accepting risk or marking a false positive needs a comment
+    and is recorded in the audit log.</p>
   <form method="post" action="{{ url_for('ui.change_finding_status', finding_id=finding.id) }}" class="form">
     {{ csrf_field() }}
     {{ select_field("status", "New status", status_options, "") }}

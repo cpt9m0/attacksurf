@@ -5,7 +5,9 @@
 {% from "components/time.html" import relative_time %}
 {% block title %}Scans{% endblock %}
 {% block content %}
-<h1>Scans</h1>
+<div class="page-header">
+  <h1>Scans</h1>
+</div>
 
 <section class="card card-body" aria-labelledby="start-scan-title">
   <h2 id="start-scan-title">Start a scan</h2>
@@ -25,10 +27,10 @@
 </section>
 
 {#- Filters swap only #scan-results (hx-select), so the selects keep focus; hx-push-url keeps
-    the view shareable. Plain GET without JS. -#}
-<form class="filters card card-body" method="get" action="{{ url_for('ui.scans') }}" role="search" aria-label="Filter scans"
-      hx-get="{{ url_for('ui.scans') }}" hx-trigger="change, submit" hx-target="#scan-results"
-      hx-select="#scan-results" hx-swap="outerHTML" hx-push-url="true" hx-sync="this:replace">
+the view shareable. Plain GET without JS. -#}
+<form class="filters card card-body" method="get" action="{{ url_for('ui.scans') }}" role="search"
+  aria-label="Filter scans" hx-get="{{ url_for('ui.scans') }}" hx-trigger="change, submit" hx-target="#scan-results"
+  hx-select="#scan-results" hx-swap="outerHTML" hx-push-url="true" hx-sync="this:replace">
   {{ select_field("root", "Root domain", root_options, flt.root_id or "") }}
   {{ select_field("status", "Status", status_options, flt.status or "") }}
   <button type="submit" class="btn btn-secondary">Apply</button>
@@ -36,29 +38,31 @@
 
 <div id="scan-results">
   <p class="results-summary" role="status">
-    {{ result.total }} scan{{ "" if result.total == 1 else "s" }}{% if filtered %} matching these filters · <a href="{{ url_for('ui.scans') }}">Clear filters</a>{% endif %}
+    {{ result.total }} scan{{ "" if result.total == 1 else "s" }}{% if filtered %} matching these filters · <a
+      href="{{ url_for('ui.scans') }}">Clear filters</a>{% endif %}
   </p>
   <div class="card">
     {%- if filtered %}
-      {%- set empty_title, empty_message = "No matching scans", "Try other filters, or clear them to see every scan." %}
+    {%- set empty_title, empty_message = "No matching scans", "Try other filters, or clear them to see every scan." %}
     {%- else %}
-      {%- set empty_title, empty_message = "No scans yet", "Start one above. Progress and results appear here." %}
+    {%- set empty_title, empty_message = "No scans yet", "Start one above. Progress and results appear here." %}
     {%- endif %}
-    {% call(row, key) data_table([("queued", "Queued"), ("root", "Root"), ("profile", "Profile"), ("status", "Status"), ("progress", "Progress"), ("finished", "Finished")],
-        result.items, "Scans", empty_title, empty_message) %}
-      {%- if key == "queued" -%}
-        <a href="{{ url_for('ui.scan_detail', scan_id=row.id) }}">{{ relative_time(row.created_at) }}</a>
-      {%- elif key == "root" -%}
-        <a class="mono" href="{{ url_for('ui.asset_detail', asset_id=row.root_asset_id) }}">{{ row.root_value }}</a>
-      {%- elif key == "profile" -%}
-        <code>{{ row.profile }}</code>
-      {%- elif key == "status" -%}
-        {{ status_pill(row.status) }}
-      {%- elif key == "progress" -%}
-        {{ row.jobs_finished }} of {{ row.jobs_total }} job{{ "" if row.jobs_total == 1 else "s" }}
-      {%- elif key == "finished" -%}
-        {{ relative_time(row.finished_at) }}
-      {%- endif -%}
+    {% call(row, key) data_table([("queued", "Queued"), ("root", "Root"), ("profile", "Profile"), ("status", "Status"),
+    ("progress", "Progress"), ("finished", "Finished")],
+    result.items, "Scans", empty_title, empty_message) %}
+    {%- if key == "queued" -%}
+    <a href="{{ url_for('ui.scan_detail', scan_id=row.id) }}">{{ relative_time(row.created_at) }}</a>
+    {%- elif key == "root" -%}
+    <a class="mono" href="{{ url_for('ui.asset_detail', asset_id=row.root_asset_id) }}">{{ row.root_value }}</a>
+    {%- elif key == "profile" -%}
+    <code>{{ row.profile }}</code>
+    {%- elif key == "status" -%}
+    {{ status_pill(row.status) }}
+    {%- elif key == "progress" -%}
+    {{ row.jobs_finished }} of {{ row.jobs_total }} job{{ "" if row.jobs_total == 1 else "s" }}
+    {%- elif key == "finished" -%}
+    {{ relative_time(row.finished_at) }}
+    {%- endif -%}
     {% endcall %}
   </div>
   {{ pagination(result.page, result.pages, "ui.scans", **filter_args) }}

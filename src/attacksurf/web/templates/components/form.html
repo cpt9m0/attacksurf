@@ -5,16 +5,15 @@
 {%- endmacro %}
 
 {#- autofocus: set on a re-rendered invalid field, so focus (and its error) lands there after a swap. -#}
-{% macro form_field(name, label, type="text", value="", error=none, hint=none, autocomplete=none, required=true, autofocus=false) -%}
+{% macro form_field(name, label, type="text", value="", error=none, hint=none, autocomplete=none, required=true,
+autofocus=false, placeholder=none) -%}
 {%- set described = (["f-" ~ name ~ "-hint"] if hint else []) + (["f-" ~ name ~ "-error"] if error else []) -%}
 <div class="field">
   <label for="f-{{ name }}">{{ label }}</label>
-  <input id="f-{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ value }}"
-         {%- if autocomplete %} autocomplete="{{ autocomplete }}"{% endif %}
-         {%- if required %} required{% endif %}
-         {%- if autofocus %} autofocus{% endif %}
-         {%- if described %} aria-describedby="{{ described | join(' ') }}"{% endif %}
-         {%- if error %} aria-invalid="true"{% endif %}>
+  <input id="f-{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ value }}" {%- if placeholder %}
+    placeholder="{{ placeholder }}" {% endif %} {%- if autocomplete %} autocomplete="{{ autocomplete }}" {% endif %} {%-
+    if required %} required{% endif %} {%- if autofocus %} autofocus{% endif %} {%- if described %}
+    aria-describedby="{{ described | join(' ') }}" {% endif %} {%- if error %} aria-invalid="true" {% endif %}>
   {%- if hint %}
   <p class="field-hint" id="f-{{ name }}-hint">{{ hint }}</p>
   {%- endif %}
@@ -25,15 +24,14 @@
 {%- endmacro %}
 
 {#- A file picker. No `value`: browsers ignore it, so a re-rendered form asks for the file again.
-    The form needs enctype="multipart/form-data" and, for HTMX, hx-encoding="multipart/form-data". -#}
+The form needs enctype="multipart/form-data" and, for HTMX, hx-encoding="multipart/form-data". -#}
 {% macro file_field(name, label, accept=none, error=none, hint=none) -%}
 {%- set described = (["f-" ~ name ~ "-hint"] if hint else []) + (["f-" ~ name ~ "-error"] if error else []) -%}
 <div class="field">
   <label for="f-{{ name }}">{{ label }}</label>
-  <input id="f-{{ name }}" name="{{ name }}" type="file" required
-         {%- if accept %} accept="{{ accept }}"{% endif %}
-         {%- if described %} aria-describedby="{{ described | join(' ') }}"{% endif %}
-         {%- if error %} aria-invalid="true"{% endif %}>
+  <input id="f-{{ name }}" name="{{ name }}" type="file" required {%- if accept %} accept="{{ accept }}" {% endif %} {%-
+    if described %} aria-describedby="{{ described | join(' ') }}" {% endif %} {%- if error %} aria-invalid="true" {%
+    endif %}>
   {%- if hint %}
   <p class="field-hint" id="f-{{ name }}-hint">{{ hint }}</p>
   {%- endif %}

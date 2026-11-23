@@ -7,19 +7,24 @@
 </div>
 
 {#- Filters swap only #finding-results (hx-select), so the inputs keep their state and focus;
-    hx-push-url keeps the view shareable and the plain GET form works without JS. #}
-<form class="filters card card-body" method="get" action="{{ url_for('ui.findings') }}" role="search" aria-label="Filter findings"
-      hx-get="{{ url_for('ui.findings') }}" hx-trigger="change, submit" hx-target="#finding-results"
-      hx-select="#finding-results" hx-swap="outerHTML" hx-push-url="true" hx-sync="this:replace">
+hx-push-url keeps the view shareable and the plain GET form works without JS. #}
+<form class="filters card card-body" method="get" action="{{ url_for('ui.findings') }}" role="search"
+  aria-label="Filter findings" hx-get="{{ url_for('ui.findings') }}" hx-trigger="change, submit"
+  hx-target="#finding-results" hx-select="#finding-results" hx-swap="outerHTML" hx-push-url="true"
+  hx-sync="this:replace">
   {{ select_field("severity", "Severity", severity_options, flt.severity or "") }}
   {{ select_field("status", "Status", status_options, flt.status) }}
   {{ select_field("root", "Root domain", root_options, flt.root_id or "") }}
   {{ select_field("rule", "Rule", rule_options, flt.rule_id or "") }}
-  {{ form_field("asset", "Asset", type="search", value=flt.asset or "", required=false,
-      autocomplete="off", hint="Part of a hostname or IP address.") }}
+  <div class="field">
+    <label for="f-asset">Asset</label>
+    <input id="f-asset" name="asset" type="search" value="{{ flt.asset or '' }}" placeholder="Hostname or IP…"
+      autocomplete="off" hx-get="{{ url_for('ui.findings') }}" hx-trigger="input changed delay:300ms, search"
+      hx-include="closest form">
+  </div>
   {{ select_field("sort", "Sort", sort_options, flt.sort) }}
   <div class="field field-check">
-    <input id="f-new" name="new" type="checkbox" value="1"{% if flt.new_since_last_scan %} checked{% endif %}>
+    <input id="f-new" name="new" type="checkbox" value="1" {% if flt.new_since_last_scan %} checked{% endif %}>
     <label for="f-new">New since last scan</label>
   </div>
   <button type="submit" class="btn btn-secondary">Apply</button>

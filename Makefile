@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose
 
-.PHONY: help up down logs ps build shell test test-worker eval check migrate revision deploy
+.PHONY: help up down logs ps build shell test test-worker eval check migrate revision deploy screenshots
 
 help: ## Show available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -42,6 +42,9 @@ eval: ## AI triage and summary eval sets against the LLM in .env (opt-in: a few 
 
 check: ## Run all git hooks (lint, format, layer rules, secrets) locally
 	uv run pre-commit run --all-files
+
+screenshots: ## Capture light/dark desktop & mobile UI screenshots into screenshots/latest
+	uv run python scripts/capture_screenshots.py --out screenshots/latest
 
 migrate: ## Apply database migrations (alembic upgrade head)
 	$(COMPOSE) run --rm web alembic upgrade head

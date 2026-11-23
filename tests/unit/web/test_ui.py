@@ -9,6 +9,7 @@ from flask.testing import FlaskClient
 import attacksurf.web
 from attacksurf.services import asset_views, scan_views
 from attacksurf.services.scan_views import ScanFilter
+from attacksurf.web import ui as web_ui
 from attacksurf.web.rendering import render_page
 
 STATIC = Path(attacksurf.web.__file__).parent / "static"
@@ -47,6 +48,14 @@ def test_current_nav_item_is_marked(auth_client: FlaskClient, path: str, title: 
 
     current = re.findall(r'<a href="([^"]+)" aria-current="page">', html)
     assert current == [path]
+
+
+def test_nav_items_include_detail_subpages() -> None:
+    by_endpoint = {item.endpoint: item.subpages for item in web_ui.NAV_ITEMS}
+
+    assert by_endpoint["ui.assets"] == ("ui.asset_detail",)
+    assert by_endpoint["ui.scans"] == ("ui.scan_detail",)
+    assert by_endpoint["ui.findings"] == ("ui.finding_detail",)
 
 
 def test_shell_links_to_source_code(auth_client: FlaskClient) -> None:
