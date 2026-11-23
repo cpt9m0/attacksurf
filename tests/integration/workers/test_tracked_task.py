@@ -214,3 +214,23 @@ def test_failure_logs_and_stores_no_exception_message(db_session: Session, job: 
     assert failed["error"] == "RuntimeError"
     assert "leaky" in failed["stack"]  # frames are kept for debugging
     assert _reload(db_session, job).error == "RuntimeError"
+
+
+@app.task(base=TrackedTask, name="passive.test_self_completing", mark_completed=False)
+def self_completing(*, org_id: str, job_id: str) -> None:
+    calls.append("run")
+
+
+def test_task_with_mark_completed_false_skips_completion_query(
+    db_session: Session, job: Job, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unexpected_complete(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("mark_job_completed should not run when mark_completed=False")
+
+    monkeypatch.setattr(jobs, "mark_job_completed", unexpected_complete)
+
+    result = self_completing.apply(kwargs=_ids(job))
+
+    assert result.successful()
+    assert calls == ["run"]
+    assert _reload(db_session, job).status == JobStatus.RUNNING

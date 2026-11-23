@@ -26,6 +26,7 @@ from attacksurf.domain.rules import RULES, Rule, get_rule
 from attacksurf.domain.scanners import (
     AssetObservation,
     AssetRef,
+    DiscoveredRelation,
     RawEvidence,
     RawFinding,
     ScanOutput,
@@ -33,7 +34,12 @@ from attacksurf.domain.scanners import (
 from attacksurf.domain.scans import ScanCancelled
 from attacksurf.infra.db.models import Asset, Evidence, Finding, FindingObservation, Scan
 from attacksurf.infra.db.tenancy import get_scoped, scoped
-from attacksurf.services.assets import record_asset, record_relation
+from attacksurf.services.assets import (
+    record_asset,
+    record_assets,
+    record_relation,
+    record_relations,
+)
 from attacksurf.services.scans import TERMINAL
 
 OBSERVED_AT = "observed_at"
@@ -97,24 +103,18 @@ def persist_scan_output(
     refs: dict[tuple[AssetType, str], UUID] = {root_ref: root.id}
     # The root exists independently of this output; `_usable` may link a subdomain's CNAME to it.
     written: set[tuple[AssetType, str]] = {root_ref}
-    for asset_type, value in _ordered_asset_refs(input_ref, root_ref, output.assets):
-        key = (asset_type, value)
-        if key == input_ref:
-            row = _lock_input(session, scan, asset_id)
-        else:
-            row = record_asset(
-                session,
-                scan.org_id,
-                asset_type,
-                value,
-                source=AssetSource.DISCOVERED,
-                parent_id=scan.root_asset_id,
-                seen_at=seen,
-                scan_id=scan.id,
-            )
-        written.add(key)
-        refs[key] = row.id
-        rows[key] = row
+    _persist_assets(
+        session,
+        scan,
+        asset_id=asset_id,
+        input_ref=input_ref,
+        root_ref=root_ref,
+        discovered=output.assets,
+        seen=seen,
+        written=written,
+        refs=refs,
+        rows=rows,
+    )
     asset = rows[input_ref]
     _apply_observations(
         output,
@@ -126,19 +126,16 @@ def persist_scan_output(
         scan_id=scan.id,
     )
     # The cap may have dropped a discovered name; links to it are skipped, never guessed.
-    for relation in output.relations:
-        if not _usable(relation.from_asset, written, input_ref, admitted):
-            continue
-        if not _usable(relation.to_asset, written, input_ref, admitted):
-            continue
-        record_relation(
-            session,
-            scan.org_id,
-            refs[(relation.from_asset.type, relation.from_asset.value)],
-            refs[(relation.to_asset.type, relation.to_asset.value)],
-            relation.kind,
-            seen_at=seen,
-        )
+    _persist_relations(
+        session,
+        scan,
+        output.relations,
+        written=written,
+        refs=refs,
+        input_ref=input_ref,
+        admitted=admitted,
+        seen=seen,
+    )
     _mark_wildcards(rows, output.wildcard_zones)
     events: list[FindingCreated | FindingReopened] = []
     for raw in output.findings:
@@ -154,6 +151,92 @@ def persist_scan_output(
             events.append(event)
         _upsert_evidence(session, scan, finding_id, raw, seen)
     return events
+
+
+def _persist_assets(
+    session: Session,
+    scan: Scan,
+    *,
+    asset_id: UUID,
+    input_ref: tuple[AssetType, str],
+    root_ref: tuple[AssetType, str],
+    discovered: tuple[AssetRef, ...],
+    seen: datetime,
+    written: set[tuple[AssetType, str]],
+    refs: dict[tuple[AssetType, str], UUID],
+    rows: dict[tuple[AssetType, str], Asset],
+) -> None:
+    def _register(row: Asset) -> None:
+        key = (row.type, row.value)
+        written.add(key)
+        refs[key] = row.id
+        rows[key] = row
+
+    def _record_run(run: tuple[tuple[AssetType, str], ...]) -> None:
+        if len(run) == 1:
+            asset_type, value = run[0]
+            _register(
+                record_asset(
+                    session,
+                    scan.org_id,
+                    asset_type,
+                    value,
+                    source=AssetSource.DISCOVERED,
+                    parent_id=scan.root_asset_id,
+                    seen_at=seen,
+                    scan_id=scan.id,
+                )
+            )
+            return
+        for row in record_assets(
+            session,
+            scan.org_id,
+            run,
+            source=AssetSource.DISCOVERED,
+            parent_id=scan.root_asset_id,
+            seen_at=seen,
+            scan_id=scan.id,
+        ):
+            _register(row)
+
+    ordered = _ordered_asset_refs(input_ref, root_ref, discovered)
+    input_pos = next((idx for idx, ref in enumerate(ordered) if ref == input_ref), None)
+    if input_pos is None:
+        if ordered:
+            _record_run(ordered)
+        return
+    if ordered[:input_pos]:
+        _record_run(ordered[:input_pos])
+    _register(_lock_input(session, scan, asset_id))
+    if ordered[input_pos + 1 :]:
+        _record_run(ordered[input_pos + 1 :])
+
+
+def _persist_relations(
+    session: Session,
+    scan: Scan,
+    relations: tuple[DiscoveredRelation, ...],
+    *,
+    written: set[tuple[AssetType, str]],
+    refs: dict[tuple[AssetType, str], UUID],
+    input_ref: tuple[AssetType, str],
+    admitted: set[tuple[AssetType, str]] | None,
+    seen: datetime,
+) -> None:
+    edges = [
+        (
+            refs[(relation.from_asset.type, relation.from_asset.value)],
+            refs[(relation.to_asset.type, relation.to_asset.value)],
+            relation.kind,
+        )
+        for relation in relations
+        if _usable(relation.from_asset, written, input_ref, admitted)
+        and _usable(relation.to_asset, written, input_ref, admitted)
+    ]
+    if len(edges) == 1:
+        record_relation(session, scan.org_id, *edges[0], seen_at=seen)
+    elif edges:
+        record_relations(session, scan.org_id, edges, seen_at=seen)
 
 
 def _finding_event(

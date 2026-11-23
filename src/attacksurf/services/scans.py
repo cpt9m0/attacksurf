@@ -1,6 +1,7 @@
 """Scan use cases and pipeline planning. Celery canvas stays behind PipelineQueue."""
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import timedelta
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from attacksurf.domain.assets import AssetNotFound, AssetType
 from attacksurf.domain.events import EventDispatcher, ScanCompleted
+from attacksurf.domain.ids import uuid7
 from attacksurf.domain.jobs import JobNotFound, JobTask, PipelineQueue, TaskQueue
 from attacksurf.domain.scanners import ScanProfile
 from attacksurf.domain.scans import (
@@ -257,10 +259,8 @@ def dispatch_stage(
         )
         .order_by(Asset.id)
     ).all()
-    header = tuple(
-        _task(
-            session,
-            scan,
+    header_specs = [
+        _PlannedJob(
             "discovery" if discovery else "check",
             f"{scanner.queue}.scan",
             scanner=name,
@@ -270,11 +270,14 @@ def dispatch_stage(
         for scanner in (registry.get(name),)
         for asset in targets
         if asset.type in scanner.asset_types
-    )
-    # AI triage is not scan work: `finalize_scan` queues it once the scan is complete.
+    ]
     stages = ("checks",) if discovery else ("persist", "diff", "finalize")
-    tail = tuple(_task(session, scan, stage, f"passive.{stage}") for stage in stages)
-    error = _task(session, scan, "failure", "passive.fail_scan")
+    tail_specs = [_PlannedJob(stage, f"passive.{stage}") for stage in stages]
+    error_spec = _PlannedJob("failure", "passive.fail_scan")
+    planned = _plan_tasks(session, scan, [*header_specs, *tail_specs, error_spec])
+    header = tuple(planned[: len(header_specs)])
+    tail = tuple(planned[len(header_specs) : len(header_specs) + len(tail_specs)])
+    error = planned[-1]
     scan_id = scan.id
     try:
         jobs.enqueue_workflow(session, queue, header, tail, error)
@@ -283,34 +286,48 @@ def dispatch_stage(
         raise
 
 
-def _task(
-    session: Session,
-    scan: Scan,
-    stage: str,
-    task_name: str,
-    *,
-    scanner: str | None = None,
-    asset_id: UUID | None = None,
-) -> JobTask:
+@dataclass(frozen=True)
+class _PlannedJob:
+    stage: str
+    task_name: str
+    scanner: str | None = None
+    asset_id: UUID | None = None
+
+
+def _plan_tasks(session: Session, scan: Scan, specs: Sequence[_PlannedJob]) -> list[JobTask]:
+    """Resolve or batch-create `Job` rows for `dispatch_stage` in two round-trips."""
     # dispatch_stage holds the scan lock: retries reuse rows instead of making new jobs.
-    row = session.scalars(
-        scoped(Job, scan.org_id).where(
-            Job.scan_id == scan.id,
-            Job.stage == stage,
-            Job.scanner == scanner,
-            Job.asset_id == asset_id,
+    stages = {spec.stage for spec in specs}
+    existing: dict[tuple[str, str | None, UUID | None], Job] = {
+        (row.stage, row.scanner, row.asset_id): row
+        for row in session.scalars(
+            scoped(Job, scan.org_id).where(Job.scan_id == scan.id, Job.stage.in_(stages))
         )
-    ).one_or_none()
-    if row is None:
-        row = jobs.record_job(
-            session,
-            org_id=scan.org_id,
-            scan_id=scan.id,
-            stage=stage,
-            scanner=scanner,
-            asset_id=asset_id,
-        )
-    return JobTask(task_name, scan.org_id, row.id)
+    }
+    created: list[Job] = []
+    rows: list[Job] = []
+    for spec in specs:
+        key = (spec.stage, spec.scanner, spec.asset_id)
+        row = existing.get(key)
+        if row is None:
+            row = Job(
+                id=uuid7(),
+                org_id=scan.org_id,
+                scan_id=scan.id,
+                stage=spec.stage,
+                scanner=spec.scanner,
+                asset_id=spec.asset_id,
+                status=JobStatus.QUEUED,
+            )
+            existing[key] = row
+            created.append(row)
+        rows.append(row)
+    if created:
+        session.add_all(created)
+        session.flush()
+    return [
+        JobTask(spec.task_name, scan.org_id, row.id) for spec, row in zip(specs, rows, strict=True)
+    ]
 
 
 def root_is_active(session: Session, org_id: UUID, scan: Scan) -> bool:

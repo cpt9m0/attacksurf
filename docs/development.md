@@ -241,6 +241,7 @@ To debug the launcher outside Docker, run `uv run python -m attacksurf.sandbox_l
 | Format | `uv run ruff format .` |
 | Type-check | `uv run pyright` |
 | All git hooks on all files | `uv run pre-commit run --all-files` |
+| Dependency audit (`pip-audit`) | `make audit` |
 | Layer rules (import-linter) | `uv run lint-imports` |
 | Add a dependency | `uv add <pkg>` (dev: `uv add --dev <pkg>`) |
 
@@ -267,7 +268,7 @@ AGENTS.md         rules for AI coding agents (CLAUDE.md imports it)
 | `git commit` | trailing whitespace/EOF/line endings, YAML/TOML/JSON syntax, merge markers, large files, private keys, **gitleaks** (secrets), **ruff** check + format, **import-linter** (layer rules) |
 | commit message | Conventional Commits check (`.github/scripts/check-commit-msg.sh`, same rules as PR titles) |
 | `git push` | **pyright**, **pytest** (80% coverage gate) |
-| CI on push to `main` / every PR | `lint` (pre-commit hooks + pyright), `test (3.12)`, `test (3.13)`, `test (3.15)` (with a Postgres service), `secrets` (gitleaks over full git history), `compose` (builds the prod image, checks it runs as non-root, starts the dev stack, curls `/healthz`, runs migrations), `pr-title` (also re-runs on title edits) |
+| CI on push to `main` / every PR | `lint` (pre-commit hooks + pyright), `test (3.12)`, `test (3.13)`, `test (3.15)` (with a Postgres service), `web-e2e` (Playwright Chromium layout + full-stack MVP E2E with Postgres), `audit` (`pip-audit` on locked dependencies), `secrets` (gitleaks over full git history), `compose` (builds the prod image, checks it runs as non-root, starts the dev stack, curls `/healthz`, runs migrations), `pr-title` (also re-runs on title edits) |
 
 Remote hooks and GitHub Actions are pinned to commit SHAs; Dependabot proposes updates. ruff,
 pyright and pytest versions come from `uv.lock`.
@@ -294,12 +295,13 @@ pyright and pytest versions come from `uv.lock`.
   still has CRLF files: with no uncommitted work, rewrite them once from Git Bash with
   `git ls-files -z | xargs -0 rm -f && git checkout -- .` (untracked files such as `.env` stay).
 - Layout: `tests/unit/`, `tests/integration/` (DB, Celery; fixtures `db_engine`, `db_session`),
-  `tests/e2e/` (against the running stack, e.g. `make test-worker`). Browser layout tests live in
-  `tests/e2e/web/` (marker `web_e2e`): they render the real pages to disk and measure them in
-  Chromium with no server and no database, so they run after
+  `tests/e2e/` (against the running stack, e.g. `make test-worker`, and full-stack Chromium E2E
+  `tests/e2e/test_mvp_e2e.py`). Browser tests live in `tests/e2e/web/` (hermetic layout checks
+  with no DB) and `tests/e2e/test_mvp_e2e.py` (full signup → verify → scan → AI triage →
+  rescan diff against Postgres, marker `web_e2e`). Run locally after
   `uv run playwright install chromium` with
-  `RUN_WEB_E2E=1 uv run pytest tests/e2e/web -m web_e2e --no-cov` (CI runs the same command in
-  the `web-e2e` job).
+  `RUN_WEB_E2E=1 TEST_DATABASE_URL=postgresql+psycopg://attacksurf:attacksurf@127.0.0.1:5432/attacksurf_test uv run pytest tests/e2e -m web_e2e --no-cov`
+  (CI runs the same command in the `web-e2e` job).
 - Celery tasks in tests: `task.apply(kwargs=...)` runs them in-process; patch
   `workers.runtime.session_factory` to share the test's connection
   (`tests/integration/workers/test_tracked_task.py`).

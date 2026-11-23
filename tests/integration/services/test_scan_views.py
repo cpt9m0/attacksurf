@@ -323,3 +323,29 @@ def test_parse_diff_caps_asset_lists_but_keeps_the_total() -> None:
     assert len(diff.new_assets.assets) == scan_views.MAX_DIFF_ASSETS
     assert diff.new_assets.total == scan_views.MAX_DIFF_ASSETS + 5
     assert diff.new_assets.truncated is True
+
+
+def test_get_scan_detail_caps_large_job_lists_with_exact_counts(db_session: Session) -> None:
+    root = make_scan(db_session)
+    _finish(db_session, root)
+    scan = _started(db_session, root)
+    total_checks = scan_views.MAX_DETAIL_JOBS + 10
+    for _ in range(total_checks):
+        _job(db_session, scan, "check", JobStatus.COMPLETED)
+    _job(db_session, scan, "check", JobStatus.FAILED)
+    _job(db_session, scan, "finalize", JobStatus.QUEUED, scanner=None)
+
+    detail = scan_views.get_scan_detail(db_session, scan.org_id, scan.id)
+
+    assert detail.jobs_truncated is True
+    assert len(detail.jobs) == scan_views.MAX_DETAIL_JOBS
+    # Exact counts reflect every job in SQL (kickoff + total_checks + failed + finalize).
+    assert detail.jobs_total == total_checks + 3
+    assert detail.jobs_finished == total_checks + 1
+    by_status = dict(detail.by_status)
+    assert by_status[JobStatus.COMPLETED.value] == total_checks
+    assert by_status[JobStatus.FAILED.value] == 1
+    assert by_status[JobStatus.QUEUED.value] == 2  # kickoff + finalize
+    # Priority ordering surfaces the failure, queued jobs, and stage jobs within the cap.
+    assert detail.jobs[0].status is JobStatus.FAILED
+    assert any(job.stage == "finalize" for job in detail.jobs)

@@ -12,7 +12,12 @@ from attacksurf.domain.assets import (
     RelationKind,
 )
 from attacksurf.infra.db.models import Asset, AssetRelation, Org
-from attacksurf.services.assets import record_asset, record_relation
+from attacksurf.services.assets import (
+    record_asset,
+    record_assets,
+    record_relation,
+    record_relations,
+)
 
 T0 = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 
@@ -361,3 +366,67 @@ def test_existence_check_takes_a_key_share_lock(db_session: Session, org: Org) -
 
     # FOR KEY SHARE locks don't conflict with each other, so concurrent scans don't serialize.
     assert any(s.rstrip().endswith("FOR KEY SHARE") for s in statements)
+
+
+def test_record_assets_batches_deduplicates_and_preserves_order(
+    db_session: Session, org: Org
+) -> None:
+    root = record_asset(
+        db_session, org.id, AssetType.DOMAIN, "example.com", source=AssetSource.USER, seen_at=T0
+    )
+
+    rows = record_assets(
+        db_session,
+        org.id,
+        [
+            (AssetType.SUBDOMAIN, "A.example.com"),
+            (AssetType.SUBDOMAIN, "a.example.com."),
+            (AssetType.SUBDOMAIN, "b.example.com"),
+        ],
+        source=AssetSource.DISCOVERED,
+        parent_id=root.id,
+        seen_at=T0,
+    )
+
+    assert [(row.value, row.parent_id) for row in rows] == [
+        ("a.example.com", root.id),
+        ("b.example.com", root.id),
+    ]
+    assert _count(db_session, Asset) == 3
+
+
+def test_record_relations_batches_deduplicates_and_rejects_foreign_assets(
+    db_session: Session, org: Org
+) -> None:
+    other = Org(name="globex", slug="globex")
+    db_session.add(other)
+    db_session.flush()
+    host = record_asset(
+        db_session, org.id, AssetType.SUBDOMAIN, "www.example.com", source=AssetSource.DISCOVERED
+    )
+    ip1 = record_asset(db_session, org.id, AssetType.IP, "192.0.2.1", source=AssetSource.DISCOVERED)
+    ip2 = record_asset(db_session, org.id, AssetType.IP, "192.0.2.2", source=AssetSource.DISCOVERED)
+    foreign = record_asset(
+        db_session, other.id, AssetType.IP, "192.0.2.99", source=AssetSource.DISCOVERED
+    )
+
+    edges = record_relations(
+        db_session,
+        org.id,
+        [
+            (host.id, ip1.id, RelationKind.RESOLVES_TO),
+            (host.id, ip1.id, RelationKind.RESOLVES_TO),
+            (host.id, ip2.id, RelationKind.RESOLVES_TO),
+        ],
+        seen_at=T0,
+    )
+
+    assert len(edges) == 2
+    assert _count(db_session, AssetRelation) == 2
+    with pytest.raises(AssetNotFound):
+        record_relations(
+            db_session,
+            org.id,
+            [(host.id, foreign.id, RelationKind.RESOLVES_TO)],
+            seen_at=T0,
+        )

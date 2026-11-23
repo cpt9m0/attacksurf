@@ -6,6 +6,7 @@
 
 from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import case, func, null, update
@@ -171,6 +172,9 @@ def _scannable_hostname(raw: str) -> str:
         raise InvalidAssetValue(str(exc)) from None
 
 
+_UPSERT_CHUNK_SIZE = 500
+
+
 def record_asset(
     session: Session,
     org_id: UUID,
@@ -192,28 +196,76 @@ def record_asset(
     Raises `InvalidAssetValue` for values that can't be normalized
     and `AssetNotFound` if `parent_id` isn't one of the org's assets.
     """
-    if parent_id is not None:
-        if source == AssetSource.USER:
-            raise InvalidAssetValue(
-                "User-added assets are roots; only discovered assets have a parent."
-            )
-        _lock_existing_assets(session, org_id, {parent_id})
-    seen = seen_at or datetime.now(UTC)
-    stmt = insert(Asset).values(
-        id=uuid7(),
-        org_id=org_id,
-        type=asset_type,
-        value=normalize_asset_value(asset_type, value),
+    return record_assets(
+        session,
+        org_id,
+        ((asset_type, value),),
         source=source,
         parent_id=parent_id,
-        first_seen=seen,
-        last_seen=seen,
-        first_seen_scan_id=scan_id,
-    )
+        seen_at=seen_at,
+        scan_id=scan_id,
+    )[0]
+
+
+def record_assets(
+    session: Session,
+    org_id: UUID,
+    assets: Sequence[tuple[AssetType, str]],
+    *,
+    source: AssetSource,
+    parent_id: UUID | None = None,
+    seen_at: datetime | None = None,
+    scan_id: UUID | None = None,
+) -> list[Asset]:
+    """Batch version of `record_asset` sharing one parent lock check and chunked upserts."""
+    if parent_id is not None and source == AssetSource.USER:
+        raise InvalidAssetValue(
+            "User-added assets are roots; only discovered assets have a parent."
+        )
+    if not assets:
+        return []
+    deduped: list[tuple[AssetType, str]] = []
+    seen_keys: set[tuple[AssetType, str]] = set()
+    for asset_type, value in assets:
+        normalized = normalize_asset_value(asset_type, value)
+        key = (asset_type, normalized)
+        if key not in seen_keys:
+            seen_keys.add(key)
+            deduped.append(key)
+    if parent_id is not None:
+        _lock_existing_assets(session, org_id, {parent_id})
+    seen = seen_at or datetime.now(UTC)
+    rows_out: list[Asset] = []
+    for start in range(0, len(deduped), _UPSERT_CHUNK_SIZE):
+        chunk = deduped[start : start + _UPSERT_CHUNK_SIZE]
+        values = [
+            {
+                "id": uuid7(),
+                "org_id": org_id,
+                "type": asset_type,
+                "value": normalized,
+                "source": source,
+                "parent_id": parent_id,
+                "first_seen": seen,
+                "last_seen": seen,
+                "first_seen_scan_id": scan_id,
+            }
+            for asset_type, normalized in chunk
+        ]
+        rows_out.extend(
+            session.scalars(
+                _asset_upsert_stmt(values), execution_options={"populate_existing": True}
+            ).all()
+        )
+    return rows_out
+
+
+def _asset_upsert_stmt(values: list[dict[str, Any]]) -> Any:
+    stmt = insert(Asset).values(values)
     new = stmt.excluded
     # Only a sighting after the scan that found it gone reactivates it; delayed older results don't.
     reactivate = Asset.deactivated_at.is_(None) | (new.last_seen > Asset.deactivated_at)
-    stmt = stmt.on_conflict_do_update(
+    return stmt.on_conflict_do_update(
         index_elements=[Asset.org_id, Asset.type, Asset.value],
         set_={
             # greatest/least: results processed out of order never move the window backwards.
@@ -230,10 +282,7 @@ def record_asset(
             "parent_id": case((new.source == AssetSource.USER, null()), else_=Asset.parent_id),
             "updated_at": func.now(),
         },
-    )
-    return session.scalars(
-        stmt.returning(Asset), execution_options={"populate_existing": True}
-    ).one()
+    ).returning(Asset)
 
 
 def record_relation(
@@ -249,35 +298,71 @@ def record_relation(
 
     Raises `AssetNotFound` unless both endpoints are the org's assets.
     """
-    if from_asset_id == to_asset_id:
-        raise InvalidAssetValue("An asset can't be related to itself.")
-    _lock_existing_assets(session, org_id, {from_asset_id, to_asset_id})
+    return record_relations(
+        session, org_id, ((from_asset_id, to_asset_id, kind),), seen_at=seen_at
+    )[0]
+
+
+def record_relations(
+    session: Session,
+    org_id: UUID,
+    edges: Sequence[tuple[UUID, UUID, RelationKind]],
+    *,
+    seen_at: datetime | None = None,
+) -> list[AssetRelation]:
+    """Batch version of `record_relation` sharing one endpoint lock and chunked upserts."""
+    if not edges:
+        return []
+    deduped: list[tuple[UUID, UUID, RelationKind]] = []
+    seen_keys: set[tuple[UUID, UUID, RelationKind]] = set()
+    endpoints: set[UUID] = set()
+    for from_asset_id, to_asset_id, kind in edges:
+        if from_asset_id == to_asset_id:
+            raise InvalidAssetValue("An asset can't be related to itself.")
+        key = (from_asset_id, to_asset_id, kind)
+        if key not in seen_keys:
+            seen_keys.add(key)
+            deduped.append(key)
+            endpoints.add(from_asset_id)
+            endpoints.add(to_asset_id)
+    _lock_existing_assets(session, org_id, endpoints)
     seen = seen_at or datetime.now(UTC)
-    stmt = insert(AssetRelation).values(
-        id=uuid7(),
-        org_id=org_id,
-        from_asset_id=from_asset_id,
-        to_asset_id=to_asset_id,
-        kind=kind,
-        first_seen=seen,
-        last_seen=seen,
-    )
-    new = stmt.excluded
-    stmt = stmt.on_conflict_do_update(
-        index_elements=[
-            AssetRelation.org_id,
-            AssetRelation.from_asset_id,
-            AssetRelation.to_asset_id,
-            AssetRelation.kind,
-        ],
-        set_={
-            "last_seen": func.greatest(AssetRelation.last_seen, new.last_seen),
-            "first_seen": func.least(AssetRelation.first_seen, new.first_seen),
-        },
-    )
-    return session.scalars(
-        stmt.returning(AssetRelation), execution_options={"populate_existing": True}
-    ).one()
+    rows_out: list[AssetRelation] = []
+    for start in range(0, len(deduped), _UPSERT_CHUNK_SIZE):
+        chunk = deduped[start : start + _UPSERT_CHUNK_SIZE]
+        stmt = insert(AssetRelation).values(
+            [
+                {
+                    "id": uuid7(),
+                    "org_id": org_id,
+                    "from_asset_id": from_asset_id,
+                    "to_asset_id": to_asset_id,
+                    "kind": kind,
+                    "first_seen": seen,
+                    "last_seen": seen,
+                }
+                for from_asset_id, to_asset_id, kind in chunk
+            ]
+        )
+        new = stmt.excluded
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[
+                AssetRelation.org_id,
+                AssetRelation.from_asset_id,
+                AssetRelation.to_asset_id,
+                AssetRelation.kind,
+            ],
+            set_={
+                "last_seen": func.greatest(AssetRelation.last_seen, new.last_seen),
+                "first_seen": func.least(AssetRelation.first_seen, new.first_seen),
+            },
+        )
+        rows_out.extend(
+            session.scalars(
+                stmt.returning(AssetRelation), execution_options={"populate_existing": True}
+            ).all()
+        )
+    return rows_out
 
 
 def _lock_existing_assets(session: Session, org_id: UUID, ids: Collection[UUID]) -> None:

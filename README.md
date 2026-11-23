@@ -15,15 +15,16 @@ and let AI explain what matters, self-hosted and free.
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/cpt9m0?label=Sponsor&logo=GitHub)](https://github.com/sponsors/cpt9m0)
 
-[Features](#features) · [Quick start](#quick-start) · [Roadmap](#roadmap) · [Contributing](#contributing) · [Sponsor](#sponsor-attacksurf)
+[Features](#features) · [Architecture](#how-it-works) · [Quick start](#quick-start) · [Docs](docs/README.md) · [Roadmap](#roadmap) · [Contributing](#contributing) · [Sponsor](#sponsor-attacksurf)
 
 </div>
 
 ---
 
-> **Status: early development.** The MVP (DNS attack surface monitoring with AI triage) is being
-> built in the open. Follow the [roadmap epic](https://github.com/cpt9m0/attacksurf/issues/31),
-> star the repo to get updates, or [pick an issue](https://github.com/cpt9m0/attacksurf/issues).
+> **v0.1.0 MVP:** External DNS attack surface monitoring with CT subdomain discovery, DNS
+> hygiene and takeover checks, AI triage and exposure summaries, scheduled rescans, and email
+> digests. Follow the [roadmap epic](https://github.com/cpt9m0/attacksurf/issues/31) or
+> [pick an issue](https://github.com/cpt9m0/attacksurf/issues).
 
 ## What is attacksurf?
 
@@ -77,11 +78,13 @@ Website scanning (TLS, headers, exposed files, outdated software) ·
 Codebase scanning (secrets, SAST, vulnerable dependencies) · Binary and mobile app analysis ·
 IP / VPS exposure (open ports, service CVEs)
 
-## Getting started
+## Quick start
 
-> The app is pre-MVP; this runs the development skeleton.
+**Self-hosting in production:** deploy prebuilt GHCR images or build from source behind Caddy or
+Cloudflare Tunnel — see the [self-hosting guide](docs/self-hosting.md) and
+[deployment runbook](docs/deployment.md).
 
-**With Docker (recommended):** web app + PostgreSQL + Redis in one command.
+**With Docker (local dev):** web app + PostgreSQL + Redis + Mailpit in one command.
 
 ```bash
 git clone https://github.com/cpt9m0/attacksurf.git
@@ -111,23 +114,43 @@ Contributors: also run `uv run pre-commit install` (see [CONTRIBUTING.md](CONTRI
 
 ## How it works
 
+```mermaid
+flowchart LR
+    User["User / Browser (HTMX)"] --> Web["Web App (Flask)"]
+    Web -->|enqueue| Redis["Redis Broker"]
+    Beat["Celery Beat (schedules, reverify)"] -->|enqueue| Redis
+    Redis --> Passive["worker-passive (DNS / CT / RDAP / Digest)"]
+    Redis --> AI["worker-ai (Triage & Summary)"]
+    Passive -->|ScopeGuard| Net["Internet (Public DNS, CT, RDAP, Verified Targets)"]
+    AI -->|"<scan_data> only"| LLM["LLM Provider (Anthropic / OpenAI-compat)"]
+    Web <--> DB[("PostgreSQL 18")]
+    Passive --> DB
+    AI --> DB
 ```
- Add domain ─► Discover (CT logs, DNS) ─► Check (takeover, email, DNSSEC, ...) ─► Diff vs last scan ─► AI triage & summary ─► Alert
+
+```
+ Add domain ─► Discover (CT logs, DNS) ─► Check (takeover, email, DNSSEC, ...) ─► Diff vs last scan ─► AI triage & summary ─► Email digest
 ```
 
 Flask + HTMX web app, Celery workers, PostgreSQL, Redis. Each check is a small plugin, so
-**adding a new check is a great first contribution**. Details: [architecture](docs/architecture.md).
+**adding a new check is a great first contribution**.
+
+- [Architecture overview](docs/architecture.md)
+- [Scanners & rule catalog (25 rules)](docs/scanners.md)
+- [Writing a scanner plugin](docs/writing-a-scanner.md)
+- [Self-hosting guide](docs/self-hosting.md)
+- [Security model](docs/security.md) & [Responsible use policy](docs/responsible-use.md)
 
 ## Roadmap
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 | Foundation: tooling, DB, auth, UI shell | 🚧 in progress |
-| 2 | Scan engine: plugins, pipeline, ScopeGuard | ✅ built |
-| 3 | DNS module | 🚧 in progress |
-| 4 | AI triage and summaries | planned |
-| 5 | Scheduling, alerts, deployment → **v0.1.0** | planned |
-| next | Website ([#66](https://github.com/cpt9m0/attacksurf/issues/66)), codebase ([#67](https://github.com/cpt9m0/attacksurf/issues/67)), binary ([#68](https://github.com/cpt9m0/attacksurf/issues/68)), IP scanning | planned |
+| 1 | Foundation: tooling, DB, auth, UI shell | ✅ v0.1.0 |
+| 2 | Scan engine: plugins, pipeline, ScopeGuard | ✅ v0.1.0 |
+| 3 | DNS module (CT discovery, resolution, email, takeover, DNSSEC/NS/MX/CAA/RDAP/AXFR) | ✅ v0.1.0 |
+| 4 | AI triage and exposure summaries | ✅ v0.1.0 |
+| 5 | Scheduling, email digests, prod hardening → **v0.1.0** | ✅ v0.1.0 |
+| next | Website ([#66](https://github.com/cpt9m0/attacksurf/issues/66)), codebase ([#67](https://github.com/cpt9m0/attacksurf/issues/67)), binary ([#68](https://github.com/cpt9m0/attacksurf/issues/68)), IP scanning | 🚧 in progress |
 
 Full plan: [epic #31](https://github.com/cpt9m0/attacksurf/issues/31).
 
@@ -159,7 +182,8 @@ Companies: sponsoring gets your logo here. See [docs/sponsors.md](docs/sponsors.
 
 attacksurf is a **defensive** tool. Only scan assets you own or are authorized to assess. Active
 checks require proof of domain ownership, and the project will not add exploitation, brute-force,
-or DoS features. See the [security model](docs/security.md).
+or DoS features. See the [responsible-use policy](docs/responsible-use.md) and
+[security model](docs/security.md).
 
 Found a vulnerability in attacksurf itself? Please report it privately: [SECURITY.md](SECURITY.md).
 

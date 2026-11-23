@@ -33,6 +33,9 @@ class TrackedTask(Task):
     retry_jitter = True
     soft_time_limit = 300  # SoftTimeLimitExceeded inside the task -> job failed
     time_limit = 330
+    # Tasks that atomically commit their own terminal Job row (e.g. passive.scan) set False
+    # so TrackedTask skips a redundant post-run `SELECT ... FOR UPDATE` transaction.
+    mark_completed: bool = True
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         ids = _job_ids(kwargs)
@@ -63,13 +66,14 @@ class TrackedTask(Task):
                 raise self.retry(exc=exc, countdown=self._backoff()) from exc
             log.info("job started")
             result = super().__call__(*args, **kwargs)
-            try:
-                with self._session() as session:
-                    jobs.mark_job_completed(session, org_id, job_id)
-            except DB_UNAVAILABLE as exc:
-                raise self.retry(
-                    exc=exc, countdown=self._backoff()
-                ) from exc  # tasks are idempotent
+            if self.mark_completed:
+                try:
+                    with self._session() as session:
+                        jobs.mark_job_completed(session, org_id, job_id)
+                except DB_UNAVAILABLE as exc:
+                    raise self.retry(
+                        exc=exc, countdown=self._backoff()
+                    ) from exc  # tasks are idempotent
             log.info("job completed")
             return result
         finally:

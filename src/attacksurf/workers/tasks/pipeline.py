@@ -56,7 +56,7 @@ def _dispatch(org_id: str, job_id: str) -> None:
         )
 
 
-@app.task(bind=True, base=PipelineTask, name="passive.scan")
+@app.task(bind=True, base=PipelineTask, name="passive.scan", mark_completed=False)
 def scan(self: PipelineTask, *, org_id: str, job_id: str) -> None:
     with runtime.session_factory()() as session:
         run_check(

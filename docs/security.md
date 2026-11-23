@@ -5,6 +5,8 @@ their security data. Both make it a target. These rules apply to all code.
 
 ## Responsible use
 
+See the full [Responsible Use Policy and Terms](responsible-use.md). In short:
+
 - **Passive checks** (public DNS, read-only authoritative SOA/DNSKEY probes, Certificate
   Transparency, RDAP) may run on any registered domain.
 - **Active checks** (zone transfer now; port/web probing later) run **only on assets whose

@@ -298,7 +298,11 @@ def _defer_retry(
         return
     session.execute(
         update(Artifact)
-        .where(Artifact.id == artifact_id, Artifact.deleted_at.is_(None))
+        .where(
+            Artifact.org_id == org_id,
+            Artifact.id == artifact_id,
+            Artifact.deleted_at.is_(None),
+        )
         .values(
             delete_after=retry_at or attempted_deadline + timedelta(seconds=PURGE_RETRY_SECONDS)
         )
