@@ -25,15 +25,31 @@ findings, and LLM API keys stay on infrastructure you control.
 
 ## 3. Configure Secrets and Environment
 
-Clone the repository and create your environment configuration:
+Clone the repository first:
 
 ```bash
 git clone https://github.com/cpt9m0/attacksurf.git
 cd attacksurf
-cp .env.example .env
 ```
 
-Generate strong random keys (never reuse example values):
+- **For local evaluation (`compose.yaml`):** copy `.env.example` to `.env`, set secrets as needed,
+  and run `make up`.
+- **For production (`compose.prod.yaml`):** `compose.prod.yaml` does **not** load `.env`. It
+  requires `./deploy/attacksurf.env` (for app settings, templated from
+  `deploy/attacksurf.env.example`) plus Docker secret files in `${SECRETS_DIR:-/etc/attacksurf}`
+  (`tunnel.token`, `postgres_password`, `redis_password`). Complete
+  [Cloudflare setup](deployment.md#cloudflare-setup-once) and the host secret provisioning steps in
+  [Host setup](deployment.md#host-setup-once) before starting the stack, then create and link the
+  production env file:
+
+```bash
+sudo install -d -m 750 -g "$(id -gn)" /etc/attacksurf
+sudo install -m 640 -g "$(id -gn)" deploy/attacksurf.env.example /etc/attacksurf/attacksurf.env
+ln -s /etc/attacksurf/attacksurf.env deploy/attacksurf.env
+```
+
+Generate strong random keys and put them in `/etc/attacksurf/attacksurf.env` (never reuse example
+values):
 
 ```bash
 # Session signing key (>= 32 chars required in prod)
@@ -43,7 +59,8 @@ python3 -c 'import secrets; print("SECRET_KEY=" + secrets.token_urlsafe(48))'
 python3 -c 'import base64, secrets; print("APP_ENCRYPTION_KEY=" + base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("="))'
 ```
 
-Review the key settings in `.env` (or `/etc/attacksurf/attacksurf.env` for systemd/prod):
+Review the key settings in `/etc/attacksurf/attacksurf.env` (symlinked at
+`deploy/attacksurf.env`):
 
 | Variable | Recommended value | Notes |
 |---|---|---|
@@ -71,8 +88,12 @@ Set `SMTP_HOST`, `SMTP_PORT` (`587`), `SMTP_TLS` (`starttls`), `SMTP_USER`, `SMT
 
 ## 4. Deploy with Prebuilt Release Images
 
-Using the official multi-arch images (`linux/amd64`, `linux/arm64`) published to GitHub Container
-Registry (`v0.1.0` tag → `:0.1.0`, without the `v` prefix):
+Once `/etc/attacksurf/{tunnel.token,postgres_password,redis_password}` and the
+`deploy/attacksurf.env` symlink from Section 3 (and
+[Host setup](deployment.md#host-setup-once)) are in place — and if you want `www` → apex
+redirects for your own hostname, after updating the host rule in `deploy/Caddyfile` — pull the
+official multi-arch images (`linux/amd64`, `linux/arm64`) published to GitHub Container Registry
+(`v0.1.0` tag → `:0.1.0`, without the `v` prefix):
 
 ```bash
 export WEB_IMAGE=ghcr.io/cpt9m0/attacksurf:0.1.0
