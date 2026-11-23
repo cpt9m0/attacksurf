@@ -5,7 +5,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-22
+
+First public alpha release (MVP): AI-powered attack surface management with passive and verified-active DNS discovery/checks, finding lifecycle and rescan diffing, AI triage and exposure summaries, recurring schedules, email digests, and single-VPS Docker deployment.
+
 ### Added
+- MVP acceptance, security hardening, and documentation (#30):
+  - Full-stack Chromium Playwright E2E test (`tests/e2e/test_mvp_e2e.py`) exercising signup, domain intake, DNS TXT ownership verification, passive + verified-active scan, AI triage and exposure summary, false-positive suppression with required comment, and DNS mutation rescan diff against PostgreSQL.
+  - Exhaustive route security test matrix (`tests/integration/web/test_route_security.py`) verifying auth, CSRF, admin role checks, cross-tenant isolation, and encrypted-key non-disclosure across every registered endpoint, plus template CSP/autoescape and `Settings`-only config AST checks (`tests/unit/web/test_security.py`) and tenant-scoped `artifacts._defer_retry`.
+  - Supply-chain CVE auditing (`make audit` and CI `audit` job with `pip-audit==2.10.1`) and dependency lockfile upgrades (`dnspython`, `filelock`, `opentelemetry-api`, `virtualenv`).
+  - Scale & scan-detail improvements for ~1k-subdomain scans (`tests/integration/workers/test_scale_1k.py`): batched job planning in `services.scans.dispatch_stage`, `MAX_DETAIL_JOBS = 200` job list cap with exact SQL status counts in `services.scan_views`, and `mark_completed = False` on `passive.scan`.
+  - Overview & Mermaid diagrams in `README.md` and `docs/architecture.md`, cataloged scanners/rules (`docs/scanners.md`), plugin guide (`docs/writing-a-scanner.md`), `docs/self-hosting.md`, `docs/responsible-use.md`, and doc-sync verification (`tests/unit/scanners/test_docs_sync.py`).
 - All-page hermetic Playwright screenshot harness (`scripts/capture_screenshots.py`, `make screenshots`, `tests/e2e/web/ui_fixtures.py`) rendering 20 canonical UI screens/states across light & dark themes at desktop (`1440×900`) and mobile (`390×844`) viewports with an HTML gallery and overflow diagnostics, plus automated WCAG 2.2 AA contrast & dark-theme parity verification (`tests/unit/web/test_design_tokens.py`) and comprehensive UI/UX improvements:
   - Upgraded `tokens.css` and `app.css` with contrast-verified light/dark surface hierarchy, semantic tinted status pills (`pill-good`, `pill-bad`, `pill-active`), interactive hover states, styled native `<progress>` and file inputs, card-aligned table margins, and `tabular-nums` metrics.
   - Consolidated `/assets` intake forms (*Add a domain*, *Upload a codebase*, *Upload a binary or mobile app*) into a compact tabbed intake card (`Alpine.data("assetIntake")`, graceful no-JS fallback) to bring the asset inventory above the fold.

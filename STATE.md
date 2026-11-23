@@ -2,39 +2,24 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-22 · **Branch:** `ui-ux-improve` · **Task:** All-page screenshot harness & UI/UX improvement pass
+**Updated:** 2026-11-22 · **Branch:** `30-mvp-acceptance` · **Task:** MVP acceptance: end-to-end test, security review, docs & `v0.1.0` prep (#30)
 
 ## Status
-Completed the hermetic all-page Playwright screenshot capture harness (`scripts/capture_screenshots.py`,
-`make screenshots`, `tests/e2e/web/ui_fixtures.py`) covering 20 screens/states across light & dark
-themes at desktop (`1440×900`) and mobile (`390×844`), visually reviewed all 80 baseline screenshots,
-and implemented the full UI/UX improvement pass across `tokens.css`, `app.css`, `app.js`, `ui.py`,
-and page/component templates, verified by `tests/unit/web/test_design_tokens.py` and expanded
-`tests/e2e/web/test_shell_layout.py`.
+Completed GitHub issue #30 across `30-mvp-acceptance` and cut `0.1.0` in `CHANGELOG.md`:
+- Full-stack Chromium Playwright E2E test (`tests/e2e/test_mvp_e2e.py`) passing against real PostgreSQL, Flask/CSRF/CSP/HTMX/Alpine, ScopeGuard, DNS passive + verified-active plugins, AI triage/summary fakes, false-positive suppression, and rescan diffing.
+- Exhaustive route-by-route security suite (`tests/integration/web/test_route_security.py`), static CSP/autoescape/settings AST guards (`tests/unit/web/test_security.py`), tenant-scoped `artifacts._defer_retry`, and `make audit` / CI `audit` (`pip-audit==2.10.1`) with remediated `uv.lock` advisories (`dnspython 2.9.2`, `filelock 4.2.9`, `opentelemetry-api 1.45.2`, `virtualenv 21.15.6`).
+- Performance & scan-detail scaling (`tests/integration/workers/test_scale_1k.py`): batched job creation in `services.scans.dispatch_stage`, `MAX_DETAIL_JOBS = 200` UI cap with exact SQL `GROUP BY` status counts in `services.scan_views`, and `mark_completed = False` on `passive.scan`.
+- Documentation suite (`README.md`, `docs/architecture.md`, `docs/scanners.md`, `docs/writing-a-scanner.md`, `docs/self-hosting.md`, `docs/responsible-use.md`) verified by `tests/unit/scanners/test_docs_sync.py`.
 
 ## Last task
-- Added `tests/e2e/web/ui_fixtures.py` and `scripts/capture_screenshots.py` (`make screenshots`,
-  `screenshots/` in `.gitignore`) using in-memory Playwright HTTP routing (`http://attacksurf.local`)
-  so external SVG sprite icons (`<use href="/static/icons.svg#...">`) render hermetically without
-  network sockets or a database.
-- Upgraded `tokens.css` and `app.css` (and updated `DESIGN.md`): WCAG 2.2 AA contrast-verified
-  light/dark palette, semantic tinted status pills, styled `<progress>` bar and file inputs,
-  padded `.card > .card-header` + `.card-body:empty` collapse on scan detail cards, card-aligned
-  outer table column padding, fixed `.field.field-check` row direction, and `max-width: 22rem;
-  overflow-wrap: break-word` on table cells.
-- Improved templates and UX flows: compact tabbed asset intake card on `/assets`
-  (`Alpine.data("assetIntake")`), Dashboard empty-state CTA, auth page brand icon + theme toggle,
-  clickable findings on Asset Detail (`?tab=findings`), grouped `.page-actions` on Asset Detail and
-  Scan Detail, active sidebar nav highlight on Scan Detail and Finding Detail, aligned Findings
-  filter bar with live debounced Asset search, stacked 2-line finding title/metadata cells, and
-  copyable evidence blocks on Finding Detail.
-- Added `tests/unit/web/test_design_tokens.py` (27 fg/bg contrast pairs × 2 themes + dark-mode
-  block parity) and expanded `tests/e2e/web/test_shell_layout.py`, `test_ui.py`, and
-  `test_components.py`.
+- Added `tests/dns_fakes.py` (`MutableDnsZone`, `FakeWireTransport`, `patch_dnspython_wire`, `FakeScopeHttp`) and `tests/e2e/test_mvp_e2e.py`.
+- Added `tests/integration/web/test_route_security.py` covering every registered route in `ROUTE_MATRIX` for classification, authentication, CSRF, admin-only RBAC, tenant isolation, and encrypted API key non-disclosure.
+- Hardened `services/artifacts.py` (`_defer_retry` includes `Artifact.org_id == org_id`), added `make audit` + CI `audit` job + PostgreSQL-backed `web-e2e` CI job, and updated dependencies cleanly in `pyproject.toml` / `uv.lock`.
+- Updated `services/scans.py` (`_plan_tasks`), `workers/base.py` (`mark_completed`), `workers/tasks/pipeline.py` (`passive.scan`), `services/scan_views.py` (`MAX_DETAIL_JOBS = 200`), and `web/templates/pages/_scan_progress.html`.
+- Added/updated docs (`README.md`, `docs/architecture.md`, `docs/scanners.md`, `docs/writing-a-scanner.md`, `docs/self-hosting.md`, `docs/responsible-use.md`, `docs/README.md`, `docs/development.md`, `docs/security.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CHANGELOG.md`).
 
 ## Next step
-Review and merge the `ui-ux-improve` PR against `main` (and run the manual VPS backup/hardening
-steps in `docs/deployment.md` from #29). On the sandbox track, PR 5 (`84-sandbox-ci`) remains next.
+Open, review, and merge the `30-mvp-acceptance` PR against `main`. Once CI is green on `main`, create and push annotated git tag `v0.1.0` (`git tag -a v0.1.0 -m "Release v0.1.0" && git push origin v0.1.0`) to trigger `.github/workflows/release.yml`, complete the manual VPS hardening/backup steps in `docs/deployment.md`, and close #30 and #31. On the sandbox track, PR 5 (`84-sandbox-ci`) remains next.
 
 ## Open threads
 - **Proxy trust:** the proxy has no caller authentication and `worker-analysis` shares the
@@ -50,12 +35,14 @@ steps in `docs/deployment.md` from #29). On the sandbox track, PR 5 (`84-sandbox
 - Nothing enforces "the artifact belongs to the job's org" before `SandboxRunner.run`: the first
   analysis scanner must `get_scoped` the artifact first, with a tenant-isolation test.
 - From the AI summary work (#26): human-review requests remain (prioritize assets in the
-  200-asset summary input, live eval results); light/dark AI summary card screenshots are now
-  generated via `make screenshots`; `ai/pricing.py` still has no Claude list prices.
+  200-asset summary input, live eval results); `ai/pricing.py` still has no Claude list prices.
 
 ## Notes for the next agent
 - Run `make screenshots` (or `uv run python scripts/capture_screenshots.py --out screenshots/latest`)
   after any template/CSS change to inspect all 20 views in light/dark at 1440px and 390px.
+- Do not use `db_session` (`create_savepoint`) for multi-thousand-job tests like `test_scale_1k.py`;
+  use `db_engine` + `create_session_factory(db_engine)` with org cleanup in `finally:` so Postgres
+  subtransaction caches don't distort timing.
 - The launcher copies proxy constants and `domain.scanners.MAX_OUTPUT_BYTES` on purpose (it may
   not import them); a parity test guards each copy. Don't "fix" that by importing.
 - `sandbox-images.lock` is `{}`: the catalog is empty, so every `POST /runs` is a 404.

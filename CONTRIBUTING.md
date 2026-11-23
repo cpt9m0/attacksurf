@@ -57,8 +57,9 @@ A maintainer will review it. Expect questions; they're about the code, not about
 ## Adding a security check
 
 New checks are the most valuable contributions and are designed to be self-contained plugins.
-Follow the [`add-scanner` guide](.claude/skills/add-scanner/SKILL.md). In short:
-rule definition → plugin → recorded fixtures → tests → docs.
+Follow [docs/writing-a-scanner.md](docs/writing-a-scanner.md) (and the AI agent checklist in
+[`.claude/skills/add-scanner`](.claude/skills/add-scanner/SKILL.md)). In short:
+rule definition → plugin → recorded fixtures → tests → [docs/scanners.md](docs/scanners.md).
 
 Checks must be **defensive**: detect, don't exploit. Anything beyond passive public lookups must
 require verified ownership.
