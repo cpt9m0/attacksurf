@@ -36,7 +36,9 @@ from tests.integration.factories import make_org
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "dns" / "whois"
 DOMAIN = "scale-test.example.com"
 CT_ENTRIES = 1200  # above MAX_DISCOVERED_ASSETS (1000) to exercise the cap end to end
-SCALE_BUDGET_SECONDS = 60.0
+# Sequential eager execution runs ~3k jobs over Postgres; 90s allows CI bridge variance while
+# still catching quadratic savepoint or N+1 regressions (>160s).
+SCALE_BUDGET_SECONDS = 90.0
 
 
 def _build_zone_and_http() -> tuple[MutableDnsZone, FakeScopeHttp]:

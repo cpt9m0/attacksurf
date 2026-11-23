@@ -1350,3 +1350,40 @@ def test_persist_locks_input_and_discovered_assets_in_one_order(
     )
 
     assert calls == ["upsert:a.acme.example", "input"]
+
+
+def test_persist_batches_multi_asset_discovery_outputs(
+    db_session: Session, catalog: dict[str, Rule], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scan = make_scan(db_session)
+    batch_sizes: list[int] = []
+    real_bulk = scan_results_service.record_assets
+
+    def spy_bulk(
+        session: Session,
+        org_id: UUID,
+        assets: object,
+        **kwargs: object,
+    ) -> list[Asset]:
+        items = list(assets)  # type: ignore[arg-type]
+        batch_sizes.append(len(items))
+        return real_bulk(session, org_id, items, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(scan_results_service, "record_assets", spy_bulk)
+
+    persist_scan_output(
+        db_session,
+        scan,
+        scan.root_asset_id,
+        ScanOutput(
+            assets=(
+                AssetRef(type=AssetType.SUBDOMAIN, value="a.acme.example"),
+                AssetRef(type=AssetType.SUBDOMAIN, value="b.acme.example"),
+                AssetRef(type=AssetType.SUBDOMAIN, value="c.acme.example"),
+            ),
+        ),
+        catalog=catalog,
+        discovered_limit=1000,
+    )
+
+    assert batch_sizes == [3]

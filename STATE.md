@@ -2,24 +2,24 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-22 · **Branch:** `30-mvp-acceptance` · **Task:** MVP acceptance: end-to-end test, security review, docs & `v0.1.0` prep (#30)
+**Updated:** 2026-11-23 · **Branch:** `30-mvp-acceptance` · **Task:** MVP acceptance: end-to-end test, security review, docs & `v0.1.0` prep (#30)
 
 ## Status
-Completed GitHub issue #30 across `30-mvp-acceptance` and cut `0.1.0` in `CHANGELOG.md`:
+Completed GitHub issue #30 across PR #192 (`30-mvp-acceptance`) and cut `0.1.0` in `CHANGELOG.md`:
 - Full-stack Chromium Playwright E2E test (`tests/e2e/test_mvp_e2e.py`) passing against real PostgreSQL, Flask/CSRF/CSP/HTMX/Alpine, ScopeGuard, DNS passive + verified-active plugins, AI triage/summary fakes, false-positive suppression, and rescan diffing.
 - Exhaustive route-by-route security suite (`tests/integration/web/test_route_security.py`), static CSP/autoescape/settings AST guards (`tests/unit/web/test_security.py`), tenant-scoped `artifacts._defer_retry`, and `make audit` / CI `audit` (`pip-audit==2.10.1`) with remediated `uv.lock` advisories (`dnspython 2.9.2`, `filelock 4.2.9`, `opentelemetry-api 1.45.2`, `virtualenv 21.15.6`).
-- Performance & scan-detail scaling (`tests/integration/workers/test_scale_1k.py`): batched job creation in `services.scans.dispatch_stage`, `MAX_DETAIL_JOBS = 200` UI cap with exact SQL `GROUP BY` status counts in `services.scan_views`, and `mark_completed = False` on `passive.scan`.
+- Performance & scan-detail scaling (`tests/integration/workers/test_scale_1k.py`): batched job creation in `services.scans.dispatch_stage`, batched asset/relation upserts (`services.assets.record_assets` / `record_relations` in `persist_scan_output`), single-SELECT `run_check` pre-read, `MAX_DETAIL_JOBS = 200` UI cap with exact SQL `GROUP BY` status counts in `services.scan_views`, and `mark_completed = False` on `passive.scan`.
 - Documentation suite (`README.md`, `docs/architecture.md`, `docs/scanners.md`, `docs/writing-a-scanner.md`, `docs/self-hosting.md`, `docs/responsible-use.md`) verified by `tests/unit/scanners/test_docs_sync.py`.
 
 ## Last task
 - Added `tests/dns_fakes.py` (`MutableDnsZone`, `FakeWireTransport`, `patch_dnspython_wire`, `FakeScopeHttp`) and `tests/e2e/test_mvp_e2e.py`.
 - Added `tests/integration/web/test_route_security.py` covering every registered route in `ROUTE_MATRIX` for classification, authentication, CSRF, admin-only RBAC, tenant isolation, and encrypted API key non-disclosure.
 - Hardened `services/artifacts.py` (`_defer_retry` includes `Artifact.org_id == org_id`), added `make audit` + CI `audit` job + PostgreSQL-backed `web-e2e` CI job, and updated dependencies cleanly in `pyproject.toml` / `uv.lock`.
-- Updated `services/scans.py` (`_plan_tasks`), `workers/base.py` (`mark_completed`), `workers/tasks/pipeline.py` (`passive.scan`), `services/scan_views.py` (`MAX_DETAIL_JOBS = 200`), and `web/templates/pages/_scan_progress.html`.
+- Updated `services/scans.py` (`_plan_tasks`), `services/assets.py` (`record_assets`, `record_relations`), `services/scan_results.py`, `services/scanner_jobs.py`, `workers/base.py` (`mark_completed`), `workers/tasks/pipeline.py` (`passive.scan`), `services/scan_views.py` (`MAX_DETAIL_JOBS = 200`), and `web/templates/pages/_scan_progress.html`.
 - Added/updated docs (`README.md`, `docs/architecture.md`, `docs/scanners.md`, `docs/writing-a-scanner.md`, `docs/self-hosting.md`, `docs/responsible-use.md`, `docs/README.md`, `docs/development.md`, `docs/security.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CHANGELOG.md`).
 
 ## Next step
-Open, review, and merge the `30-mvp-acceptance` PR against `main`. Once CI is green on `main`, create and push annotated git tag `v0.1.0` (`git tag -a v0.1.0 -m "Release v0.1.0" && git push origin v0.1.0`) to trigger `.github/workflows/release.yml`, complete the manual VPS hardening/backup steps in `docs/deployment.md`, and close #30 and #31. On the sandbox track, PR 5 (`84-sandbox-ci`) remains next.
+Wait for CI on PR #192 (`30-mvp-acceptance`), review and merge to `main`. Once CI is green on `main`, create and push annotated git tag `v0.1.0` (`git tag -a v0.1.0 -m "Release v0.1.0" && git push origin v0.1.0`) to trigger `.github/workflows/release.yml`, complete the manual VPS hardening/backup steps in `docs/deployment.md`, and close #30 and #31. On the sandbox track, PR 5 (`84-sandbox-ci`) remains next.
 
 ## Open threads
 - **Proxy trust:** the proxy has no caller authentication and `worker-analysis` shares the
