@@ -564,6 +564,113 @@ def test_web_headers_and_cors_handle_urls_exceeding_max_location_length() -> Non
     assert cors_out.findings[0].remediation_context["url"] == long_url
 
 
+def test_web_headers_evaluates_script_src_attr_separately() -> None:
+    ctx, _ = _ctx(
+        web_details={
+            "final_url": "https://acme.com/",
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": {
+                "strict-transport-security": "max-age=31536000",
+                "content-security-policy": (
+                    "default-src 'self'; script-src 'self'; "
+                    "script-src-attr 'unsafe-inline'; frame-ancestors 'none'"
+                ),
+                "x-content-type-options": "nosniff",
+            },
+            "cookies": [],
+        }
+    )
+
+    out = WebHeaders().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+
+    assert [f.rule_id for f in out.findings] == ["web.headers.csp_unsafe"]
+    assert out.findings[0].evidence[0].data["unsafe_tokens"] == ["'unsafe-inline'"]
+
+
+def test_web_headers_intersects_multiple_frame_ancestors_policies() -> None:
+    ctx, _ = _ctx(
+        web_details={
+            "final_url": "https://acme.com/",
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": {
+                "strict-transport-security": "max-age=31536000",
+                "content-security-policy": (
+                    "default-src 'self'; frame-ancestors *, frame-ancestors 'none'"
+                ),
+                "x-content-type-options": "nosniff",
+            },
+            "cookies": [],
+        }
+    )
+
+    out = WebHeaders().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+
+    assert out.findings == ()
+
+
+def test_web_headers_ignores_expired_and_deleted_session_cookies() -> None:
+    details = _hardened_web_details()
+    details["cookies"] = [
+        "sessionid=<redacted>; Max-Age=0; Path=/",
+        "auth_token=<redacted>; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/",
+        "sid=<redacted>; Max-Age=3600; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/",
+    ]
+    ctx, _ = _ctx(web_details=details)
+
+    out = WebHeaders().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+
+    assert [f.rule_id for f in out.findings] == ["web.cookies.insecure_flags"]
+    assert out.findings[0].evidence[0].data["cookies"] == [
+        {
+            "name": "sid",
+            "missing": ["Secure", "HttpOnly", "SameSite"],
+            "cookie": "sid=<redacted>; Max-Age=3600; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/",
+        }
+    ]
+
+
+def test_web_cors_ignores_redirect_responses_with_location() -> None:
+    ctx, _ = _ctx(
+        response=HttpBody(
+            status_code=302,
+            content=b"",
+            headers={
+                "Location": "/login",
+                "Access-Control-Allow-Origin": FOREIGN_ORIGIN,
+                "Access-Control-Allow-Credentials": "true",
+            },
+        )
+    )
+
+    out = WebCors().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+    assert out.findings == ()
+
+
+@pytest.mark.parametrize(
+    "header_value",
+    [
+        "max-age=31536000s; includeSubDomains",
+        'max-age="31536000; includeSubDomains',
+        "max-age=31536000; max-age=31536000",
+    ],
+)
+def test_web_headers_flags_malformed_hsts_max_age_values(header_value: str) -> None:
+    details = _hardened_web_details()
+    raw_headers = details["headers"]
+    assert isinstance(raw_headers, dict)
+    headers: dict[str, str] = dict(raw_headers)
+    headers["strict-transport-security"] = header_value
+    details["headers"] = headers
+    ctx, _ = _ctx(web_details=details)
+
+    out = WebHeaders().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+
+    assert [f.rule_id for f in out.findings] == ["web.headers.hsts_weak"]
+    assert out.findings[0].evidence[0].data["max_age"] is None
+
+
 def test_web_rules_catalog_includes_all_issue_77_rules_with_expected_severities() -> None:
     catalog = build_catalog(WEB_RULES)
     expected = {

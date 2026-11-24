@@ -1,7 +1,9 @@
 """Security header, cookie flag, HTTPS redirect, and CORS checks (`web.headers`, `web.cors`)."""
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
 from pydantic import JsonValue
@@ -28,6 +30,8 @@ MIN_HSTS_MAX_AGE_SECONDS = 15_552_000  # 180 days (~6 months)
 HTTP_DEFAULT_PORT = 80
 HTTP_OK_MIN = 200
 HTTP_OK_MAX = 299
+HTTP_REDIRECT_MIN = 300
+HTTP_REDIRECT_MAX = 399
 HTML_CONTENT_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 VALID_XFO_VALUES = frozenset({"DENY", "SAMEORIGIN"})
 FOREIGN_ORIGIN = "https://cors-probe.invalid"
@@ -36,9 +40,9 @@ CORS_DNS_LOOKUPS = 4
 MAX_EVIDENCE_COOKIES = 10
 MAX_VALUE_CHARS = 512
 MAX_CSP_VALUE_CHARS = 4096
+_QUOTED_MIN_LEN = 2
 _WILDCARD_FRAME_ANCESTORS = frozenset({"*", "http:", "https:"})
 
-_HSTS_MAX_AGE_RE = re.compile(r'(?:^|;)\s*max-age\s*=\s*"?(\d+)"?', re.IGNORECASE)
 _NONCE_OR_HASH_RE = re.compile(
     r"^'(?:nonce-[^']+|sha(?:256|384|512)-[^']+)'$",
     re.IGNORECASE,
@@ -108,6 +112,13 @@ def _inline_script_tokens(directives: Mapping[str, tuple[str, ...]]) -> tuple[st
     return None
 
 
+def _attr_script_tokens(directives: Mapping[str, tuple[str, ...]]) -> tuple[str, ...] | None:
+    for directive in ("script-src-attr", "script-src", "default-src"):
+        if directive in directives:
+            return directives[directive]
+    return None
+
+
 def _eval_script_tokens(directives: Mapping[str, tuple[str, ...]]) -> tuple[str, ...] | None:
     for directive in ("script-src", "default-src"):
         if directive in directives:
@@ -115,16 +126,24 @@ def _eval_script_tokens(directives: Mapping[str, tuple[str, ...]]) -> tuple[str,
     return None
 
 
-def _csp_unsafe_tokens(policies: Sequence[Mapping[str, tuple[str, ...]]]) -> tuple[str, ...]:
-    # CSP3 intersects multiple policies independently per execution capability.
-    unsafe: list[str] = []
-    inline_policies = [
-        vals for policy in policies if (vals := _inline_script_tokens(policy)) is not None
-    ]
-    if inline_policies and all(
+def _permits_unsafe_inline(
+    policies: Sequence[Mapping[str, tuple[str, ...]]],
+    selector: Callable[[Mapping[str, tuple[str, ...]]], tuple[str, ...] | None],
+) -> bool:
+    selected = [vals for policy in policies if (vals := selector(policy)) is not None]
+    return bool(selected) and all(
         "'unsafe-inline'" in {token.lower() for token in vals}
         and not any(_NONCE_OR_HASH_RE.match(token) for token in vals)
-        for vals in inline_policies
+        for vals in selected
+    )
+
+
+def _csp_unsafe_tokens(policies: Sequence[Mapping[str, tuple[str, ...]]]) -> tuple[str, ...]:
+    # CSP3 intersects multiple policies independently per execution capability
+    # (script elements, inline event-handler attributes, and eval).
+    unsafe: list[str] = []
+    if _permits_unsafe_inline(policies, _inline_script_tokens) or _permits_unsafe_inline(
+        policies, _attr_script_tokens
     ):
         unsafe.append("'unsafe-inline'")
     eval_policies = [
@@ -152,8 +171,9 @@ def _has_clickjacking_protection(
         if (fa := directives.get("frame-ancestors")) is not None
     ]
     if fa_directives:
-        # CSP3 §7.7.1: browsers ignore X-Frame-Options whenever frame-ancestors is present.
-        return all(
+        # CSP3 §7.7.1: X-Frame-Options is ignored whenever frame-ancestors is set, and browsers
+        # enforce every policy so any restrictive frame-ancestors policy protects the response.
+        return any(
             bool(tokens) and not any(token in _WILDCARD_FRAME_ANCESTORS for token in tokens)
             for tokens in fa_directives
         )
@@ -169,6 +189,23 @@ def _redact_cookie_preview(entry: str) -> str:
     return "; ".join([head, *parts[1:]])[:MAX_VALUE_CHARS]
 
 
+def _is_expired_cookie(raw_max_age: str | None, raw_expires: str | None) -> bool:
+    # RFC 6265 §5.2.2: valid Max-Age takes precedence over Expires; <= 0 deletes immediately.
+    if raw_max_age is not None:
+        cleaned = raw_max_age.strip()
+        if cleaned and (cleaned.lstrip("-").isdigit()):
+            return int(cleaned) <= 0
+    if raw_expires is not None:
+        try:
+            expires_at = parsedate_to_datetime(raw_expires.strip())
+        except (TypeError, ValueError):
+            return False
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        return expires_at <= datetime.now(UTC)
+    return False
+
+
 def _inspect_cookie(entry: str) -> dict[str, JsonValue] | None:
     parts = [part.strip() for part in entry.split(";") if part.strip()]
     if not parts:
@@ -178,12 +215,20 @@ def _inspect_cookie(entry: str) -> dict[str, JsonValue] | None:
         return None
     flags: set[str] = set()
     samesite_val = ""
+    raw_max_age: str | None = None
+    raw_expires: str | None = None
     for attr in parts[1:]:
         attr_key, _eq, attr_val = attr.partition("=")
         key_lower = attr_key.strip().lower()
         flags.add(key_lower)
         if key_lower == "samesite":
             samesite_val = attr_val.strip().lower()
+        elif key_lower == "max-age":
+            raw_max_age = attr_val
+        elif key_lower == "expires":
+            raw_expires = attr_val
+    if _is_expired_cookie(raw_max_age, raw_expires):
+        return None
     missing: list[str] = []
     if "secure" not in flags:
         missing.append("Secure")
@@ -198,6 +243,27 @@ def _inspect_cookie(entry: str) -> dict[str, JsonValue] | None:
         "missing": list(missing),
         "cookie": _redact_cookie_preview(entry),
     }
+
+
+def _parse_hsts_max_age(raw_hsts: str) -> int | None:
+    """Parse strict RFC 6797 `max-age` delta-seconds; reject suffixes, broken quotes, or dupes."""
+    values: list[int] = []
+    for directive in raw_hsts.split(";"):
+        trimmed = directive.strip()
+        if not trimmed:
+            continue
+        name, sep, raw_val = trimmed.partition("=")
+        if name.strip().lower() != "max-age" or not sep:
+            continue
+        candidate = raw_val.strip()
+        if len(candidate) >= _QUOTED_MIN_LEN and candidate[0] == '"' and candidate[-1] == '"':
+            candidate = candidate[1:-1]
+        elif '"' in candidate:
+            return None
+        if not candidate or not candidate.isascii() or not candidate.isdigit():
+            return None
+        values.append(int(candidate))
+    return values[0] if len(values) == 1 else None
 
 
 def _check_hsts(
@@ -228,8 +294,7 @@ def _check_hsts(
         )
         return False
 
-    match = _HSTS_MAX_AGE_RE.search(hsts)
-    max_age = int(match.group(1)) if match else None
+    max_age = _parse_hsts_max_age(hsts)
     if max_age is None or max_age < MIN_HSTS_MAX_AGE_SECONDS:
         findings.append(
             RawFinding(
@@ -546,6 +611,10 @@ def _cors_target_url(ctx: ScanContext, asset: AssetRef) -> str:
 
 def _is_cors_vulnerable(body: HttpBody) -> tuple[bool, dict[str, JsonValue]]:
     headers = _lowercase_headers(body.headers)
+    # Fetch follows redirects in CORS mode and checks headers at the destination; with
+    # `follow_redirects=False`, redirect responses carrying `Location` are inconclusive.
+    if HTTP_REDIRECT_MIN <= body.status_code <= HTTP_REDIRECT_MAX and "location" in headers:
+        return False, {}
     acao = headers.get("access-control-allow-origin", "").strip()
     acac = headers.get("access-control-allow-credentials", "").strip().lower()
     # Fetch CORS rejects wildcard `*` with credentials mode `include`, so only reflected
