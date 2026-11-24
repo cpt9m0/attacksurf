@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from attacksurf.domain.assets import AssetType, RelationKind
-from attacksurf.domain.findings import EvidenceKind
+from attacksurf.domain.findings import Confidence, EvidenceKind, Severity
 from attacksurf.domain.jobs import TransientJobError
 from attacksurf.domain.net import DnsError, HttpBody, ScannerRuntime
 from attacksurf.domain.scanners import MAX_ASSET_DETAILS_BYTES, AssetRef, ScanContext, ScannerError
@@ -126,6 +126,19 @@ def test_web_probe_discovers_https_url_redacts_cookies_and_merges_http_redirect(
     assert "set-cookie" not in headers_dict
     assert web["cookies"] == ["sessionid=<redacted>; Path=/; HttpOnly; Secure"]
     assert "super-secret-value" not in repr(out)
+    techs = obs.details["technologies"]
+    assert isinstance(techs, list)
+    assert any(
+        isinstance(t, dict) and t["name"] == "Nginx" and t["version"] == "1.26.2" for t in techs
+    )
+    assert len(out.findings) == 1
+    banner_finding = out.findings[0]
+    assert banner_finding.rule_id == "web.disclosure.version_banner"
+    assert banner_finding.severity is Severity.INFO
+    assert banner_finding.confidence is Confidence.HIGH
+    assert banner_finding.asset == expected_url
+    assert banner_finding.remediation_context["headers"] == "Server"
+    assert len(http.calls) == 2
     web_host = obs.details["web_host"]
     assert isinstance(web_host, dict)
     assert web_host["https_reachable"] is True
@@ -333,3 +346,93 @@ def test_build_http_response_evidence_caps_body_and_includes_headers() -> None:
         "tok=<redacted>; Path=/; Secure"
     )
     assert extract_html_title(b'{"json": true}', "application/json") == ""
+
+
+def test_web_probe_fingerprints_wordpress_meta_without_version_banner_or_extra_requests() -> None:
+    html = (
+        b"<html><head>"
+        b'<meta name="generator" content="WordPress 6.5.2">'
+        b'<script src="/assets/jquery-3.7.1.min.js"></script>'
+        b"</head><body><p>Blog</p></body></html>"
+    )
+    http = _StubHttp(
+        {
+            "https://blog.acme.example/": HttpBody(
+                200,
+                html,
+                False,
+                {"content-type": "text/html", "server": "nginx"},
+                final_url="https://blog.acme.example/",
+            ),
+            "http://blog.acme.example/": ScopeError("Unreachable."),
+        }
+    )
+
+    out = WebProbe().run(_ctx(http), AssetRef(type=AssetType.SUBDOMAIN, value="blog.acme.example"))
+
+    assert len(http.calls) == 2  # https + http only; fingerprinting makes zero extra calls
+    assert out.findings == ()
+    techs = out.observations[0].details["technologies"]
+    assert isinstance(techs, list)
+    by_name = {t["name"]: t for t in techs if isinstance(t, dict)}
+    assert by_name["WordPress"]["version"] == "6.5.2"
+    assert by_name["jQuery"]["version"] == "3.7.1"
+    assert by_name["Nginx"]["version"] is None
+    assert by_name["PHP"]["version"] is None
+
+    url_ref = AssetRef(type=AssetType.URL, value="https://blog.acme.example/")
+    refresh_http = _StubHttp(
+        {
+            "https://blog.acme.example/": HttpBody(
+                200,
+                html,
+                False,
+                {"content-type": "text/html", "server": "nginx/1.24.0"},
+                final_url="https://blog.acme.example/",
+            )
+        }
+    )
+    refreshed = WebProbe().run(_ctx(refresh_http), url_ref)
+    assert len(refresh_http.calls) == 1
+    assert [f.rule_id for f in refreshed.findings] == ["web.disclosure.version_banner"]
+
+
+def test_web_probe_keeps_priority_version_headers_and_drops_capped_findings() -> None:
+    headers_list = [(f"x-filler-{i}", "value") for i in range(35)] + [
+        ("server", "nginx/1.26.2"),
+        ("x-powered-by", "PHP/8.2.15"),
+    ]
+    http = _StubHttp(
+        {
+            "https://acme.example/": HttpBody(
+                200,
+                b"<html></html>",
+                False,
+                httpx.Headers(headers_list),
+                final_url="https://acme.example/",
+            ),
+            "http://acme.example/": HttpBody(
+                200,
+                b"<html></html>",
+                False,
+                {"server": "Apache/2.4.58"},
+                final_url="http://acme.example/",
+            ),
+        }
+    )
+
+    out = WebProbe().run(
+        _ctx(http, max_discovered_assets=1),
+        AssetRef(type=AssetType.DOMAIN, value="acme.example"),
+    )
+
+    assert [a.value for a in out.assets] == ["https://acme.example/"]
+    web = out.observations[0].details["web"]
+    assert isinstance(web, dict)
+    web_headers = web["headers"]
+    assert isinstance(web_headers, dict)
+    assert web_headers["server"] == "nginx/1.26.2"
+    assert web_headers["x-powered-by"] == "PHP/8.2.15"
+    assert len(out.findings) == 1
+    assert out.findings[0].asset == AssetRef(type=AssetType.URL, value="https://acme.example/")
+    assert out.findings[0].remediation_context["headers"] == "Server, X-Powered-By"

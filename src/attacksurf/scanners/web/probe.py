@@ -16,7 +16,7 @@ from typing import cast
 from pydantic import JsonValue
 
 from attacksurf.domain.assets import AssetError, AssetType, RelationKind, normalize_asset_value
-from attacksurf.domain.findings import EvidenceKind
+from attacksurf.domain.findings import Confidence, EvidenceKind, Severity
 from attacksurf.domain.net import DnsError, HttpBody
 from attacksurf.domain.scanners import (
     MAX_ASSET_DETAILS_BYTES,
@@ -24,6 +24,7 @@ from attacksurf.domain.scanners import (
     AssetRef,
     DiscoveredRelation,
     RawEvidence,
+    RawFinding,
     ScanContext,
     ScannerError,
     ScannerGrant,
@@ -31,6 +32,11 @@ from attacksurf.domain.scanners import (
 )
 from attacksurf.domain.scope import HttpPermission, ScopeError
 from attacksurf.scanners.registry import register_scanner
+from attacksurf.scanners.web.fingerprint import (
+    Technology,
+    detect_version_banners,
+    fingerprint_response,
+)
 
 MAX_BODY_BYTES = 256 * 1024
 MAX_BODY_EXCERPT_CHARS = 1024
@@ -44,6 +50,19 @@ REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
 _HTML_CONTENT_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 _SAFE_COOKIE_ATTRS = frozenset(
     {"path", "domain", "expires", "max-age", "secure", "httponly", "samesite", "partitioned"}
+)
+_PRIORITY_HEADERS = frozenset(
+    {
+        "server",
+        "x-powered-by",
+        "content-type",
+        "location",
+        "strict-transport-security",
+        "content-security-policy",
+        "x-frame-options",
+        "x-content-type-options",
+        "referrer-policy",
+    }
 )
 
 
@@ -64,6 +83,13 @@ class ProbeResult:
     headers: dict[str, str]
     cookies: tuple[str, ...]
     body_excerpt: str
+
+
+@dataclass(frozen=True)
+class _CapturedProbe:
+    probe: ProbeResult
+    technologies: tuple[Technology, ...]
+    version_banners: dict[str, str]
 
 
 class _TitleParser(HTMLParser):
@@ -140,13 +166,22 @@ def sanitize_headers(headers: Mapping[str, str]) -> tuple[dict[str, str], tuple[
     )
 
     cleaned: dict[str, str] = {}
+    extra: list[tuple[str, str]] = []
+    seen_keys: set[str] = set()
     for key, val in headers.items():
         norm_key = key.strip().lower()[:128]
-        if not norm_key or norm_key == "set-cookie" or norm_key in cleaned:
+        if not norm_key or norm_key == "set-cookie" or norm_key in seen_keys:
             continue
-        cleaned[norm_key] = val.strip().replace("\x00", "")[:MAX_HEADER_VALUE_CHARS]
+        seen_keys.add(norm_key)
+        clean_val = val.strip().replace("\x00", "")[:MAX_HEADER_VALUE_CHARS]
+        if norm_key in _PRIORITY_HEADERS:
+            cleaned[norm_key] = clean_val
+        else:
+            extra.append((norm_key, clean_val))
+    for norm_key, clean_val in extra:
         if len(cleaned) >= MAX_HEADERS:
             break
+        cleaned[norm_key] = clean_val
     return cleaned, cookies
 
 
@@ -208,7 +243,7 @@ def _to_probe_result(initial_url: str, body: HttpBody) -> ProbeResult:
     )
 
 
-def _probe_url(ctx: ScanContext, url: str) -> ProbeResult | None:
+def _probe_url(ctx: ScanContext, url: str) -> _CapturedProbe | None:
     runtime = ctx.runtime
     if runtime is None:
         raise ScannerError("Scanner runtime is not configured.")
@@ -216,22 +251,14 @@ def _probe_url(ctx: ScanContext, url: str) -> ProbeResult | None:
         body = runtime.http.get(url, limit=MAX_BODY_BYTES)
     except (DnsError, ScopeError):
         return None
-    return _to_probe_result(url, body)
-
-
-_PRIORITY_HEADERS = frozenset(
-    {
-        "server",
-        "x-powered-by",
-        "content-type",
-        "location",
-        "strict-transport-security",
-        "content-security-policy",
-        "x-frame-options",
-        "x-content-type-options",
-        "referrer-policy",
-    }
-)
+    probe = _to_probe_result(url, body)
+    technologies = fingerprint_response(body.headers, body.content, probe.content_type)
+    version_banners = detect_version_banners(body.headers)
+    return _CapturedProbe(
+        probe=probe,
+        technologies=technologies,
+        version_banners=version_banners,
+    )
 
 
 def _details_bytes(details: dict[str, JsonValue]) -> int:
@@ -257,12 +284,23 @@ def _web_details(probe: ProbeResult) -> dict[str, JsonValue]:
     }
 
 
+def _trim_headers_to_budget(details: dict[str, JsonValue], headers: dict[str, JsonValue]) -> None:
+    drop_order = [k for k in headers if k not in _PRIORITY_HEADERS]
+    drop_order.extend(k for k in headers if k in _PRIORITY_HEADERS)
+    for key in reversed(drop_order):
+        if _details_bytes(details) <= MAX_ASSET_DETAILS_BYTES:
+            break
+        headers.pop(key, None)
+
+
 def _fit_observation_details(
     web: dict[str, JsonValue],
     web_host: dict[str, JsonValue] | None = None,
+    technologies: tuple[Technology, ...] = (),
 ) -> dict[str, JsonValue]:
     """Assemble `Asset.details` within `MAX_ASSET_DETAILS_BYTES`, trimming optional metadata."""
-    details: dict[str, JsonValue] = {"web": web}
+    tech_list: list[JsonValue] = [tech.to_dict() for tech in technologies]
+    details: dict[str, JsonValue] = {"web": web, "technologies": tech_list}
     if web_host is not None:
         details["web_host"] = web_host
     if _details_bytes(details) <= MAX_ASSET_DETAILS_BYTES:
@@ -275,12 +313,7 @@ def _fit_observation_details(
 
     headers = web.get("headers")
     if isinstance(headers, dict) and _details_bytes(details) > MAX_ASSET_DETAILS_BYTES:
-        drop_order = [k for k in headers if k not in _PRIORITY_HEADERS]
-        drop_order.extend(k for k in headers if k in _PRIORITY_HEADERS)
-        for key in reversed(drop_order):
-            if _details_bytes(details) <= MAX_ASSET_DETAILS_BYTES:
-                break
-            headers.pop(key, None)
+        _trim_headers_to_budget(details, headers)
 
     chain = web.get("redirect_chain")
     if isinstance(chain, list):
@@ -291,7 +324,26 @@ def _fit_observation_details(
         details.pop("web_host", None)
     if _details_bytes(details) > MAX_ASSET_DETAILS_BYTES:
         web["title"] = ""
+    while tech_list and _details_bytes(details) > MAX_ASSET_DETAILS_BYTES:
+        tech_list.pop()
     return details
+
+
+def _version_banner_finding(asset: AssetRef, capture: _CapturedProbe) -> RawFinding | None:
+    if not capture.version_banners:
+        return None
+    return RawFinding(
+        asset=asset,
+        rule_id="web.disclosure.version_banner",
+        severity=Severity.INFO,
+        confidence=Confidence.HIGH,
+        location="",
+        remediation_context={
+            "url": capture.probe.final_url,
+            "headers": ", ".join(capture.version_banners),
+        },
+        evidence=(build_http_response_evidence(capture.probe),),
+    )
 
 
 @register_scanner
@@ -318,12 +370,18 @@ class WebProbe:
         return self._probe_host(ctx, asset)
 
     def _probe_existing_url(self, ctx: ScanContext, asset: AssetRef) -> ScanOutput:
-        res = _probe_url(ctx, asset.value)
-        if res is None:
+        capture = _probe_url(ctx, asset.value)
+        if capture is None:
             return ScanOutput(observations=(AssetObservation(asset=asset, active=False),))
-        details = _fit_observation_details(_web_details(res))
+        details = _fit_observation_details(
+            _web_details(capture.probe),
+            technologies=capture.technologies,
+        )
+        finding = _version_banner_finding(asset, capture)
+        findings = (finding,) if finding is not None else ()
         return ScanOutput(
-            observations=(AssetObservation(asset=asset, details=details, active=True),)
+            observations=(AssetObservation(asset=asset, details=details, active=True),),
+            findings=findings,
         )
 
     def _probe_host(self, ctx: ScanContext, asset: AssetRef) -> ScanOutput:
@@ -331,42 +389,32 @@ class WebProbe:
         if cap is not None and cap <= 0:
             return ScanOutput()
 
-        https_res = _probe_url(ctx, f"https://{asset.value}/")
-        http_res = _probe_url(ctx, f"http://{asset.value}/")
-        if https_res is None and http_res is None:
+        https_cap = _probe_url(ctx, f"https://{asset.value}/")
+        http_cap = _probe_url(ctx, f"http://{asset.value}/")
+        if https_cap is None and http_cap is None:
             return ScanOutput()
 
-        candidates: list[tuple[str, dict[str, JsonValue], dict[str, JsonValue]]] = []
-        if https_res is not None:
+        candidates: list[tuple[_CapturedProbe, dict[str, JsonValue]]] = []
+        if https_cap is not None:
             http_summary: dict[str, JsonValue] = (
                 {
                     "reachable": True,
                     "status_code": (
-                        http_res.redirect_chain[0][1]
-                        if http_res.redirect_chain
-                        else http_res.status_code
+                        http_cap.probe.redirect_chain[0][1]
+                        if http_cap.probe.redirect_chain
+                        else http_cap.probe.status_code
                     ),
-                    "final_url": http_res.final_url,
-                    "redirects_to_https": http_res.final_url.startswith("https://"),
+                    "final_url": http_cap.probe.final_url,
+                    "redirects_to_https": http_cap.probe.final_url.startswith("https://"),
                 }
-                if http_res is not None
+                if http_cap is not None
                 else {"reachable": False}
             )
-            candidates.append(
-                (
-                    https_res.final_url,
-                    _web_details(https_res),
-                    {"https_reachable": True, "http_probe": http_summary},
-                )
-            )
-            if http_res is not None and http_res.final_url != https_res.final_url:
-                candidates.append(
-                    (http_res.final_url, _web_details(http_res), {"https_reachable": True})
-                )
-        elif http_res is not None:
-            candidates.append(
-                (http_res.final_url, _web_details(http_res), {"https_reachable": False})
-            )
+            candidates.append((https_cap, {"https_reachable": True, "http_probe": http_summary}))
+            if http_cap is not None and http_cap.probe.final_url != https_cap.probe.final_url:
+                candidates.append((http_cap, {"https_reachable": True}))
+        elif http_cap is not None:
+            candidates.append((http_cap, {"https_reachable": False}))
 
         if cap is not None:
             candidates = candidates[:cap]
@@ -374,8 +422,10 @@ class WebProbe:
         assets: list[AssetRef] = []
         relations: list[DiscoveredRelation] = []
         observations: list[AssetObservation] = []
+        findings: list[RawFinding] = []
         seen_urls: set[str] = set()
-        for url, web, web_host in candidates:
+        for capture, web_host in candidates:
+            url = capture.probe.final_url
             if url in seen_urls:
                 continue
             seen_urls.add(url)
@@ -387,12 +437,20 @@ class WebProbe:
             observations.append(
                 AssetObservation(
                     asset=url_ref,
-                    details=_fit_observation_details(web, web_host),
+                    details=_fit_observation_details(
+                        _web_details(capture.probe),
+                        web_host,
+                        capture.technologies,
+                    ),
                     active=True,
                 )
             )
+            finding = _version_banner_finding(url_ref, capture)
+            if finding is not None:
+                findings.append(finding)
         return ScanOutput(
             assets=tuple(assets),
             relations=tuple(relations),
             observations=tuple(observations),
+            findings=tuple(findings),
         )

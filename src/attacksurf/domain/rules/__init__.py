@@ -18,8 +18,9 @@ from attacksurf.domain.rules.catalog import (
     get_rule as _get_rule,
 )
 from attacksurf.domain.rules.dns import DNS_RULES
+from attacksurf.domain.rules.web import WEB_RULES
 
-_ALL_RULES: tuple[Rule, ...] = (*DNS_RULES,)  # filled as scanners land (#15-#19)
+_ALL_RULES: tuple[Rule, ...] = (*DNS_RULES, *WEB_RULES)
 RULES: Mapping[str, Rule] = MappingProxyType(build_catalog(_ALL_RULES))
 
 

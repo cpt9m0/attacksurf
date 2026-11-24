@@ -123,6 +123,9 @@ and `follow_redirects` (bounded same-root redirects up to 4 hops, stopping befor
 out-of-scope `Location` targets when `stop_on_out_of_scope_redirect=True`); `DbOwnershipChecker`
 verifies `URL` assets only when recorded under a verified active root domain whose hostname
 contains the URL host, and response `Set-Cookie` values are always redacted to `<redacted>`.
+Technology fingerprinting (`scanners/web/fingerprint.py`, #73) inspects only the response
+already captured by `web.probe` (zero extra network requests, cookie names only, ReDoS-audited
+subset of GPL-3.0 `enthec/webappanalyzer` rules).
 Planned #77–#79 checks will expand `ScannerGrant` with `http_methods`,
 `http_paths`, and `soft_404_probe`. CT discovery's
 random-label wildcard probes use the same guarded DNS adapter and DNS budget; a wildcard marker

@@ -8,12 +8,22 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from attacksurf.domain.assets import AssetSource, AssetType, RelationKind
 from attacksurf.domain.events import DomainEvent
+from attacksurf.domain.findings import Severity
 from attacksurf.domain.jobs import JobTask, PipelineQueue, TaskQueue
 from attacksurf.domain.net import DnsError, HttpBody
 from attacksurf.domain.scans import JobStatus, ScanStatus
 from attacksurf.domain.verification import VerificationMethod, VerificationStatus
 from attacksurf.infra import public_suffix
-from attacksurf.infra.db.models import Asset, AssetRelation, Job, Org, Scan, Verification
+from attacksurf.infra.db.models import (
+    Asset,
+    AssetRelation,
+    Evidence,
+    Finding,
+    Job,
+    Org,
+    Scan,
+    Verification,
+)
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.infra.scope_guard import ScopeGuard
 from attacksurf.scanners.profiles import PROFILES
@@ -116,9 +126,9 @@ def test_web_active_discovers_urls_for_verified_hosts_and_deactivates_missing_on
         {
             "https://example.com/": HttpBody(
                 200,
-                b"<title>Acme Root</title>",
+                b'<title>Acme Root</title><meta name="generator" content="WordPress 6.5.2">',
                 False,
-                {"content-type": "text/html", "server": "nginx"},
+                {"content-type": "text/html", "server": "nginx/1.26.2"},
                 final_url="https://example.com/",
             ),
             "http://example.com/": _unreachable,
@@ -126,7 +136,7 @@ def test_web_active_discovers_urls_for_verified_hosts_and_deactivates_missing_on
                 200,
                 b"<title>Acme App</title>",
                 False,
-                {"content-type": "text/html"},
+                {"content-type": "text/html", "server": "nginx"},
                 final_url="https://app.example.com/",
             ),
             "http://app.example.com/": _unreachable,
@@ -174,6 +184,21 @@ def test_web_active_discovers_urls_for_verified_hosts_and_deactivates_missing_on
     assert all(u.is_active for u in urls)
     by_val = {u.value: u for u in urls}
     assert by_val["https://example.com/"].details["web"]["title"] == "Acme Root"
+    root_techs = {t["name"]: t for t in by_val["https://example.com/"].details["technologies"]}
+    assert root_techs["Nginx"]["version"] == "1.26.2"
+    assert root_techs["WordPress"]["version"] == "6.5.2"
+    app_techs = {t["name"]: t for t in by_val["https://app.example.com/"].details["technologies"]}
+    assert app_techs["Nginx"]["version"] is None
+
+    findings = db_session.scalars(scoped(Finding, org.id)).all()
+    assert len(findings) == 1
+    assert findings[0].rule_id == "web.disclosure.version_banner"
+    assert findings[0].severity is Severity.INFO
+    assert findings[0].asset_id == by_val["https://example.com/"].id
+    ev = db_session.scalars(
+        scoped(Evidence, org.id).where(Evidence.finding_id == findings[0].id)
+    ).one()
+    assert ev.data["headers"]["server"] == "nginx/1.26.2"
 
     serves_edges = db_session.scalars(
         scoped(AssetRelation, org.id).where(AssetRelation.kind == RelationKind.SERVES)
