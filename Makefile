@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose
 
-.PHONY: help up down logs ps build shell test test-worker eval check audit screenshots migrate revision deploy
+.PHONY: help up down logs ps build shell test test-worker eval check audit screenshots migrate revision deploy sandbox-images
 
 help: ## Show available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -50,6 +50,9 @@ audit: ## Run pip-audit against locked dependencies in uv.lock
 
 screenshots: ## Capture light/dark desktop & mobile UI screenshots into screenshots/latest
 	uv run python scripts/capture_screenshots.py --out screenshots/latest
+
+sandbox-images: ## Build the sandbox fixture image(s) and print their IDs (needs Docker)
+	./scripts/build-sandbox-images.sh
 
 migrate: ## Apply database migrations (alembic upgrade head)
 	$(COMPOSE) run --rm web alembic upgrade head
