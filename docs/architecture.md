@@ -406,7 +406,11 @@ flowchart LR
   verified zone apex), plus the run cache and offline IP intel.
   `workers.runtime.scanner_gate()` wires it with `services.ownership.DbOwnershipChecker`, so an
   active check runs
-  only while the target's root has a verified, unexpired TXT proof (ADR 0014).
+  only while the target's root has a verified, unexpired TXT proof (ADR 0014). Website HTTP and
+  TLS grants follow [ADR 0033](adr/0033-website-network-grants.md) (verified hosts only,
+  `GET`/`HEAD`/`OPTIONS` methods, curated web ports, fixed path allowlists, guarded TLS
+  handshakes, per-target rate/concurrency limits, identifying `User-Agent`, and
+  `ACTIVE_SCANS_ENABLED=false` kill switch; implemented in #70–#71).
 - Scanners only reach the network through those adapters: `infra/http.py` pins the validated
   address (keeping `Host`/SNI), re-checks redirects against the grant, ignores env proxies and
   caps time and body size; `infra/dns.py` queries configurable public resolvers without search
@@ -527,7 +531,7 @@ flowchart LR
 | `passive` | DNS, CT logs, RDAP, public APIs | normal egress |
 | `ai` | LLM calls: connection tests, triage runs, exposure summaries (one call per job) | monthly token budget per org; never fails a scan |
 | `fetch` *(later)* | git smart-HTTP fetches | egress to allowlisted forges through ScopeGuard; no access to `sandbox-launcher`; never parses repository content (ADR 0017) |
-| `active` *(later)* | port/web probes on verified targets | separate network, egress rules |
+| `active` *(planned #70)* | website HTTP/TLS probes and active checks on verified targets | dedicated `worker-active` on isolated egress network, per-target rate/concurrency limits, gated by `ACTIVE_SCANS_ENABLED` (`false` default; ADR 0033) |
 | `analysis` *(dev only until #92)* | code/binary analysis (`sandbox_proxy/`, `sandbox_launcher/`, the `sandbox_tools/` archive extractor and binary format detector, and the worker-side client `infra/sandbox.py` are implemented; the dev `worker-analysis` consumes the queue but no `analysis.*` task is registered until #87/#101, so it drops what it receives; no analyzer image exists, `sandbox-images.lock` is empty; prod runs none of it) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
 
 - `infra/queue.py`: `create_celery(settings)` (Redis broker + result backend from `REDIS_URL`,
