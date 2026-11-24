@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import ssl
 import threading
+import time
 import zlib
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -49,22 +50,20 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", "/landed")
             self.end_headers()
-            return
-        if self.path == "/loop":
+        elif self.path == "/loop":
             self.send_response(301)
             self.send_header("Location", "/loop")
             self.end_headers()
-            return
-        if self.path == "/big":
+        elif self.path == "/big":
             self.send_response(200)
             self.send_header("Content-Length", "100000")
             self.end_headers()
             self.wfile.write(b"x" * 100000)
-            return
-        if self.path == "/slow":
+        elif self.path == "/slow":
             threading.Event().wait(2)
-            return
-        if self.path == "/bomb":
+        elif self.path == "/drip":
+            self._serve_drip()
+        elif self.path == "/bomb":
             # ~8 MiB of zeros behind ~8 KiB of gzip: the classic decompression bomb.
             packed = gzip.compress(b"\x00" * (8 * 1024 * 1024))
             self.send_response(200)
@@ -72,21 +71,31 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Encoding", "gzip")
             self.end_headers()
             self.wfile.write(packed)
-            return
-        if self.path == "/gzipped":
+        elif self.path == "/gzipped":
             packed = gzip.compress(b"decoded body")
             self.send_response(200)
             self.send_header("Content-Length", str(len(packed)))
             self.send_header("Content-Encoding", "gzip")
             self.end_headers()
             self.wfile.write(packed)
-            return
-        body = f"path={self.path}".encode()
+        else:
+            body = f"path={self.path}".encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Encoding", "identity")
+            self.end_headers()
+            self.wfile.write(body)
+
+    def _serve_drip(self) -> None:
         self.send_response(200)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Content-Encoding", "identity")
         self.end_headers()
-        self.wfile.write(body)
+        for _ in range(10):
+            try:
+                self.wfile.write(b"x")
+                self.wfile.flush()
+            except OSError:
+                return
+            time.sleep(0.05)
 
     def log_message(self, format: str, *args: object) -> None:
         pass
@@ -455,3 +464,29 @@ def test_rate_limiter_transient_error_propagates_without_hitting_socket(server_u
     scoped.close()
 
     assert len(Handler.hits) == hits_before
+
+
+def test_slow_drip_response_hits_total_request_deadline_and_releases_lease(
+    server_url: str,
+) -> None:
+    port = server_url.rsplit(":", 1)[1]
+    limiter = InMemoryTargetRateLimiter(
+        TargetRateLimitPolicy(rps=10.0, burst=10, max_concurrency=1, max_wait_seconds=0.0)
+    )
+    org_id = uuid4()
+    base, resolver = client_for(server_url, timeout_seconds=0.2, max_request_seconds=0.12)
+    scoped = base.with_redirect_policy(
+        resolver,
+        redirect_allowed=lambda url: True,
+        max_redirects=1,
+        rate_limiter=limiter,
+        rate_limit_org_id=org_id,
+    )
+
+    with pytest.raises(ScopeError, match="timed out"):
+        scoped.get(f"http://public.example:{port}/drip", limit=100)
+
+    # The concurrency lease was released when the deadline tripped, so the next request succeeds.
+    body = scoped.get(f"http://public.example:{port}/ok", limit=100)
+    scoped.close()
+    assert body.content == b"path=/ok"

@@ -97,7 +97,9 @@ class TargetRateLimitPolicy:
     rps: float = 2.0
     burst: int = 5
     max_concurrency: int = 2
-    lease_ttl_seconds: float = 30.0
+    # Must comfortably exceed SafeHttpClient.DEFAULT_MAX_REQUEST_SECONDS (25 s) so a live request
+    # never outlives its concurrency lease.
+    lease_ttl_seconds: float = 60.0
     max_wait_seconds: float = 10.0
 
     def __post_init__(self) -> None:

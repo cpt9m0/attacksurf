@@ -222,7 +222,7 @@ live_restore() {
   log "preserving image ${WEB_IMAGE:-attacksurf:prod} across recovery"
 
   log "stopping application services before live restore"
-  compose stop web worker-passive worker-ai beat
+  compose stop web worker-passive worker-active worker-ai beat
 
   install -d -m 0700 "$STATE_DIR"
   log "taking pre-restore safety dump at $safety_dump"
@@ -256,7 +256,7 @@ live_restore() {
 
   log "restarting application services"
   compose up -d --wait --wait-timeout 300 --no-build \
-    web worker-passive worker-ai beat caddy cloudflared
+    web worker-passive worker-active worker-ai beat caddy cloudflared
   compose exec -T caddy wget -q -T 5 -O /dev/null "http://web:5000/healthz"
   log "live restore complete; safety dump kept at $safety_dump"
 }
