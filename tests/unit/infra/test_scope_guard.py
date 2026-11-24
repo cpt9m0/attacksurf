@@ -36,6 +36,7 @@ from attacksurf.infra.scope_guard import (
     request_host,
     validate_llm_base_url,
 )
+from attacksurf.infra.tls import RawTlsHandshake
 from tests.fakes import FakeCache
 from tests.scanner_fixtures import FakeCheck, FakeSandboxRunner
 
@@ -862,3 +863,99 @@ def test_llm_base_url_allows_allowlisted_self_hosted_hosts_including_http() -> N
     ):
         with pytest.raises(ScopeError):
             validate_llm_base_url(blocked, allowed_hosts=allowed, resolver=dns)
+
+
+# --- Guarded TLS handshake adapter (#71) ------------------------------------------------------
+
+
+class _RecordingTlsConnector:
+    def __init__(self, outcome: RawTlsHandshake) -> None:
+        self.outcome = outcome
+        self.calls: list[tuple[str, int, str, bool]] = []
+
+    def handshake(
+        self,
+        *,
+        address: str,
+        port: int,
+        server_hostname: str,
+        verify: bool,
+        check_hostname: bool = True,
+        timeout: float,
+        min_version: object = None,
+        max_version: object = None,
+    ) -> RawTlsHandshake:
+        del check_hostname, timeout, min_version, max_version
+        self.calls.append((address, port, server_hostname, verify))
+        return self.outcome
+
+
+def test_tls_capability_is_only_wired_when_granted() -> None:
+    scope, _ = make_guard()
+    runtime = scope.check(context(), target(), scanner())
+
+    with pytest.raises(ScopePolicyError, match="TLS"):
+        runtime.tls.inspect("acme.com")
+
+
+def test_tls_grant_requires_active_enabled_verified_ownership_and_dns_budget() -> None:
+    tls_scanner = scanner(
+        queue="active",
+        requires_verification=True,
+        grant=ScannerGrant(tls=True, dns_lookups=1),
+    )
+
+    disabled_scope, _ = make_guard(active_scans_enabled=False)
+    verify_all(disabled_scope)
+    with pytest.raises(ScopeError, match="disabled"):
+        disabled_scope.check(context(), target(), tls_scanner)
+
+    unverified_scope, _ = make_guard(active_scans_enabled=True)
+    with pytest.raises(ScopeError, match="verified"):
+        unverified_scope.check(context(), target(), tls_scanner)
+
+    no_dns = scanner(
+        queue="active",
+        requires_verification=True,
+        grant=ScannerGrant(tls=True, dns_lookups=0),
+    )
+    verified_scope = verify_all(make_guard(active_scans_enabled=True)[0])
+    with pytest.raises(ScopePolicyError, match="DNS lookup"):
+        verified_scope.check(context(), target(), no_dns)
+
+
+def test_tls_guard_restricts_host_port_and_private_ips_and_pins_valid_target() -> None:
+    connector = _RecordingTlsConnector(
+        RawTlsHandshake("TLSv1.3", "TLS_AES_256_GCM_SHA384", 256, (), verified=True)
+    )
+    dns = StubDns({"acme.com": ("93.184.216.34",)})
+    scope = ScopeGuard(
+        dns=dns,
+        http=StubHttp(),
+        ownership=EverythingVerified(),
+        classify=ClassifiedAsPublicSuffix(),
+        active_scans_enabled=True,
+        tls=connector,
+    )
+    granted = scanner(
+        queue="active",
+        requires_verification=True,
+        grant=ScannerGrant(tls=True, tls_ports=frozenset({443, 8443}), dns_lookups=3),
+    )
+    runtime = scope.check(context(), target(), granted)
+
+    with pytest.raises(ScopePolicyError, match="target host"):
+        runtime.tls.inspect("other.example.com")
+    with pytest.raises(ScopePolicyError, match="Port"):
+        runtime.tls.inspect("acme.com", port=8000)
+    assert connector.calls == []
+
+    info = runtime.tls.inspect("acme.com", port=8443)
+    assert info.address == "93.184.216.34"
+    assert connector.calls == [("93.184.216.34", 8443, "acme.com", True)]
+
+    # Private DNS answers are blocked before dialing the connector.
+    dns.answers["acme.com"] = ("127.0.0.1",)
+    with pytest.raises(ScopeError, match="private"):
+        runtime.tls.inspect("acme.com")
+    assert len(connector.calls) == 1

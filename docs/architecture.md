@@ -407,8 +407,10 @@ flowchart LR
   `ACTIVE_SCANS_ENABLED` (default `false`), the Redis-backed `infra.rate_limit.RedisTargetRateLimiter`,
   and `Settings.scanner_user_agent`, so active checks run only when enabled and while the target's
   root has a verified, unexpired TXT proof (ADR 0014,
-  [ADR 0033](adr/0033-website-network-grants.md)). Website HTTP and TLS grant extensions
-  (`http_methods`, `http_ports`, `http_paths`, `tls`, etc.) follow in #71–#79.
+  [ADR 0033](adr/0033-website-network-grants.md)). Scanners granted `tls=True` receive
+  `ctx.runtime.tls` (`infra/tls.SafeTlsClient`, pinning public IPs with SNI, `5 s` timeout, and
+  `10`-cert / `64 KiB` DER caps; `ssl` is banned in `scanners/`). Website HTTP grant extensions
+  (`http_methods`, `http_ports`, `http_paths`, etc.) follow in #72–#79.
 - Scanners only reach the network through those adapters: `infra/http.py` pins the validated
   address (keeping `Host`/SNI), re-checks redirects against the grant, ignores env proxies and
   caps time and body size; `infra/dns.py` queries configurable public resolvers without search

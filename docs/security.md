@@ -107,9 +107,18 @@ profile until #92 (ADR 0031). Active checks (`requires_verification`, `queue="ac
 (`attacksurf/<version> (+<contact_url>)`, from `SCANNER_CONTACT_URL` / `APP_BASE_URL`) and
 pass through the Redis-backed per-`(org_id, host)` rate and concurrency limiter
 (`infra/rate_limit.py`) inside `SafeHttpClient`, failing closed with `TransientJobError` if
-Redis is unavailable or the limit is exhausted. Planned #71–#79 checks will expand
-`ScannerGrant` with `tls`, `tls_ports`, `http_methods`, `http_ports`, `http_paths`,
-`soft_404_probe`, and `follow_redirects`. CT discovery's
+Redis is unavailable or the limit is exhausted. Guarded TLS inspection (`ctx.runtime.tls.inspect`,
+`infra/tls.py`, #71) requires `tls=True` on the active queue, restricts ports to `grant.tls_ports`
+within the curated web-port allowlist (`{80, 443, 8000, 8080, 8443, 8888}`), pins the guarded DNS
+resolution with SNI, bounds handshakes (`5 s`) and certificate chains (`10` certs / `64 KiB` DER),
+shares the per-`(org_id, host)` rate limiter, and reports certificate validation failures in data
+rather than raising (`ssl` is banned in scanner modules). Legacy-protocol probing (`probe_legacy`)
+depends on the worker's OpenSSL 3.x build: TLS 1.2/1.3 are always supported, TLS 1.0/1.1 are
+attempted best-effort via `DEFAULT:@SECLEVEL=0` and recorded in `legacy_protocols_untested` when
+compiled out or blocked by system crypto policy, SSLv2/SSLv3 are absent, and Python 3.12 reads
+only the leaf certificate when inspecting unverified/verified chains while Python 3.13+ reads the
+full peer chain. Planned #72–#79 checks will expand `ScannerGrant` with `http_methods`,
+`http_ports`, `http_paths`, `soft_404_probe`, and `follow_redirects`. CT discovery's
 random-label wildcard probes use the same guarded DNS adapter and DNS budget; a wildcard marker
 (`Asset.details["wildcard"] = true`) is data for later resolution, never a finding or a claim
 that a name exists. `dns.resolve` records A/AAAA/CNAME/MX/NS/TXT/CAA/SOA in capped

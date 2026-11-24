@@ -122,6 +122,8 @@ class ScanOutput(OutputModel):
 
 _HOSTNAME = re.compile(r"(?=.{1,253}$)([a-z0-9_-]{1,63}\.)*[a-z0-9-]{1,63}")
 _ANALYZER_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+ALLOWED_WEB_PORTS = frozenset({80, 443, 8000, 8080, 8443, 8888})
+DEFAULT_TLS_PORTS = frozenset({443})
 
 
 @dataclass(frozen=True)
@@ -138,6 +140,9 @@ class ScannerGrant:
     zone_transfer: bool = False
     # Registration data for the target's registrable domain via the IANA RDAP bootstrap.
     rdap: bool = False
+    # Guarded TLS handshakes on the target host and allowlisted web ports (ADR 0033).
+    tls: bool = False
+    tls_ports: frozenset[int] = DEFAULT_TLS_PORTS
 
     def __post_init__(self) -> None:
         if self.http is HttpPermission.SERVICES and not self.http_hosts:
@@ -146,6 +151,13 @@ class ScannerGrant:
             raise ValueError("http hosts are only meaningful for services")
         if self.dns_lookups < 0:
             raise ValueError("negative dns budget")
+        if not self.tls and self.tls_ports != DEFAULT_TLS_PORTS:
+            raise ValueError("tls_ports is only meaningful when tls is enabled")
+        if self.tls:
+            if not self.tls_ports:
+                raise ValueError("a tls grant needs at least one port")
+            if not self.tls_ports <= ALLOWED_WEB_PORTS:
+                raise ValueError("tls_ports contains a port outside the allowed web ports")
         for host in self.http_hosts:
             if not _HOSTNAME.fullmatch(host) or "." not in host:
                 raise ValueError("invalid http host")

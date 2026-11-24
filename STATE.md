@@ -2,18 +2,18 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-23 · **Branch:** `70-active-queue-rate-limits` · **Issue:** #70 (Open the active queue with egress isolation and per-target rate limits)
+**Updated:** 2026-11-23 · **Branch:** `71-guarded-tls-adapter` · **Issue:** #71 (Add a guarded TLS handshake adapter for scanners)
 
 ## Status
-Done on branch `70-active-queue-rate-limits`; PR open for review.
+Done on branch `71-guarded-tls-adapter`; running verification and opening PR for #71.
 
 ## Last task
-- Opened the `active` queue (`infra/queue.py`, `workers/tasks/pipeline.py` `active.scan`), moved `dns.takeover.http` and `dns.axfr` to `active`, and enforced active-queue routing in `ScannerRegistry` (#70).
-- Added `worker-active` on isolated `active-egress` networks in `compose.yaml` and `compose.prod.yaml`.
-- Added `ACTIVE_SCANS_ENABLED` (default `false`), `ACTIVE_TARGET_RATE_LIMIT_*`, `SCANNER_CONTACT_URL` / `scanner_user_agent` (`config.py`, `.env.example`), `RedisTargetRateLimiter` / `InMemoryTargetRateLimiter` (`infra/rate_limit.py`), and enforcement in `SafeHttpClient` and `ScopeGuard`.
+- Added `TlsInspection`, `TlsCertificate`, `TlsValidation`, `TlsInspector`, `UnconfiguredTls`, and `TlsError` in `domain/net.py`, and `tls` / `tls_ports` (`ALLOWED_WEB_PORTS`) in `domain/scanners.py` + `ScannerRegistry` active-queue/verification enforcement (#71).
+- Implemented `SafeTlsClient` and `SocketTlsConnector` in `infra/tls.py` (IP pinning, SNI, 5 s timeout, 10-cert / 64 KiB DER chain cap, non-raising validation reporting, per-target rate limiter integration, best-effort legacy TLS probing) and wired `_GuardedTls` into `ScopeGuard`.
+- Extended `tests/unit/scanners/test_network_boundary.py` to ban `ssl`, added `tests/unit/infra/test_tls.py` and ScopeGuard/registry tests, and synced `docs/security.md`, `docs/architecture.md`, and `CHANGELOG.md`.
 
 ## Next step
-Implement #71: Add a guarded TLS handshake adapter for scanners (start after #70 PR is merged).
+Implement #74: Sync vulnerability intelligence (NVD, CISA KEV, EPSS) into a local store (start after #71 PR is merged).
 
 ## Open threads
 - **Proxy trust:** the proxy has no caller authentication and `worker-analysis` shares the `sandbox` network with it (`docs/security.md`; #92 must close it before prod).
@@ -26,4 +26,4 @@ Implement #71: Add a guarded TLS handshake adapter for scanners (start after #70
 ## Notes for the next agent
 - Production plugins are registered in `src/attacksurf/app.py` and `src/attacksurf/workers/app.py`.
 - DB tests need `TEST_DATABASE_URL`; the dev stack exposes PostgreSQL on `127.0.0.1:5432` with `attacksurf_test`.
-- `ScopeGuard` now defaults `active_scans_enabled=False`; tests exercising active checks with `ScopeGuard` directly must pass `active_scans_enabled=True`.
+- `ScopeGuard` defaults `active_scans_enabled=False`; tests exercising active checks with `ScopeGuard` directly must pass `active_scans_enabled=True`.

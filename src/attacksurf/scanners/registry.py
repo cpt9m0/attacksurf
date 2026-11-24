@@ -27,18 +27,17 @@ class ScannerRegistry:
             or not 0 < scanner.timeout_seconds <= MAX_TIMEOUT_SECONDS
         ):
             raise ValueError("scanner timeout must be between 0 and 240 seconds")
-        # Target HTTP is an active check, so it always needs ownership proof and the active queue.
-        if scanner.grant.http is HttpPermission.TARGET:
-            if not scanner.requires_verification:
-                raise ValueError("a target HTTP grant requires requires_verification")
-            if scanner.queue != "active":
-                raise ValueError("a target HTTP grant must use the active queue")
-        # A zone transfer is an active check too: it asks a live nameserver to hand over a zone.
-        if scanner.grant.zone_transfer:
-            if not scanner.requires_verification:
-                raise ValueError("a zone-transfer grant requires requires_verification")
-            if scanner.queue != "active":
-                raise ValueError("a zone-transfer grant must use the active queue")
+        active_grants = (
+            ("a target HTTP grant", scanner.grant.http is HttpPermission.TARGET),
+            ("a zone-transfer grant", scanner.grant.zone_transfer),
+            ("a tls grant", scanner.grant.tls),
+        )
+        for label, enabled in active_grants:
+            if enabled:
+                if not scanner.requires_verification:
+                    raise ValueError(f"{label} requires requires_verification")
+                if scanner.queue != "active":
+                    raise ValueError(f"{label} must use the active queue")
         self._scanners[scanner.name] = scanner
         return scanner
 

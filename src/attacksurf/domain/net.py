@@ -280,6 +280,67 @@ class ScopeHttp(SafeHttpClient, Protocol):
     ) -> SafeHttpClient: ...
 
 
+class TlsError(Exception):
+    """A TLS handshake or certificate-parsing failure. Never carries socket internals."""
+
+
+@dataclass(frozen=True)
+class TlsCertificate:
+    """Normalized X.509 certificate metadata extracted by the guarded TLS adapter."""
+
+    subject: str
+    issuer: str
+    not_before: datetime
+    not_after: datetime
+    key_type: str
+    sans: tuple[str, ...] = ()
+    key_size: int | None = None
+    key_curve: str | None = None
+    signature_algorithm: str = ""
+    signature_hash: str | None = None
+    serial_number: str = ""
+    is_self_signed: bool = False
+
+
+@dataclass(frozen=True)
+class TlsValidation:
+    """Separate certificate trust and hostname match verdict (reported, never raised)."""
+
+    trusted_chain: bool
+    hostname_matches: bool
+    error_code: str | None = None
+
+
+@dataclass(frozen=True)
+class TlsInspection:
+    """Negotiated TLS parameters, parsed certificate chain, and validation summary."""
+
+    host: str
+    port: int
+    address: str
+    protocol: str
+    cipher: str
+    validation: TlsValidation
+    cipher_bits: int | None = None
+    chain: tuple[TlsCertificate, ...] = ()
+    chain_truncated: bool = False
+    legacy_protocols_accepted: tuple[str, ...] = ()
+    legacy_protocols_untested: tuple[str, ...] = ()
+
+
+class TlsInspector(Protocol):
+    def inspect(self, host: str, port: int = 443, *, probe_legacy: bool = False) -> TlsInspection:
+        """Inspect TLS handshake, certificate chain, and optional legacy protocols on `host`."""
+        ...
+
+
+class UnconfiguredTls:
+    """No TLS grant: a plugin that inspects TLS anyway is a policy bug, not a skip."""
+
+    def inspect(self, host: str, port: int = 443, *, probe_legacy: bool = False) -> TlsInspection:
+        raise ScopePolicyError("This scanner may not perform TLS handshakes.")
+
+
 class ScannerRuntime:
     """Run-scoped adapters handed to a plugin after the gate approved it."""
 
@@ -292,6 +353,7 @@ class ScannerRuntime:
         "org_domain",
         "rdap",
         "sandbox",
+        "tls",
         "zone_transfer",
     )
 
@@ -307,6 +369,7 @@ class ScannerRuntime:
         authoritative: AuthoritativeDns | None = None,
         zone_transfer: ZoneTransfer | None = None,
         rdap: RdapLookup | None = None,
+        tls: TlsInspector | None = None,
     ) -> None:
         self.dns = dns
         self.http = http
@@ -318,6 +381,7 @@ class ScannerRuntime:
         self.authoritative = authoritative or UnconfiguredAuthoritative()
         self.zone_transfer = zone_transfer or UnconfiguredZoneTransfer()
         self.rdap = rdap or UnconfiguredRdap()
+        self.tls = tls or UnconfiguredTls()
         # Registrable (organizational) domain for a hostname, from the public suffix list;
         # None when unconfigured or the name is off the list. Lets checks apply DMARC's
         # organizational-domain fallback without importing the PSL themselves.

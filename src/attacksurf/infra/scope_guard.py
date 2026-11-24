@@ -32,6 +32,8 @@ from attacksurf.domain.net import (
     ScannerRuntime,
     ScopeHttp,
     TargetRateLimiter,
+    TlsInspection,
+    TlsInspector,
     ZoneAnswers,
     ZoneTransfer,
     ZoneTransferAttempt,
@@ -52,6 +54,7 @@ from attacksurf.infra import public_suffix
 from attacksurf.infra.authoritative_dns import AuthoritativeLookup
 from attacksurf.infra.http import bounded_limit
 from attacksurf.infra.rdap import RdapClient
+from attacksurf.infra.tls import SafeTlsClient, TlsConnector
 
 MAX_REDIRECTS = 4
 MAX_DNS_LOOKUPS = 40
@@ -59,6 +62,7 @@ MAX_DNS_LOOKUPS = 40
 # bootstrap host and the TLD's RDAP host.
 MIN_AUTHORITATIVE_LOOKUPS = 3
 MIN_RDAP_LOOKUPS = 2
+MIN_TLS_LOOKUPS = 1
 
 
 class OwnershipChecker(Protocol):
@@ -88,6 +92,7 @@ class ScopeGuard(ScannerGate):
         active_scans_enabled: bool = False,
         rate_limiter: TargetRateLimiter | None = None,
         user_agent: str | None = None,
+        tls: TlsConnector | None = None,
     ) -> None:
         self._dns = dns
         self._http = http
@@ -99,18 +104,20 @@ class ScopeGuard(ScannerGate):
         self._active_scans_enabled = active_scans_enabled
         self._rate_limiter = rate_limiter
         self._user_agent = user_agent
+        self._tls = tls
 
     def check(self, ctx: ScanContext, asset: AssetRef, scanner: Scanner) -> ScannerRuntime:
         """Validate and authorize one run. Raises `ScopeError`, and the job is then skipped."""
         self._check_target(asset, scanner)
         grant = scanner.grant
-        # Target HTTP, zone transfer, and the active queue *are* active checks: the grant/queue
-        # decides, not just `requires_verification`, so a plugin can't bypass the gate.
+        # Target HTTP, TLS, zone transfer, and the active queue *are* active checks: the
+        # grant/queue decides, not just `requires_verification`, so a plugin can't bypass it.
         is_active = (
             scanner.requires_verification
             or scanner.queue == "active"
             or grant.http is HttpPermission.TARGET
             or grant.zone_transfer
+            or grant.tls
         )
         if is_active and not self._active_scans_enabled:
             raise ScopeError("Active scans are disabled on this instance.")
@@ -134,6 +141,21 @@ class ScopeGuard(ScannerGate):
         authoritative_dns = (
             AuthoritativeLookup(guarded_dns)
             if grant.authoritative_dns or grant.zone_transfer
+            else None
+        )
+        tls_inspector: TlsInspector | None = (
+            _GuardedTls(
+                SafeTlsClient(
+                    guarded_dns,
+                    connector=self._tls,
+                    rate_limiter=self._rate_limiter,
+                    rate_limit_org_id=ctx.org_id,
+                ),
+                target_host=asset.value,
+                allowed_ports=grant.tls_ports,
+                check_host=self._check_host,
+            )
+            if grant.tls
             else None
         )
         return ScannerRuntime(
@@ -162,6 +184,7 @@ class ScopeGuard(ScannerGate):
                 if grant.rdap
                 else None
             ),
+            tls=tls_inspector,
         )
 
     def _check_target(self, asset: AssetRef, scanner: Scanner) -> None:
@@ -190,6 +213,8 @@ class ScopeGuard(ScannerGate):
             needed = max(needed, MIN_AUTHORITATIVE_LOOKUPS)
         if grant.rdap:
             needed = max(needed, MIN_RDAP_LOOKUPS)
+        if grant.tls:
+            needed = max(needed, MIN_TLS_LOOKUPS)
         if grant.dns_lookups < needed:
             raise ScopePolicyError("A scanner needs a DNS lookup for each data service.")
 
@@ -340,6 +365,31 @@ class _GuardedRdap:
         if domain not in (self._target, self._registrable):
             raise ScopePolicyError("The scanner may only look up the target's registration.")
         return self._inner.lookup(domain)
+
+
+class _GuardedTls:
+    """TLS handshakes restricted to the scanned target host and granted web ports."""
+
+    def __init__(
+        self,
+        inner: TlsInspector,
+        *,
+        target_host: str,
+        allowed_ports: frozenset[int],
+        check_host: Callable[[str], str],
+    ) -> None:
+        self._inner = inner
+        self._target_host = target_host
+        self._allowed_ports = allowed_ports
+        self._check_host = check_host
+
+    def inspect(self, host: str, port: int = 443, *, probe_legacy: bool = False) -> TlsInspection:
+        norm_host = self._check_host(host.strip().lower().rstrip("."))
+        if norm_host != self._target_host:
+            raise ScopePolicyError("The scanner may only inspect the target host.")
+        if port not in self._allowed_ports:
+            raise ScopePolicyError("Port is outside the scanner's TLS grant.")
+        return self._inner.inspect(norm_host, port, probe_legacy=probe_legacy)
 
 
 def request_host(url: str) -> str:
