@@ -21,6 +21,7 @@ FORBIDDEN = {
     "socket",
     "urllib.request",
     "http.client",
+    "ssl",
     "dns.resolver",
     "dns.query",
     "dns.asyncresolver",
@@ -74,3 +75,9 @@ def test_detector_catches_the_sdk_http_stack_and_llm_sdks(tmp_path: Path) -> Non
         "import httpx2\nfrom httpcore2 import Request\nimport anthropic\nimport openai\n"
     )
     assert _violations(sample) == {"httpx2", "httpcore2", "anthropic", "openai"}
+
+
+def test_detector_catches_ssl_imports(tmp_path: Path) -> None:
+    sample = tmp_path / "plugin.py"
+    sample.write_text("import ssl\nfrom ssl import create_default_context\n")
+    assert _violations(sample) == {"ssl"}

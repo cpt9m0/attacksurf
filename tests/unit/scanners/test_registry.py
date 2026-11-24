@@ -177,3 +177,38 @@ def test_registration_rejects_zone_transfer_on_passive_queue() -> None:
 
     with pytest.raises(ValueError, match="active queue"):
         ScannerRegistry().register(PassiveTransfer)
+
+
+def test_registration_and_grant_validation_for_tls() -> None:
+    with pytest.raises(ValueError, match="only meaningful when tls is enabled"):
+        ScannerGrant(tls=False, tls_ports=frozenset({443, 8443}))
+    with pytest.raises(ValueError, match="at least one port"):
+        ScannerGrant(tls=True, tls_ports=frozenset())
+    with pytest.raises(ValueError, match="allowed web ports"):
+        ScannerGrant(tls=True, tls_ports=frozenset({22}))
+
+    class UnverifiedTls(EmptyScanner):
+        name = "test.unverified_tls"
+        queue = "active"
+        requires_verification = False
+        grant = ScannerGrant(tls=True, dns_lookups=1)
+
+    with pytest.raises(ValueError, match="requires_verification"):
+        ScannerRegistry().register(UnverifiedTls)
+
+    class PassiveTls(EmptyScanner):
+        name = "test.passive_tls"
+        queue = "passive"
+        requires_verification = True
+        grant = ScannerGrant(tls=True, dns_lookups=1)
+
+    with pytest.raises(ValueError, match="active queue"):
+        ScannerRegistry().register(PassiveTls)
+
+    class ValidTls(EmptyScanner):
+        name = "test.valid_tls"
+        queue = "active"
+        requires_verification = True
+        grant = ScannerGrant(tls=True, tls_ports=frozenset({443, 8443}), dns_lookups=1)
+
+    assert ScannerRegistry().register(ValidTls) is ValidTls
