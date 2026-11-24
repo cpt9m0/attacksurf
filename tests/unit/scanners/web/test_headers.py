@@ -424,6 +424,146 @@ def test_web_cors_ignores_unallowed_final_url_port() -> None:
     assert http.requests == [("https://acme.com/", 16 * 1024, {"Origin": FOREIGN_ORIGIN})]
 
 
+def test_web_cors_ignores_wildcard_even_with_credentials_true() -> None:
+    ctx, _ = _ctx(
+        response=HttpBody(
+            status_code=200,
+            content=b"{}",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": "true",
+            },
+        )
+    )
+
+    out = WebCors().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+    assert out.findings == ()
+
+
+def test_web_headers_evaluates_script_src_elem_and_eval_separately() -> None:
+    inline_elem_ctx, _ = _ctx(
+        web_details={
+            "final_url": "https://acme.com/",
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": {
+                "strict-transport-security": "max-age=31536000",
+                "content-security-policy": (
+                    "default-src 'self'; script-src 'self'; "
+                    "script-src-elem 'unsafe-inline'; frame-ancestors 'none'"
+                ),
+                "x-content-type-options": "nosniff",
+            },
+            "cookies": [],
+        }
+    )
+    inline_out = WebHeaders().run(
+        inline_elem_ctx, AssetRef(type=AssetType.URL, value="https://acme.com/")
+    )
+    assert [f.rule_id for f in inline_out.findings] == ["web.headers.csp_unsafe"]
+    assert inline_out.findings[0].evidence[0].data["unsafe_tokens"] == ["'unsafe-inline'"]
+
+    eval_only_ctx, _ = _ctx(
+        web_details={
+            "final_url": "https://acme.com/",
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": {
+                "strict-transport-security": "max-age=31536000",
+                "content-security-policy": (
+                    "default-src 'self'; script-src 'unsafe-eval'; "
+                    "script-src-elem 'self'; frame-ancestors 'none'"
+                ),
+                "x-content-type-options": "nosniff",
+            },
+            "cookies": [],
+        }
+    )
+    eval_out = WebHeaders().run(
+        eval_only_ctx, AssetRef(type=AssetType.URL, value="https://acme.com/")
+    )
+    assert [f.rule_id for f in eval_out.findings] == ["web.headers.csp_unsafe"]
+    assert eval_out.findings[0].evidence[0].data["unsafe_tokens"] == ["'unsafe-eval'"]
+
+
+def test_web_headers_skips_csp_and_clickjacking_when_csp_header_truncated() -> None:
+    ctx, _ = _ctx(
+        web_details={
+            "final_url": "https://acme.com/",
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": {
+                "strict-transport-security": "max-age=31536000",
+                "content-security-policy": "default-src 'self' https://cdn.example.com",
+                "x-content-type-options": "nosniff",
+            },
+            "headers_truncated": ["content-security-policy"],
+            "cookies": [],
+        }
+    )
+
+    out = WebHeaders().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+
+    assert out.findings == ()
+    summary = out.observations[0].details["security_headers"]
+    assert isinstance(summary, dict)
+    assert summary["csp"] is None
+    assert summary["clickjacking_protected"] is None
+
+
+def test_web_headers_honors_frame_ancestors_wildcard_over_x_frame_options() -> None:
+    ctx, _ = _ctx(
+        web_details={
+            "final_url": "https://acme.com/",
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": {
+                "strict-transport-security": "max-age=31536000",
+                "content-security-policy": "default-src 'self'; frame-ancestors *",
+                "x-frame-options": "DENY",
+                "x-content-type-options": "nosniff",
+            },
+            "cookies": [],
+        }
+    )
+
+    out = WebHeaders().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+
+    assert [f.rule_id for f in out.findings] == ["web.headers.clickjacking"]
+
+
+def test_web_headers_and_cors_handle_urls_exceeding_max_location_length() -> None:
+    long_url = "https://acme.com/" + ("a" * 650)
+    ctx, _ = _ctx(
+        web_details={
+            "final_url": long_url,
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": {},
+            "cookies": [],
+        },
+        response=HttpBody(
+            status_code=200,
+            content=b"ok",
+            headers={
+                "Access-Control-Allow-Origin": FOREIGN_ORIGIN,
+                "Access-Control-Allow-Credentials": "true",
+            },
+            final_url=long_url,
+        ),
+    )
+
+    url_asset = AssetRef(type=AssetType.URL, value=long_url)
+    hdr_out = WebHeaders().run(ctx, url_asset)
+    cors_out = WebCors().run(ctx, url_asset)
+
+    assert hdr_out.findings
+    assert all(f.location == "" for f in hdr_out.findings)
+    assert all(f.remediation_context["url"] == long_url for f in hdr_out.findings)
+    assert [f.location for f in cors_out.findings] == [""]
+    assert cors_out.findings[0].remediation_context["url"] == long_url
+
+
 def test_web_rules_catalog_includes_all_issue_77_rules_with_expected_severities() -> None:
     catalog = build_catalog(WEB_RULES)
     expected = {

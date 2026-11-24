@@ -44,6 +44,7 @@ MAX_TITLE_CHARS = 200
 MAX_TITLE_PARSE_BYTES = 64 * 1024
 MAX_HEADERS = 30
 MAX_HEADER_VALUE_CHARS = 256
+MAX_CSP_HEADER_VALUE_CHARS = 4096
 MAX_COOKIES = 20
 DNS_LOOKUPS = 16
 REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
@@ -83,6 +84,7 @@ class ProbeResult:
     headers: dict[str, str]
     cookies: tuple[str, ...]
     body_excerpt: str
+    headers_truncated: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -155,8 +157,10 @@ def redact_set_cookie(raw_cookie: str) -> str:
     return "; ".join(tokens)[:MAX_HEADER_VALUE_CHARS]
 
 
-def sanitize_headers(headers: Mapping[str, str]) -> tuple[dict[str, str], tuple[str, ...]]:
-    """Return lowercase capped response headers (without Set-Cookie) and redacted Set-Cookies."""
+def _sanitize_headers(
+    headers: Mapping[str, str],
+) -> tuple[dict[str, str], tuple[str, ...], tuple[str, ...]]:
+    """Return lowercase capped headers, redacted Set-Cookies, and truncated header names."""
     get_list = getattr(headers, "get_list", None)
     raw_cookies: list[str] = []
     if callable(get_list):
@@ -171,13 +175,22 @@ def sanitize_headers(headers: Mapping[str, str]) -> tuple[dict[str, str], tuple[
 
     cleaned: dict[str, str] = {}
     extra: list[tuple[str, str]] = []
+    truncated: set[str] = set()
     seen_keys: set[str] = set()
     for key, val in headers.items():
         norm_key = key.strip().lower()[:128]
         if not norm_key or norm_key == "set-cookie" or norm_key in seen_keys:
             continue
         seen_keys.add(norm_key)
-        clean_val = val.strip().replace("\x00", "")[:MAX_HEADER_VALUE_CHARS]
+        stripped_val = val.strip().replace("\x00", "")
+        cap = (
+            MAX_CSP_HEADER_VALUE_CHARS
+            if norm_key == "content-security-policy"
+            else MAX_HEADER_VALUE_CHARS
+        )
+        if len(stripped_val) > cap:
+            truncated.add(norm_key)
+        clean_val = stripped_val[:cap]
         if norm_key in _PRIORITY_HEADERS:
             cleaned[norm_key] = clean_val
         else:
@@ -186,6 +199,13 @@ def sanitize_headers(headers: Mapping[str, str]) -> tuple[dict[str, str], tuple[
         if len(cleaned) >= MAX_HEADERS:
             break
         cleaned[norm_key] = clean_val
+    kept_truncated = tuple(sorted(k for k in truncated if k in cleaned))
+    return cleaned, cookies, kept_truncated
+
+
+def sanitize_headers(headers: Mapping[str, str]) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Return lowercase capped response headers (without Set-Cookie) and redacted Set-Cookies."""
+    cleaned, cookies, _truncated = _sanitize_headers(headers)
     return cleaned, cookies
 
 
@@ -221,7 +241,7 @@ def _to_probe_result(initial_url: str, body: HttpBody) -> ProbeResult:
         (_normalize_url_safe(hop_url, hop_url), hop_status)
         for hop_url, hop_status in body.redirect_chain
     )
-    headers, cookies = sanitize_headers(body.headers)
+    headers, cookies, headers_truncated = _sanitize_headers(body.headers)
     content_type = headers.get("content-type", "")
     location = headers.get("location", "")
     stopped_oos = body.status_code in REDIRECT_CODES and bool(location)
@@ -244,6 +264,7 @@ def _to_probe_result(initial_url: str, body: HttpBody) -> ProbeResult:
         headers=headers,
         cookies=cookies,
         body_excerpt=excerpt,
+        headers_truncated=headers_truncated,
     )
 
 
@@ -284,6 +305,7 @@ def _web_details(probe: ProbeResult) -> dict[str, JsonValue]:
         "body_bytes": probe.body_bytes,
         "body_truncated": probe.body_truncated,
         "headers": dict(probe.headers),
+        "headers_truncated": list(probe.headers_truncated),
         "cookies": list(probe.cookies),
     }
 
@@ -291,10 +313,14 @@ def _web_details(probe: ProbeResult) -> dict[str, JsonValue]:
 def _trim_headers_to_budget(details: dict[str, JsonValue], headers: dict[str, JsonValue]) -> None:
     drop_order = [k for k in headers if k not in _PRIORITY_HEADERS]
     drop_order.extend(k for k in headers if k in _PRIORITY_HEADERS)
+    web = details.get("web")
+    truncated = web.get("headers_truncated") if isinstance(web, dict) else None
     for key in reversed(drop_order):
         if _details_bytes(details) <= MAX_ASSET_DETAILS_BYTES:
             break
         headers.pop(key, None)
+        if isinstance(truncated, list) and key not in truncated:
+            truncated.append(key)
 
 
 def _fit_observation_details(

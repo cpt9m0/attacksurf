@@ -35,6 +35,8 @@ CORS_MAX_BODY_BYTES = 16 * 1024
 CORS_DNS_LOOKUPS = 4
 MAX_EVIDENCE_COOKIES = 10
 MAX_VALUE_CHARS = 512
+MAX_CSP_VALUE_CHARS = 4096
+_WILDCARD_FRAME_ANCESTORS = frozenset({"*", "http:", "https:"})
 
 _HSTS_MAX_AGE_RE = re.compile(r'(?:^|;)\s*max-age\s*=\s*"?(\d+)"?', re.IGNORECASE)
 _NONCE_OR_HASH_RE = re.compile(
@@ -55,7 +57,9 @@ def _lowercase_headers(raw_headers: object) -> dict[str, str]:
     result: dict[str, str] = {}
     for key, val in raw_headers.items():
         if isinstance(key, str) and isinstance(val, str):
-            result[key.lower()] = val.strip()[:MAX_VALUE_CHARS]
+            norm_key = key.lower()
+            cap = MAX_CSP_VALUE_CHARS if norm_key == "content-security-policy" else MAX_VALUE_CHARS
+            result[norm_key] = val.strip()[:cap]
     return result
 
 
@@ -97,36 +101,40 @@ def _parse_csp_policies(raw_csp: str) -> list[dict[str, tuple[str, ...]]]:
     return policies
 
 
-def _effective_script_tokens(directives: Mapping[str, tuple[str, ...]]) -> tuple[str, ...] | None:
-    for directive in ("script-src", "script-src-elem", "default-src"):
+def _inline_script_tokens(directives: Mapping[str, tuple[str, ...]]) -> tuple[str, ...] | None:
+    for directive in ("script-src-elem", "script-src", "default-src"):
         if directive in directives:
             return directives[directive]
     return None
 
 
-def _policy_unsafe_tokens(script_vals: tuple[str, ...]) -> set[str]:
-    has_nonce_or_hash = any(_NONCE_OR_HASH_RE.match(token) for token in script_vals)
-    lower_vals = {token.lower() for token in script_vals}
-    unsafe: set[str] = set()
-    if "'unsafe-inline'" in lower_vals and not has_nonce_or_hash:
-        unsafe.add("'unsafe-inline'")
-    if "'unsafe-eval'" in lower_vals:
-        unsafe.add("'unsafe-eval'")
-    return unsafe
+def _eval_script_tokens(directives: Mapping[str, tuple[str, ...]]) -> tuple[str, ...] | None:
+    for directive in ("script-src", "default-src"):
+        if directive in directives:
+            return directives[directive]
+    return None
 
 
 def _csp_unsafe_tokens(policies: Sequence[Mapping[str, tuple[str, ...]]]) -> tuple[str, ...]:
-    # CSP3 intersects multiple policies: an unsafe token only applies when every policy
-    # defining an effective script directive permits it.
-    per_policy = [
-        _policy_unsafe_tokens(script_vals)
-        for policy in policies
-        if (script_vals := _effective_script_tokens(policy)) is not None
+    # CSP3 intersects multiple policies independently per execution capability.
+    unsafe: list[str] = []
+    inline_policies = [
+        vals for policy in policies if (vals := _inline_script_tokens(policy)) is not None
     ]
-    if not per_policy:
-        return ()
-    effective = set.intersection(*per_policy)
-    return tuple(tok for tok in ("'unsafe-inline'", "'unsafe-eval'") if tok in effective)
+    if inline_policies and all(
+        "'unsafe-inline'" in {token.lower() for token in vals}
+        and not any(_NONCE_OR_HASH_RE.match(token) for token in vals)
+        for vals in inline_policies
+    ):
+        unsafe.append("'unsafe-inline'")
+    eval_policies = [
+        vals for policy in policies if (vals := _eval_script_tokens(policy)) is not None
+    ]
+    if eval_policies and all(
+        "'unsafe-eval'" in {token.lower() for token in vals} for vals in eval_policies
+    ):
+        unsafe.append("'unsafe-eval'")
+    return tuple(unsafe)
 
 
 def _has_valid_xfo(raw_xfo: str) -> bool:
@@ -138,13 +146,18 @@ def _has_clickjacking_protection(
     headers: Mapping[str, str],
     policies: Sequence[Mapping[str, tuple[str, ...]]],
 ) -> bool:
-    if _has_valid_xfo(headers.get("x-frame-options", "")):
-        return True
-    for directives in policies:
-        frame_ancestors = directives.get("frame-ancestors")
-        if frame_ancestors and [token.lower() for token in frame_ancestors] != ["*"]:
-            return True
-    return False
+    fa_directives = [
+        [token.lower() for token in fa]
+        for directives in policies
+        if (fa := directives.get("frame-ancestors")) is not None
+    ]
+    if fa_directives:
+        # CSP3 §7.7.1: browsers ignore X-Frame-Options whenever frame-ancestors is present.
+        return all(
+            bool(tokens) and not any(token in _WILDCARD_FRAME_ANCESTORS for token in tokens)
+            for tokens in fa_directives
+        )
+    return _has_valid_xfo(headers.get("x-frame-options", ""))
 
 
 def _redact_cookie_preview(entry: str) -> str:
@@ -203,7 +216,7 @@ def _check_hsts(
         findings.append(
             RawFinding(
                 rule_id="web.headers.hsts_missing",
-                location=final_url,
+                location="",
                 confidence=Confidence.HIGH,
                 remediation_context={"url": final_url},
                 evidence=_header_evidence(
@@ -221,7 +234,7 @@ def _check_hsts(
         findings.append(
             RawFinding(
                 rule_id="web.headers.hsts_weak",
-                location=final_url,
+                location="",
                 confidence=Confidence.HIGH,
                 remediation_context={"url": final_url},
                 evidence=_header_evidence(
@@ -246,7 +259,10 @@ def _check_csp_and_framing(
     is_html: bool,
     status_code: int | None,
     headers: Mapping[str, str],
-) -> tuple[bool, bool]:
+    csp_truncated: bool,
+) -> tuple[bool | None, bool | None]:
+    if csp_truncated:
+        return None, None
     raw_csp = headers.get("content-security-policy", "").strip()
     policies = _parse_csp_policies(raw_csp) if raw_csp else []
     frame_ok = _has_clickjacking_protection(headers, policies)
@@ -259,7 +275,7 @@ def _check_csp_and_framing(
         findings.append(
             RawFinding(
                 rule_id="web.headers.csp_missing",
-                location=final_url,
+                location="",
                 confidence=Confidence.HIGH,
                 remediation_context={"url": final_url},
                 evidence=_header_evidence(
@@ -275,7 +291,7 @@ def _check_csp_and_framing(
             findings.append(
                 RawFinding(
                     rule_id="web.headers.csp_unsafe",
-                    location=final_url,
+                    location="",
                     confidence=Confidence.HIGH,
                     remediation_context={
                         "url": final_url,
@@ -301,7 +317,7 @@ def _check_csp_and_framing(
         findings.append(
             RawFinding(
                 rule_id="web.headers.clickjacking",
-                location=final_url,
+                location="",
                 confidence=Confidence.HIGH,
                 remediation_context={"url": final_url},
                 evidence=_header_evidence(
@@ -326,7 +342,7 @@ def _check_nosniff(
         findings.append(
             RawFinding(
                 rule_id="web.headers.nosniff_missing",
-                location=final_url,
+                location="",
                 confidence=Confidence.HIGH,
                 remediation_context={"url": final_url},
                 evidence=_header_evidence(
@@ -359,7 +375,7 @@ def _check_cookies(
     findings.append(
         RawFinding(
             rule_id="web.cookies.insecure_flags",
-            location=final_url,
+            location="",
             confidence=Confidence.HIGH,
             remediation_context={"url": final_url, "cookies": names},
             evidence=(
@@ -399,7 +415,7 @@ def _check_http_redirect(
         findings.append(
             RawFinding(
                 rule_id="web.https.no_redirect",
-                location=target_url,
+                location="",
                 confidence=Confidence.HIGH,
                 remediation_context={"url": target_url},
                 evidence=_header_evidence(
@@ -439,6 +455,13 @@ class WebHeaders:
         media_type = content_type.split(";", 1)[0].strip().lower()
         is_html = media_type in HTML_CONTENT_TYPES
         headers = _lowercase_headers(web.get("headers"))
+        raw_truncated = web.get("headers_truncated")
+        truncated_headers = (
+            {item.lower() for item in raw_truncated if isinstance(item, str)}
+            if isinstance(raw_truncated, list)
+            else set()
+        )
+        csp_truncated = "content-security-policy" in truncated_headers
 
         findings: list[RawFinding] = []
         hsts_ok = _check_hsts(
@@ -449,8 +472,10 @@ class WebHeaders:
             headers=headers,
         )
         if stopped_out_of_scope:
-            csp_ok = False
-            frame_ok = _has_clickjacking_protection(headers, ())
+            csp_ok: bool | None = None if csp_truncated else False
+            frame_ok: bool | None = (
+                None if csp_truncated else _has_clickjacking_protection(headers, ())
+            )
             nosniff_ok = headers.get("x-content-type-options", "").strip().lower() == "nosniff"
         else:
             csp_ok, frame_ok = _check_csp_and_framing(
@@ -459,6 +484,7 @@ class WebHeaders:
                 is_html=is_html,
                 status_code=status_code,
                 headers=headers,
+                csp_truncated=csp_truncated,
             )
             nosniff_ok = _check_nosniff(
                 findings,
@@ -522,7 +548,9 @@ def _is_cors_vulnerable(body: HttpBody) -> tuple[bool, dict[str, JsonValue]]:
     headers = _lowercase_headers(body.headers)
     acao = headers.get("access-control-allow-origin", "").strip()
     acac = headers.get("access-control-allow-credentials", "").strip().lower()
-    vulnerable = acac == "true" and acao in {FOREIGN_ORIGIN, "*"}
+    # Fetch CORS rejects wildcard `*` with credentials mode `include`, so only reflected
+    # foreign origins with credentials expose authenticated responses cross-origin.
+    vulnerable = acac == "true" and acao == FOREIGN_ORIGIN
     relevant = _subset_headers(
         headers,
         "access-control-allow-origin",
@@ -571,7 +599,7 @@ class WebCors:
             findings=(
                 RawFinding(
                     rule_id="web.cors.wildcard_credentials",
-                    location=target_url,
+                    location="",
                     confidence=Confidence.HIGH,
                     remediation_context={"url": target_url},
                     evidence=_header_evidence(

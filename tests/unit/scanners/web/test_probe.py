@@ -463,3 +463,40 @@ def test_web_probe_survives_malformed_html_marked_section() -> None:
     assert out.observations[0].active is True
     assert out.observations[0].details["web"]["title"] == "Ok"  # type: ignore[index]
     assert [f.rule_id for f in out.findings] == ["web.disclosure.version_banner"]
+
+
+def test_web_probe_preserves_long_csp_and_tracks_truncation() -> None:
+    long_csp = "default-src 'self' " + " ".join(f"https://cdn{i}.example.com" for i in range(25))
+    assert len(long_csp) > 256
+    oversized_csp = long_csp + " " + ("https://extra.example.com " * 200)
+    http = _StubHttp(
+        {
+            "https://acme.example/": HttpBody(
+                200,
+                b"<html></html>",
+                False,
+                {"content-type": "text/html", "content-security-policy": long_csp},
+                final_url="https://acme.example/",
+            ),
+            "http://acme.example/": HttpBody(
+                200,
+                b"<html></html>",
+                False,
+                {
+                    "content-type": "text/html",
+                    "content-security-policy": oversized_csp,
+                    "x-custom": "a" * 300,
+                },
+                final_url="http://acme.example/",
+            ),
+        }
+    )
+
+    out = WebProbe().run(_ctx(http), AssetRef(type=AssetType.DOMAIN, value="acme.example"))
+    https_web = out.observations[0].details["web"]
+    http_web = out.observations[1].details["web"]
+    assert isinstance(https_web, dict)
+    assert isinstance(http_web, dict)
+    assert https_web["headers"]["content-security-policy"] == long_csp  # type: ignore[index]
+    assert https_web["headers_truncated"] == []
+    assert http_web["headers_truncated"] == ["content-security-policy", "x-custom"]
