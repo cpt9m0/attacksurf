@@ -89,6 +89,34 @@ def test_production_ai_healthcheck_targets_its_own_worker(services: dict[str, An
     assert "passive@" not in probe[1]
 
 
+def test_production_active_worker_consumes_active_queue_on_isolated_egress(
+    compose_config: dict[str, Any],
+) -> None:
+    services = compose_config["services"]
+    worker = services.get("worker-active")
+
+    assert worker is not None, "Production needs an active queue consumer for active checks"
+    command = worker["command"]
+    assert command[command.index("-Q") + 1] == "active"
+    assert command[command.index("-n") + 1] == "active@%h"
+    assert worker["image"] == services["web"]["image"]
+    assert worker["entrypoint"] == services["web"]["entrypoint"]
+    assert worker["environment"] == services["web"]["environment"]
+    assert worker["secrets"] == services["web"]["secrets"]
+    assert worker["depends_on"]["redis"]["condition"] == "service_healthy"
+    assert worker["restart"] == "unless-stopped"
+    assert not worker.get("profiles")
+    assert set(worker["networks"]) == {"internal", "active-egress"}
+    assert "active-egress" in compose_config["networks"]
+
+    probe = worker["healthcheck"]["test"]
+    assert probe[0] == "CMD-SHELL"
+    assert "bash -c" in probe[1]
+    assert "redis_password" in probe[1]
+    assert "__REDIS_PASS__" in probe[1]
+    assert "inspect ping -d active@$$HOSTNAME" in probe[1]
+
+
 def test_production_stack_publishes_no_ports(services: dict[str, Any]) -> None:
     for name, service in services.items():
         assert not service.get("ports"), f"{name} must not publish host ports"

@@ -797,3 +797,69 @@ def test_whitespace_sentry_fields_treated_as_unset() -> None:
 def test_sentry_traces_sample_rate_rejects_out_of_range(rate: float) -> None:
     with pytest.raises(ValidationError):
         make_settings(sentry_traces_sample_rate=rate)
+
+
+def test_active_scan_settings_default_safe_and_disabled() -> None:
+    settings = make_settings()
+
+    assert settings.active_scans_enabled is False
+    assert settings.active_target_rate_limit_rps == 2.0
+    assert settings.active_target_rate_limit_burst == 5
+    assert settings.active_target_max_concurrency == 2
+    assert settings.scanner_contact_url is None
+    assert settings.scanner_user_agent.startswith("attacksurf/")
+    assert "+https://github.com/cpt9m0/attacksurf)" in settings.scanner_user_agent
+
+
+def test_active_scan_settings_read_from_environment(clean_env: pytest.MonkeyPatch) -> None:
+    clean_env.setenv("ACTIVE_SCANS_ENABLED", "true")
+    clean_env.setenv("ACTIVE_TARGET_RATE_LIMIT_RPS", "4.5")
+    clean_env.setenv("ACTIVE_TARGET_RATE_LIMIT_BURST", "10")
+    clean_env.setenv("ACTIVE_TARGET_MAX_CONCURRENCY", "3")
+    clean_env.setenv("SCANNER_CONTACT_URL", "https://security.example.com/scanner/")
+
+    settings = settings_from_env()
+
+    assert settings.active_scans_enabled is True
+    assert settings.active_target_rate_limit_rps == 4.5
+    assert settings.active_target_rate_limit_burst == 10
+    assert settings.active_target_max_concurrency == 3
+    assert settings.scanner_contact_url == "https://security.example.com/scanner"
+    assert settings.scanner_user_agent.endswith("(+https://security.example.com/scanner)")
+
+
+def test_scanner_user_agent_falls_back_to_app_base_url() -> None:
+    settings = make_settings(app_base_url="https://asm.example.org/")
+
+    assert settings.scanner_user_agent.endswith("(+https://asm.example.org)")
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "ftp://example.com",
+        "https://user:pass@example.com",
+        "https://example.com?a=1",
+        "https://example.com#frag",
+        "not-a-url",
+    ],
+)
+def test_scanner_contact_url_rejects_invalid_values(bad_url: str) -> None:
+    with pytest.raises(ValidationError, match="SCANNER_CONTACT_URL"):
+        make_settings(scanner_contact_url=bad_url)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("active_target_rate_limit_rps", 0.0),
+        ("active_target_rate_limit_rps", 10.1),
+        ("active_target_rate_limit_burst", 0),
+        ("active_target_rate_limit_burst", 21),
+        ("active_target_max_concurrency", 0),
+        ("active_target_max_concurrency", 6),
+    ],
+)
+def test_active_rate_limit_settings_reject_out_of_range(field: str, value: float | int) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(**{field: value})

@@ -31,6 +31,7 @@ from attacksurf.domain.net import (
     SafeHttpClient,
     ScannerRuntime,
     ScopeHttp,
+    TargetRateLimiter,
     ZoneAnswers,
     ZoneTransfer,
     ZoneTransferAttempt,
@@ -84,6 +85,9 @@ class ScopeGuard(ScannerGate):
         sandbox: SandboxRunner | None = None,
         cache: ScanCache | None = None,
         ip_intel: IpIntel | None = None,
+        active_scans_enabled: bool = False,
+        rate_limiter: TargetRateLimiter | None = None,
+        user_agent: str | None = None,
     ) -> None:
         self._dns = dns
         self._http = http
@@ -92,27 +96,37 @@ class ScopeGuard(ScannerGate):
         self._sandbox = sandbox or UnconfiguredSandboxRunner()
         self._cache = cache if cache is not None else NullCache()
         self._ip_intel = ip_intel
+        self._active_scans_enabled = active_scans_enabled
+        self._rate_limiter = rate_limiter
+        self._user_agent = user_agent
 
     def check(self, ctx: ScanContext, asset: AssetRef, scanner: Scanner) -> ScannerRuntime:
         """Validate and authorize one run. Raises `ScopeError`, and the job is then skipped."""
         self._check_target(asset, scanner)
         grant = scanner.grant
-        # Target HTTP and zone transfer *are* active checks: the grant decides, not the plugin's
-        # own flag, so a scanner can't reach the target by declaring `requires_verification=False`.
-        needs_ownership = (
+        # Target HTTP, zone transfer, and the active queue *are* active checks: the grant/queue
+        # decides, not just `requires_verification`, so a plugin can't bypass the gate.
+        is_active = (
             scanner.requires_verification
+            or scanner.queue == "active"
             or grant.http is HttpPermission.TARGET
             or grant.zone_transfer
         )
-        if needs_ownership and not self._ownership.is_verified(ctx.org_id, asset):
+        if is_active and not self._active_scans_enabled:
+            raise ScopeError("Active scans are disabled on this instance.")
+        if is_active and not self._ownership.is_verified(ctx.org_id, asset):
             raise ScopeError("Active checks need a verified asset.")
         self._check_services(grant)
         guarded_dns = _GuardedDns(self._dns, max_lookups=grant.dns_lookups)
+        is_target_http = grant.http is HttpPermission.TARGET
         http = _GuardedHttp(
             self._http,
-            target=asset.value if grant.http is HttpPermission.TARGET else None,
+            target=asset.value if is_target_http else None,
             services=grant.http_hosts,
             check_host=self._check_host,
+            rate_limiter=self._rate_limiter if is_target_http else None,
+            rate_limit_org_id=ctx.org_id if is_target_http else None,
+            user_agent=self._user_agent if is_target_http else None,
         )
         sandbox = _GuardedSandbox(self._sandbox, allowed=grant.sandbox_analyzers)
         # One read-only authoritative client serves both capabilities; each guard exposes only
@@ -242,11 +256,17 @@ class _GuardedHttp:
         target: str | None,
         services: frozenset[str],
         check_host: Callable[[str], str],
+        rate_limiter: TargetRateLimiter | None = None,
+        rate_limit_org_id: UUID | None = None,
+        user_agent: str | None = None,
     ) -> None:
         self._inner = inner
         self._target = target
         self._services = services
         self._check_host = check_host
+        self._rate_limiter = rate_limiter
+        self._rate_limit_org_id = rate_limit_org_id
+        self._user_agent = user_agent
 
     def __repr__(self) -> str:
         return f"_GuardedHttp({self._target or ','.join(sorted(self._services))})"
@@ -273,7 +293,12 @@ class _GuardedHttp:
         before the first request too, so handing the inner client to a run is not a bypass.
         """
         return self._inner.with_redirect_policy(
-            resolver, redirect_allowed=self.host_allowed, max_redirects=MAX_REDIRECTS
+            resolver,
+            redirect_allowed=self.host_allowed,
+            max_redirects=MAX_REDIRECTS,
+            rate_limiter=self._rate_limiter,
+            rate_limit_org_id=self._rate_limit_org_id,
+            user_agent=self._user_agent,
         )
 
 

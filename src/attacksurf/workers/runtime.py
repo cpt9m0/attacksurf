@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from attacksurf.config import Settings, get_settings
 from attacksurf.domain.artifacts import ArtifactPolicy, ArtifactStore
 from attacksurf.domain.cache import ScanCache
-from attacksurf.domain.net import IpIntel, TxtLookup
+from attacksurf.domain.net import IpIntel, TargetRateLimiter, TxtLookup
 from attacksurf.domain.notifications import EmailSender
 from attacksurf.domain.sandbox import SandboxRunner, UnconfiguredSandboxRunner
 from attacksurf.domain.scanners import ScannerGate
@@ -21,6 +21,7 @@ from attacksurf.infra.dns import DnsPythonResolver
 from attacksurf.infra.email import SmtpEmailSender
 from attacksurf.infra.http import SafeHttpClient
 from attacksurf.infra.ip_intel import Ip2AsnLookup
+from attacksurf.infra.rate_limit import RedisTargetRateLimiter, TargetRateLimitPolicy
 from attacksurf.infra.sandbox import LauncherSandboxRunner
 from attacksurf.infra.scope_guard import ScopeGuard
 from attacksurf.infra.storage import LocalArtifactStore
@@ -112,8 +113,28 @@ def sandbox_runner() -> SandboxRunner:
     return LauncherSandboxRunner(url.get_secret_value())
 
 
+@lru_cache(maxsize=1)
+def target_rate_limiter() -> TargetRateLimiter:
+    """Per-(org, host) active-target limiter; created after fork and shared per worker process."""
+    current = settings()
+    return RedisTargetRateLimiter(
+        redis.Redis.from_url(
+            current.redis_url.get_secret_value(),
+            decode_responses=True,
+            socket_connect_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+            socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+        ),
+        TargetRateLimitPolicy(
+            rps=current.active_target_rate_limit_rps,
+            burst=current.active_target_rate_limit_burst,
+            max_concurrency=current.active_target_max_concurrency,
+        ),
+    )
+
+
 def scanner_gate() -> ScannerGate:
     """The production gate: active checks run only on assets whose root proved ownership (#14)."""
+    current = settings()
     return ScopeGuard(
         dns=dns_resolver(),
         http=http_client(),
@@ -121,6 +142,9 @@ def scanner_gate() -> ScannerGate:
         cache=scan_cache(),
         ip_intel=ip_intel(),
         sandbox=sandbox_runner(),
+        active_scans_enabled=current.active_scans_enabled,
+        rate_limiter=target_rate_limiter(),
+        user_agent=current.scanner_user_agent,
     )
 
 

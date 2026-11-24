@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Active worker queue (`active.scan`), isolated `worker-active` service on `active-egress` in dev
+  and prod Compose, `ACTIVE_SCANS_ENABLED` kill switch (default `false`), identifying
+  `User-Agent` (`SCANNER_CONTACT_URL`), and Redis-backed per-`(org, host)` token-bucket rate and
+  concurrency limiting in `SafeHttpClient` (#70, ADR 0033).
 - [ADR 0033](docs/adr/0033-website-network-grants.md) defining network grants, guarded TLS
   handshakes, allowed HTTP methods/ports/paths, `active` queue isolation, per-target rate limits,
   identifying `User-Agent`, `ACTIVE_SCANS_ENABLED` kill switch, and hard defensive boundaries for

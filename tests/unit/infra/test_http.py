@@ -9,10 +9,12 @@ from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import ClassVar
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpcore
 import pytest
 
+from attacksurf.domain.jobs import TransientJobError
 from attacksurf.domain.net import DnsError
 from attacksurf.domain.scope import AddressError, ScopeError
 from attacksurf.infra.http import (
@@ -22,6 +24,8 @@ from attacksurf.infra.http import (
     _target,
     connection_address,
 )
+from attacksurf.infra.rate_limit import InMemoryTargetRateLimiter, TargetRateLimitPolicy
+from tests.unit.infra.test_rate_limit import FakeClock
 
 
 class StaticResolver:
@@ -36,9 +40,11 @@ class StaticResolver:
 
 class Handler(BaseHTTPRequestHandler):
     hits: ClassVar[list[tuple[str, str | None]]] = []
+    user_agents: ClassVar[list[str | None]] = []
 
     def do_GET(self) -> None:
         type(self).hits.append((self.path, self.headers.get("Host")))
+        type(self).user_agents.append(self.headers.get("User-Agent"))
         if self.path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/landed")
@@ -102,6 +108,7 @@ def server_url() -> Iterator[str]:
 @pytest.fixture(autouse=True)
 def _clear_hits() -> None:
     Handler.hits.clear()
+    Handler.user_agents.clear()
 
 
 def client_for(server_url: str, **kwargs: object) -> tuple[SafeHttpClient, StaticResolver]:
@@ -376,3 +383,75 @@ def test_socket_errors_become_scope_errors(monkeypatch: pytest.MonkeyPatch) -> N
     client = SafeHttpClient(StaticResolver("93.184.216.34"))
     with pytest.raises(ScopeError, match="request failed"):
         client.get("http://example.com/", limit=10)
+
+
+def test_user_agent_is_sent_on_requests_and_inherited_across_redirect_policy(
+    server_url: str,
+) -> None:
+    port = server_url.rsplit(":", 1)[1]
+    base, resolver = client_for(server_url, user_agent="attacksurf/0.1.0 (+https://example.org)")
+    scoped = base.with_redirect_policy(
+        resolver,
+        redirect_allowed=lambda url: True,
+        max_redirects=2,
+    )
+    body = scoped.get(f"http://public.example:{port}/redirect", limit=100)
+    scoped.close()
+
+    assert body.content == b"path=/landed"
+    assert Handler.user_agents == [
+        "attacksurf/0.1.0 (+https://example.org)",
+        "attacksurf/0.1.0 (+https://example.org)",
+    ]
+
+
+def test_rate_limiter_throttles_requests_and_redirect_hops(server_url: str) -> None:
+    port = server_url.rsplit(":", 1)[1]
+    clock = FakeClock()
+    limiter = InMemoryTargetRateLimiter(
+        TargetRateLimitPolicy(rps=2.0, burst=1, max_concurrency=2, max_wait_seconds=1.0),
+        clock=clock,
+    )
+    org_id = uuid4()
+    base, resolver = client_for(server_url)
+    scoped = base.with_redirect_policy(
+        resolver,
+        redirect_allowed=lambda url: True,
+        max_redirects=2,
+        rate_limiter=limiter,
+        rate_limit_org_id=org_id,
+    )
+
+    body = scoped.get(f"http://public.example:{port}/redirect", limit=100)
+    scoped.close()
+
+    assert body.content == b"path=/landed"
+    # First hop consumes the burst token; second redirect hop waits 0.5 s at 2.0 rps.
+    assert len(clock.sleeps) == 1
+    assert clock.sleeps[0] == pytest.approx(0.5)
+
+
+def test_rate_limiter_transient_error_propagates_without_hitting_socket(server_url: str) -> None:
+    port = server_url.rsplit(":", 1)[1]
+    clock = FakeClock()
+    limiter = InMemoryTargetRateLimiter(
+        TargetRateLimitPolicy(rps=1.0, burst=1, max_concurrency=2, max_wait_seconds=0.0),
+        clock=clock,
+    )
+    org_id = uuid4()
+    base, resolver = client_for(server_url)
+    scoped = base.with_redirect_policy(
+        resolver,
+        redirect_allowed=lambda url: True,
+        max_redirects=2,
+        rate_limiter=limiter,
+        rate_limit_org_id=org_id,
+    )
+
+    scoped.get(f"http://public.example:{port}/ok", limit=100)
+    hits_before = len(Handler.hits)
+    with pytest.raises(TransientJobError, match="rate limit"):
+        scoped.get(f"http://public.example:{port}/ok", limit=100)
+    scoped.close()
+
+    assert len(Handler.hits) == hits_before

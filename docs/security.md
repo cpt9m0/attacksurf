@@ -98,14 +98,18 @@ still validate every address, and only those feed the pinned HTTP client. A scan
 lock so overlapping scans can't each claim the full allowance and a check on a discovered
 subdomain cannot claim a fresh one; a policy error fails only its job.
 
-The `active` queue remains reserved and cannot be selected in a scan profile, and a unit test
-keeps analysis scanners out of every profile until #92 (ADR 0031); active checks
-run only on assets whose root domain proved ownership by DNS TXT (ADR 0014). Under
-[ADR 0033](adr/0033-website-network-grants.md) (to be implemented in #70–#71), website checks
-will expand `ScannerGrant` with `tls`, `tls_ports`, `http_methods` (`GET`/`HEAD`/`OPTIONS` only),
-`http_ports`, `http_paths`, `soft_404_probe`, and `follow_redirects`, enforce per-target Redis
-rate/concurrency limits and an identifying `User-Agent`, and gate all active checks behind
-`ACTIVE_SCANS_ENABLED` (default `false`). CT discovery's
+The `active` queue is consumed by `worker-active` on an isolated egress network (#70,
+[ADR 0033](adr/0033-website-network-grants.md)), while analysis scanners stay out of every
+profile until #92 (ADR 0031). Active checks (`requires_verification`, `queue="active"`,
+`HttpPermission.TARGET`, or `zone_transfer`) require `ACTIVE_SCANS_ENABLED=true` (default
+`false`) and a root domain with a verified DNS TXT ownership proof (ADR 0014); otherwise
+`ScopeGuard` skips the job. Target HTTP requests carry an identifying `User-Agent`
+(`attacksurf/<version> (+<contact_url>)`, from `SCANNER_CONTACT_URL` / `APP_BASE_URL`) and
+pass through the Redis-backed per-`(org_id, host)` rate and concurrency limiter
+(`infra/rate_limit.py`) inside `SafeHttpClient`, failing closed with `TransientJobError` if
+Redis is unavailable or the limit is exhausted. Planned #71–#79 checks will expand
+`ScannerGrant` with `tls`, `tls_ports`, `http_methods`, `http_ports`, `http_paths`,
+`soft_404_probe`, and `follow_redirects`. CT discovery's
 random-label wildcard probes use the same guarded DNS adapter and DNS budget; a wildcard marker
 (`Asset.details["wildcard"] = true`) is data for later resolution, never a finding or a claim
 that a name exists. `dns.resolve` records A/AAAA/CNAME/MX/NS/TXT/CAA/SOA in capped

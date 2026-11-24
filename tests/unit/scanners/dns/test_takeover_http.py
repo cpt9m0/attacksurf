@@ -103,11 +103,10 @@ def s3_answers() -> dict[tuple[str, DnsRecordType], tuple[str, ...] | DnsStatus]
     return {(ASSET, DnsRecordType.CNAME): (S3_TARGET,)}
 
 
-def test_scanner_is_a_verified_target_http_check_on_the_passive_queue() -> None:
-    # The registry refuses TARGET grants without verification, and profiles only accept
-    # the passive queue: both must hold for this plugin to run at all.
+def test_scanner_is_a_verified_target_http_check_on_the_active_queue() -> None:
+    # The registry refuses TARGET grants without verification or the active queue.
     assert DnsTakeoverHttp.asset_types == frozenset({AssetType.DOMAIN, AssetType.SUBDOMAIN})
-    assert DnsTakeoverHttp.queue == "passive"
+    assert DnsTakeoverHttp.queue == "active"
     assert DnsTakeoverHttp.requires_verification is True
     assert DnsTakeoverHttp.grant.http is HttpPermission.TARGET
 

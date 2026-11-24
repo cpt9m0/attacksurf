@@ -10,13 +10,15 @@ import ipaddress
 import ssl
 import zlib
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any, Protocol
 from urllib.parse import SplitResult, urlsplit
+from uuid import UUID
 
 import httpcore
 import httpx
 
-from attacksurf.domain.net import DnsError, HttpBody
+from attacksurf.domain.net import DnsError, HttpBody, TargetRateLimiter
 from attacksurf.domain.scope import AddressError, ScopeError
 
 REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
@@ -88,6 +90,9 @@ class SafeHttpClient:
         max_redirects: int = MAX_REDIRECTS,
         timeout_seconds: float = 5.0,
         tls: ssl.SSLContext | None = None,
+        rate_limiter: TargetRateLimiter | None = None,
+        rate_limit_org_id: UUID | None = None,
+        user_agent: str | None = None,
     ) -> None:
         self._resolver = resolver
         # `None` means no allowlist was installed (a bare transport client); an installed hook
@@ -96,6 +101,9 @@ class SafeHttpClient:
         self._max_redirects = min(max_redirects, MAX_REDIRECTS)
         self._timeout = timeout_seconds
         self._tls = tls or ssl.create_default_context()
+        self._rate_limiter = rate_limiter
+        self._rate_limit_org_id = rate_limit_org_id
+        self._user_agent = user_agent
         self._pool: httpcore.ConnectionPool | None = None
         self._pinned_to: tuple[str, str] | None = None
         self._closed = False
@@ -106,6 +114,9 @@ class SafeHttpClient:
         *,
         redirect_allowed: Callable[[str], bool],
         max_redirects: int,
+        rate_limiter: TargetRateLimiter | None = None,
+        rate_limit_org_id: UUID | None = None,
+        user_agent: str | None = None,
     ) -> "SafeHttpClient":
         """Same settings, per-run resolver and allowlist: one client per scanner run."""
         return SafeHttpClient(
@@ -114,6 +125,11 @@ class SafeHttpClient:
             max_redirects=max_redirects,
             timeout_seconds=self._timeout,
             tls=self._tls,
+            rate_limiter=rate_limiter if rate_limiter is not None else self._rate_limiter,
+            rate_limit_org_id=(
+                rate_limit_org_id if rate_limit_org_id is not None else self._rate_limit_org_id
+            ),
+            user_agent=user_agent if user_agent is not None else self._user_agent,
         )
 
     def get(self, url: str, *, limit: int) -> HttpBody:
@@ -161,7 +177,8 @@ class SafeHttpClient:
             raise ScopeError("The URL has no host.")
         address = connection_address(self._resolver.resolve_name(host))
         pool = self._pool_for(host, address)
-        request = httpx.Request("GET", url)
+        headers = {"User-Agent": self._user_agent} if self._user_agent else None
+        request = httpx.Request("GET", url, headers=headers)
         core_request = httpcore.Request(
             method="GET",
             url=httpcore.URL(
@@ -174,37 +191,43 @@ class SafeHttpClient:
             content=b"",
             extensions={"timeout": {"connect": self._timeout, "read": self._timeout}},
         )
-        try:
-            core_response = pool.handle_request(core_request)
+        limiter_ctx = (
+            self._rate_limiter.acquire(self._rate_limit_org_id, host.strip().lower().rstrip("."))
+            if self._rate_limiter is not None and self._rate_limit_org_id is not None
+            else nullcontext()
+        )
+        with limiter_ctx:
             try:
-                encoding = _header(core_response.headers, b"content-encoding")
-                # A plain body is read up to `limit`; an encoded one may need more wire bytes
-                # than its decoded size, but never unlimited (decompression expands, not shrinks).
-                wire_cap = (
-                    min(limit * MAX_EXPANSION, MAX_ENCODED_BYTES)
-                    if _is_encoded(encoding)
-                    else limit
+                core_response = pool.handle_request(core_request)
+                try:
+                    encoding = _header(core_response.headers, b"content-encoding")
+                    # A plain body is read up to `limit`; an encoded one may need more wire bytes
+                    # than its decoded size, but never unlimited (decompression expands).
+                    wire_cap = (
+                        min(limit * MAX_EXPANSION, MAX_ENCODED_BYTES)
+                        if _is_encoded(encoding)
+                        else limit
+                    )
+                    raw, truncated = _read_capped(core_response, wire_cap)
+                    content, decoded_truncated = _decoded(raw, encoding, limit)
+                finally:
+                    core_response.close()
+                response_headers = _headers_without_encoding(core_response.headers)
+                response = httpx.Response(
+                    core_response.status,
+                    headers=response_headers,
+                    content=content,
+                    request=request,
                 )
-                raw, truncated = _read_capped(core_response, wire_cap)
-                content, decoded_truncated = _decoded(raw, encoding, limit)
-            finally:
-                core_response.close()
-            headers = _headers_without_encoding(core_response.headers)
-            response = httpx.Response(
-                core_response.status,
-                headers=headers,
-                content=content,
-                request=request,
-            )
-        except httpcore.ConnectError:
-            self._drop_pool()
-            raise DnsError() from None
-        except httpcore.TimeoutException:
-            self._drop_pool()
-            raise ScopeError("The request timed out.") from None
-        except OSError:  # TLS verification and socket errors: their messages stay internal
-            self._drop_pool()
-            raise ScopeError("The request failed.") from None
+            except httpcore.ConnectError:
+                self._drop_pool()
+                raise DnsError() from None
+            except httpcore.TimeoutException:
+                self._drop_pool()
+                raise ScopeError("The request timed out.") from None
+            except OSError:  # TLS verification and socket errors: their messages stay internal
+                self._drop_pool()
+                raise ScopeError("The request failed.") from None
         return HttpBody(
             response.status_code,
             response.content,

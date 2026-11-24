@@ -29,7 +29,7 @@ DNS_LOOKUPS = 16
 class DnsZoneTransfer:
     name = "dns.axfr"
     asset_types = frozenset({AssetType.DOMAIN})
-    queue = "passive"  # the active queue is reserved until #70; the grant still needs a proof
+    queue = "active"
     requires_verification = True
     timeout_seconds = 60.0
     grant = ScannerGrant(zone_transfer=True, dns_lookups=DNS_LOOKUPS)

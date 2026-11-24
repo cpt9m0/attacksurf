@@ -74,13 +74,25 @@ def test_registration_rejects_target_http_without_verification() -> None:
         ScannerRegistry().register(UnverifiedTarget)
 
 
-def test_registration_accepts_target_http_when_verification_is_declared() -> None:
+def test_registration_accepts_target_http_when_verification_and_active_queue_are_declared() -> None:
     class VerifiedTarget(EmptyScanner):
         name = "test.verified_target"
+        queue = "active"
         requires_verification = True
         grant = ScannerGrant(http=HttpPermission.TARGET, dns_lookups=1)
 
     assert ScannerRegistry().register(VerifiedTarget) is VerifiedTarget
+
+
+def test_registration_rejects_target_http_on_passive_queue() -> None:
+    class PassiveTarget(EmptyScanner):
+        name = "test.passive_target"
+        queue = "passive"
+        requires_verification = True
+        grant = ScannerGrant(http=HttpPermission.TARGET, dns_lookups=1)
+
+    with pytest.raises(ValueError, match="active queue"):
+        ScannerRegistry().register(PassiveTarget)
 
 
 def test_profiles_reject_duplicate_scanners_and_unconsumed_queues() -> None:
@@ -95,8 +107,15 @@ def test_profiles_reject_duplicate_scanners_and_unconsumed_queues() -> None:
         requires_verification = True
 
     registry.register(ActiveScanner)
-    with pytest.raises(ValueError, match="only passive"):
-        registry.validate(ScanProfile("test", checks=(ActiveScanner.name,)))
+    registry.validate(ScanProfile("test", checks=(ActiveScanner.name,)))
+
+    class AnalysisScanner(EmptyScanner):
+        name = "test.analysis"
+        queue = "analysis"
+
+    registry.register(AnalysisScanner)
+    with pytest.raises(ValueError, match="only passive and active"):
+        registry.validate(ScanProfile("test", checks=(AnalysisScanner.name,)))
 
     with pytest.raises(ValueError, match="max_discovered_assets"):
         registry.validate(ScanProfile("test", checks=(EmptyScanner.name,), max_discovered_assets=0))
@@ -137,10 +156,24 @@ def test_registration_rejects_zone_transfer_without_verification() -> None:
         ScannerRegistry().register(UnverifiedTransfer)
 
 
-def test_registration_accepts_zone_transfer_when_verification_is_declared() -> None:
+def test_registration_accepts_zone_transfer_when_verification_and_active_queue_are_declared() -> (
+    None
+):
     class VerifiedTransfer(EmptyScanner):
         name = "test.verified_transfer"
+        queue = "active"
         requires_verification = True
         grant = ScannerGrant(zone_transfer=True, dns_lookups=3)
 
     assert ScannerRegistry().register(VerifiedTransfer) is VerifiedTransfer
+
+
+def test_registration_rejects_zone_transfer_on_passive_queue() -> None:
+    class PassiveTransfer(EmptyScanner):
+        name = "test.passive_transfer"
+        queue = "passive"
+        requires_verification = True
+        grant = ScannerGrant(zone_transfer=True, dns_lookups=3)
+
+    with pytest.raises(ValueError, match="active queue"):
+        ScannerRegistry().register(PassiveTransfer)

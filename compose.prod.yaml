@@ -205,6 +205,20 @@ services:
       start_period: 30s
       retries: 3
 
+  # Consumes verified active checks on `active` with isolated egress (#70, ADR 0033).
+  worker-active:
+    <<: *app
+    networks: [internal, active-egress]
+    command:
+      ["celery", "-A", "attacksurf.workers.app", "worker", "-Q", "active", "-c", "2",
+       "-n", "active@%h", "--loglevel", "INFO"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'export REDIS_URL=\"$${REDIS_URL//__REDIS_PASS__/$$(cat /run/secrets/redis_password)}\"; exec celery -A attacksurf.workers.app inspect ping -d active@$$HOSTNAME --timeout 5'"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
   # Schedules the hourly ownership re-verification and the 10-minute artifact purge.
   # Useless without `worker-passive` (and vice versa): beat only queues, the worker consumes.
   beat:
@@ -314,6 +328,7 @@ networks:
   internal:
     internal: true
   egress:
+  active-egress:
 
 volumes:
   pgdata:

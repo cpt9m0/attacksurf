@@ -59,7 +59,14 @@ class StubHttp:
         pass
 
     def with_redirect_policy(
-        self, resolver: object, *, redirect_allowed: Any, max_redirects: int
+        self,
+        resolver: object,
+        *,
+        redirect_allowed: Any,
+        max_redirects: int,
+        rate_limiter: object = None,
+        rate_limit_org_id: object = None,
+        user_agent: str | None = None,
     ) -> "RunHttp":
         self.policies.append(redirect_allowed)
         return RunHttp(self, redirect_allowed)

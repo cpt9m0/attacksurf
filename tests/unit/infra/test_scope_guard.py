@@ -26,6 +26,7 @@ from attacksurf.domain.scanners import (
 from attacksurf.domain.scope import HttpPermission, PublicSuffix, ScopeError, ScopePolicyError
 from attacksurf.infra import public_suffix
 from attacksurf.infra.http import MAX_BODY_BYTES, SafeHttpClient
+from attacksurf.infra.rate_limit import InMemoryTargetRateLimiter
 from attacksurf.infra.scope_guard import (
     MAX_DNS_LOOKUPS,
     ScopeGuard,
@@ -78,7 +79,14 @@ class StubHttp:
         return self.response
 
     def with_redirect_policy(
-        self, resolver: object, *, redirect_allowed: object, max_redirects: int
+        self,
+        resolver: object,
+        *,
+        redirect_allowed: object,
+        max_redirects: int,
+        rate_limiter: object = None,
+        rate_limit_org_id: object = None,
+        user_agent: str | None = None,
     ) -> "_RunHttp":
         self.policies.append((resolver, redirect_allowed, max_redirects))
         return _RunHttp(self, redirect_allowed)
@@ -141,9 +149,19 @@ def make_guard(
     dns: StubDns | None = None,
     http: StubHttp | None = None,
     verified: bool = False,
+    active_scans_enabled: bool = True,
+    rate_limiter: object = None,
+    user_agent: str | None = None,
 ) -> tuple[ScopeGuard, StubHttp]:
     http = http or StubHttp()
-    scope = ScopeGuard(dns=dns or StubDns(), http=http, ownership=UnverifiedOwnership())
+    scope = ScopeGuard(
+        dns=dns or StubDns(),
+        http=http,
+        ownership=UnverifiedOwnership(),
+        active_scans_enabled=active_scans_enabled,
+        rate_limiter=rate_limiter,  # type: ignore[arg-type]
+        user_agent=user_agent,
+    )
     scope._classify = ClassifiedAsPublicSuffix()  # type: ignore[assignment]
     return scope, http
 
@@ -208,6 +226,76 @@ def test_blocked_ip_assets_are_denied() -> None:
     ip_scanner = scanner(asset_types=frozenset({AssetType.IP}))
     with pytest.raises(ScopeError, match="private"):
         scope.check(context(), target("169.254.169.254", AssetType.IP), ip_scanner)
+
+
+def test_active_scans_are_disabled_by_default_and_denied_even_when_verified() -> None:
+    scope = ScopeGuard(
+        dns=StubDns(),
+        http=StubHttp(),
+        ownership=EverythingVerified(),
+        classify=ClassifiedAsPublicSuffix(),
+    )
+    active = scanner(
+        queue="active",
+        requires_verification=True,
+        grant=ScannerGrant(http=HttpPermission.TARGET, dns_lookups=1),
+    )
+
+    with pytest.raises(ScopeError, match="disabled"):
+        scope.check(context(), target(), active)
+
+
+def test_active_queue_scanner_requires_verification_even_if_flag_is_false() -> None:
+    active = scanner(queue="active", requires_verification=False)
+
+    with pytest.raises(ScopeError, match="verified"):
+        make_guard()[0].check(context(), target(), active)
+
+
+def test_target_http_binds_rate_limiter_and_user_agent_but_services_does_not() -> None:
+    limiter = InMemoryTargetRateLimiter()
+    answers = StaticAnswers({"acme.com": ("93.184.216.34",), "crt.example.org": ("93.184.216.34",)})
+    http = RecordingSafeHttp(answers)
+    scope = ScopeGuard(
+        dns=answers,
+        http=http,
+        ownership=EverythingVerified(),
+        classify=ClassifiedAsPublicSuffix(),
+        active_scans_enabled=True,
+        rate_limiter=limiter,
+        user_agent="attacksurf/0.1.0 (+https://example.org)",
+    )
+    ctx = context()
+
+    target_runtime = scope.check(
+        ctx,
+        target(),
+        scanner(
+            queue="active",
+            requires_verification=True,
+            grant=ScannerGrant(http=HttpPermission.TARGET, dns_lookups=1),
+        ),
+    )
+    assert isinstance(target_runtime.http, RecordingSafeHttp)
+    assert target_runtime.http._rate_limiter is limiter
+    assert target_runtime.http._rate_limit_org_id == ctx.org_id
+    assert target_runtime.http._user_agent == "attacksurf/0.1.0 (+https://example.org)"
+
+    service_runtime = scope.check(
+        ctx,
+        target(),
+        scanner(
+            grant=ScannerGrant(
+                http=HttpPermission.SERVICES,
+                http_hosts=frozenset({"crt.example.org"}),
+                dns_lookups=1,
+            ),
+        ),
+    )
+    assert isinstance(service_runtime.http, RecordingSafeHttp)
+    assert service_runtime.http._rate_limiter is None
+    assert service_runtime.http._rate_limit_org_id is None
+    assert service_runtime.http._user_agent is None
 
 
 def test_active_checks_need_verified_ownership() -> None:
@@ -426,7 +514,14 @@ class RecordingSafeHttp(SafeHttpClient):
         self.sent: list[tuple[str, int]] = []
 
     def with_redirect_policy(
-        self, resolver: object, *, redirect_allowed: object, max_redirects: int
+        self,
+        resolver: object,
+        *,
+        redirect_allowed: object,
+        max_redirects: int,
+        rate_limiter: object = None,
+        rate_limit_org_id: object = None,
+        user_agent: str | None = None,
     ) -> "RecordingSafeHttp":
         clone = RecordingSafeHttp(
             resolver,
@@ -434,6 +529,9 @@ class RecordingSafeHttp(SafeHttpClient):
             max_redirects=max_redirects,
             timeout_seconds=self._timeout,
             tls=self._tls,
+            rate_limiter=rate_limiter,
+            rate_limit_org_id=rate_limit_org_id,
+            user_agent=user_agent,
         )
         clone.sent = self.sent
         return clone
@@ -449,7 +547,11 @@ def make_runtime(
     answers = StaticAnswers({"acme.com": ("93.184.216.34",), "crt.example.org": ("93.184.216.34",)})
     http = RecordingSafeHttp(answers)
     scope = ScopeGuard(
-        dns=answers, http=http, ownership=UnverifiedOwnership(), classify=ClassifiedAsPublicSuffix()
+        dns=answers,
+        http=http,
+        ownership=UnverifiedOwnership(),
+        classify=ClassifiedAsPublicSuffix(),
+        active_scans_enabled=verified,
     )
     if verified:
         verify_all(scope)

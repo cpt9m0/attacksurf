@@ -54,6 +54,7 @@ def _fresh_db_pool(**_kwargs: Any) -> None:
     # The Redis and launcher clients (and their connection pools) must also be created after
     # the fork.
     runtime.scan_cache.cache_clear()
+    runtime.target_rate_limiter.cache_clear()
     runtime.sandbox_runner.cache_clear()
 
 

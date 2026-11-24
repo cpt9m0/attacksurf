@@ -45,7 +45,7 @@ DNS_LOOKUPS = 16
 class DnsTakeoverHttp:
     name = "dns.takeover.http"
     asset_types = frozenset({AssetType.DOMAIN, AssetType.SUBDOMAIN})
-    queue = "passive"
+    queue = "active"
     requires_verification = True
     timeout_seconds = 60.0
     grant = ScannerGrant(http=HttpPermission.TARGET, dns_lookups=DNS_LOOKUPS)
