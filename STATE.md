@@ -2,18 +2,19 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-23 · **Branch:** `72-web-probe-discovery` · **Issue:** #72 (Discover HTTP services on verified hosts and record URL assets)
+**Updated:** 2026-11-23 · **Branch:** `73-web-fingerprint` · **Issue:** #73 (Fingerprint web technologies and versions on URL assets)
 
 ## Status
-Implemented and tested on branch `72-web-probe-discovery`; verifying full checks and opening PR #72.
+Implemented and tested on branch `73-web-fingerprint`; running full verification and opening PR #73.
 
 ## Last task
-- Extended `SafeHttpClient`, `domain.net.HttpBody`, `ScannerGrant` (`http_ports`, `follow_redirects`), `ScopeGuard` (`AssetType.URL` validation, verified-root same-scope redirects, `stop_on_out_of_scope_redirect`), and `DbOwnershipChecker` (`URL` host-containment verification) (#72).
-- Implemented `web.probe` (`scanners/web/probe.py`) and added the `web_active` profile (`PROFILES`, UI scan selector on `/scans` and `/assets/<id>`) (#72).
-- Added unit tests (`test_probe.py`, `test_http.py`, `test_scope_guard.py`, `test_profiles.py`) and DB integration tests (`test_ownership.py`, `test_web_probe.py`, `test_scans_ui.py`, `test_scans_api.py`), and synced `docs/scanners.md`, `docs/architecture.md`, `docs/security.md`, and `CHANGELOG.md` (#72).
+- Added `web.disclosure.version_banner` rule in `src/attacksurf/domain/rules/web.py` and registered `WEB_RULES` in `domain.rules` (#73).
+- Vendored a curated 66-technology signature subset from `enthec/webappanalyzer` (`GPL-3.0`, pinned commit `7dba7bf3e8b4f25c6a5b4b2c9f5e7a0e73e6a1bf`) in `src/attacksurf/scanners/web/fingerprints.json` with attribution in `fingerprints-NOTICE.md`, keeping passive channels only (`headers`, cookie names only, `meta`, `script_src`, `html`) and dropping unsafe/nested-quantifier regexes (#73).
+- Implemented `src/attacksurf/scanners/web/fingerprint.py` and integrated it into `web.probe` (`scanners/web/probe.py`) with zero extra HTTP requests, storing `Asset.details["technologies"]` and reporting `web.disclosure.version_banner` with `HTTP_RESPONSE` evidence (#73).
+- Added unit tests (`tests/unit/scanners/web/test_fingerprint.py`, `test_probe.py`) and DB integration assertions (`tests/integration/workers/test_web_probe.py`), and updated `docs/scanners.md`, `docs/security.md`, and `CHANGELOG.md` (#73).
 
 ## Next step
-Implement #73: Fingerprint web technologies and versions on URL assets (start after #72 PR is merged).
+Implement #75: Flag known-vulnerable web components from fingerprints (start after #73 PR is merged).
 
 ## Open threads
 - **Proxy trust:** the proxy has no caller authentication and `worker-analysis` shares the `sandbox` network with it (`docs/security.md`; #92 must close it before prod).

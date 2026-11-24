@@ -6,6 +6,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Passive web technology fingerprinting (`scanners/web/fingerprint.py`) over captured `web.probe`
+  responses using a curated, ReDoS-audited dataset vendored from `enthec/webappanalyzer`
+  (GPL-3.0; headers, Set-Cookie names only, `<meta>`, `<script src>`, HTML patterns, and
+  `implies` propagation), storing `technologies: [{name, version, categories, confidence}]` on URL
+  asset `details` and emitting info finding `web.disclosure.version_banner` (`domain.rules.web`)
+  when `Server` or `X-Powered-By` exposes a version (#73).
 - `web.probe` HTTP service discovery scanner (`scanners/web/probe.py`) and `web_active` profile
   (selectable in UI/API): probes `https://` then `http://` on active verified domains/subdomains
   and refreshes `url` assets, creates `url` assets + `serves` edges with capped `Asset.details["web"]`
