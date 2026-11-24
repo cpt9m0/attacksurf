@@ -71,12 +71,14 @@ class StubDns:
 class StubHttp:
     def __init__(self) -> None:
         self.requests: list[tuple[str, int]] = []
+        self.headers_seen: list[dict[str, str] | None] = []
         self.policies: list[tuple[object, object, int]] = []
         self.response = HttpBody(200, b"[]")
         self.closed = False
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
         self.requests.append((url, limit))
+        self.headers_seen.append(dict(headers) if headers is not None else None)
         return self.response
 
     def with_redirect_policy(
@@ -110,11 +112,12 @@ class _RunHttp(StubHttp):
         self._inner = inner
         self._allowed = redirect_allowed
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
         assert callable(self._allowed)
         if not self._allowed(url):
             raise ScopeError("The target is out of scope.")
         self._inner.requests.append((url, limit))
+        self._inner.headers_seen.append(dict(headers) if headers is not None else None)
         return self._inner.response
 
 
@@ -1014,3 +1017,20 @@ def test_target_http_grant_validates_ports_urls_and_verified_root_redirects() ->
     )
     scope.check(context(), target("acme.com"), no_redir)
     assert http.policies[-1][2] == 0
+
+
+def test_target_http_forwards_custom_headers_through_scope_guard() -> None:
+    scope, http = make_guard(active_scans_enabled=True)
+    verify_all(scope)
+    cors_scanner = scanner(
+        asset_types=frozenset({AssetType.URL}),
+        queue="active",
+        requires_verification=True,
+        grant=ScannerGrant(http=HttpPermission.TARGET, dns_lookups=4),
+    )
+
+    runtime = scope.check(context(), target("https://acme.com/", AssetType.URL), cors_scanner)
+    runtime.http.get(
+        "https://acme.com/", limit=1024, headers={"Origin": "https://cors-probe.invalid"}
+    )
+    assert http.headers_seen[-1] == {"Origin": "https://cors-probe.invalid"}

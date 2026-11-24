@@ -130,8 +130,11 @@ subset of GPL-3.0 `enthec/webappanalyzer` rules). Known-vulnerable component mat
 local global `vuln_cves` / `vuln_cpe_ranges` catalog via `VulnIntelLookup`. `web.tls` (#76)
 inspects verified HTTPS URLs via `ctx.runtime.tls.inspect(..., probe_legacy=True)` on the
 allowlisted web ports and records only parsed chain-summary metadata (never private keys).
-Planned #77–#79 checks will expand `ScannerGrant` with `http_methods`,
-`http_paths`, and `soft_404_probe`. CT discovery's
+`web.headers` (#77) runs passively on `Asset.details["web"]` captured by `web.probe` with
+redacted `<redacted>` cookie attributes only, while `web.cors` (#77) issues a single verified
+`GET` request carrying a fixed `Origin: https://cors-probe.invalid` header through
+`SafeHttpClient` (`ScopeGuard`). Planned #78–#79 checks will expand `ScannerGrant` with
+`http_methods`, `http_paths`, and `soft_404_probe`. CT discovery's
 random-label wildcard probes use the same guarded DNS adapter and DNS budget; a wildcard marker
 (`Asset.details["wildcard"] = true`) is data for later resolution, never a finding or a claim
 that a name exists. `dns.resolve` records A/AAAA/CNAME/MX/NS/TXT/CAA/SOA in capped

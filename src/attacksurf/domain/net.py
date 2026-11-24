@@ -256,7 +256,7 @@ class HttpBody:
 
 
 class SafeHttpClient(Protocol):
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
         """GET `url` if the scanner's contract allows the host; redirects are re-validated."""
         ...
 

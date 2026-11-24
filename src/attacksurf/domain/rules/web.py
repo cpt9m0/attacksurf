@@ -159,6 +159,160 @@ TLS_LEGACY_PROTOCOL = Rule(
     references=("https://www.rfc-editor.org/rfc/rfc8996",),
 )
 
+HEADERS_HSTS_MISSING = Rule(
+    id="web.headers.hsts_missing",
+    title="HTTPS response lacks Strict-Transport-Security header",
+    description=(
+        "An HTTPS endpoint did not return a `Strict-Transport-Security` header, leaving browsers "
+        "unable to enforce HTTPS-only connections automatically against protocol downgrade attacks."
+    ),
+    default_severity=Severity.LOW,
+    remediation=(
+        "Add `Strict-Transport-Security: max-age=31536000` (and `includeSubDomains` if safe) "
+        "to HTTPS responses on $url."
+    ),
+    references=(
+        "https://www.rfc-editor.org/rfc/rfc6797",
+        "https://owasp.org/www-project-secure-headers/#http-strict-transport-security",
+    ),
+)
+
+HEADERS_HSTS_WEAK = Rule(
+    id="web.headers.hsts_weak",
+    title="Strict-Transport-Security max-age is below 6 months",
+    description=(
+        "The `Strict-Transport-Security` header specifies a `max-age` shorter than 15,552,000 "
+        "seconds (180 days), reducing how long browsers remember to enforce HTTPS."
+    ),
+    default_severity=Severity.LOW,
+    remediation=(
+        "Increase the `Strict-Transport-Security` `max-age` on $url to at least 15552000 "
+        "(6 months), preferably 31536000 (1 year)."
+    ),
+    references=("https://www.rfc-editor.org/rfc/rfc6797",),
+)
+
+HEADERS_CSP_MISSING = Rule(
+    id="web.headers.csp_missing",
+    title="HTML response lacks Content-Security-Policy header",
+    description=(
+        "An HTML endpoint did not return a `Content-Security-Policy` header, removing a major "
+        "defense-in-depth control against cross-site scripting and unauthorized resource loads."
+    ),
+    default_severity=Severity.LOW,
+    remediation=(
+        "Define and serve a restrictive `Content-Security-Policy` on $url, limiting script "
+        "execution to trusted origins or cryptographic nonces/hashes."
+    ),
+    references=(
+        "https://www.w3.org/TR/CSP3/",
+        "https://owasp.org/www-project-secure-headers/#content-security-policy",
+    ),
+)
+
+HEADERS_CSP_UNSAFE = Rule(
+    id="web.headers.csp_unsafe",
+    title="Content-Security-Policy permits unsafe script execution",
+    description=(
+        "The `Content-Security-Policy` `script-src` directive (or `default-src` fallback) permits "
+        "$tokens without a script nonce or hash, weakening XSS protection."
+    ),
+    default_severity=Severity.LOW,
+    remediation=(
+        "Replace $tokens in the `Content-Security-Policy` on $url with cryptographic nonces or "
+        "hashes and explicit script allowlists."
+    ),
+    references=("https://www.w3.org/TR/CSP3/#unsafe-inline-usage",),
+)
+
+HEADERS_CLICKJACKING = Rule(
+    id="web.headers.clickjacking",
+    title="HTML response lacks framing protection",
+    description=(
+        "An HTML endpoint sets neither `X-Frame-Options` nor a Content-Security-Policy "
+        "`frame-ancestors` directive, allowing third-party pages to embed it in a frame."
+    ),
+    default_severity=Severity.LOW,
+    remediation=(
+        "Add `Content-Security-Policy: frame-ancestors 'none'` (or `'self'`) and optionally "
+        "`X-Frame-Options: DENY` or `SAMEORIGIN` to responses on $url."
+    ),
+    references=(
+        "https://owasp.org/www-community/attacks/Clickjacking",
+        "https://www.w3.org/TR/CSP3/#directive-frame-ancestors",
+    ),
+)
+
+HEADERS_NOSNIFF_MISSING = Rule(
+    id="web.headers.nosniff_missing",
+    title="Response lacks X-Content-Type-Options: nosniff",
+    description=(
+        "The HTTP response does not include `X-Content-Type-Options: nosniff`, allowing older "
+        "or permissive clients to MIME-sniff responses away from the declared content type."
+    ),
+    default_severity=Severity.INFO,
+    remediation="Send `X-Content-Type-Options: nosniff` on all HTTP responses from $url.",
+    references=(
+        "https://fetch.spec.whatwg.org/#x-content-type-options-header",
+        "https://owasp.org/www-project-secure-headers/#x-content-type-options",
+    ),
+)
+
+COOKIES_INSECURE_FLAGS = Rule(
+    id="web.cookies.insecure_flags",
+    title="Session-like cookie missing Secure, HttpOnly, or SameSite attribute",
+    description=(
+        "One or more cookies with session-like names ($cookies) were set without the full set "
+        "of `Secure` (on HTTPS), `HttpOnly`, and `SameSite` hardening attributes."
+    ),
+    default_severity=Severity.LOW,
+    remediation=(
+        "Set `HttpOnly`, `SameSite=Lax` (or `Strict`), and `Secure` (for HTTPS) on the "
+        "session cookies ($cookies) returned by $url."
+    ),
+    references=(
+        "https://www.rfc-editor.org/rfc/rfc6265",
+        "https://owasp.org/www-community/controls/SecureCookieAttribute",
+    ),
+)
+
+HTTPS_NO_REDIRECT = Rule(
+    id="web.https.no_redirect",
+    title="Plain HTTP endpoint serves content without redirecting to HTTPS",
+    description=(
+        "An unencrypted HTTP endpoint ($url) returned content directly rather than redirecting "
+        "clients to HTTPS, exposing traffic to interception and tampering."
+    ),
+    default_severity=Severity.LOW,
+    remediation=(
+        "Configure $url on port 80 to issue a 301/308 redirect to the corresponding `https://` "
+        "URL instead of serving content over cleartext HTTP."
+    ),
+    references=(
+        "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/09-Testing_for_Weak_Cryptography/03-Testing_for_Sensitive_Information_Sent_via_Unencrypted_Channels",
+    ),
+)
+
+CORS_WILDCARD_CREDENTIALS = Rule(
+    id="web.cors.wildcard_credentials",
+    title="CORS reflects arbitrary origin with credentials allowed",
+    description=(
+        "Sending an untrusted foreign `Origin` to $url produced an `Access-Control-Allow-Origin` "
+        "response permitting that origin alongside `Access-Control-Allow-Credentials: true`, "
+        "exposing authenticated responses across origins."
+    ),
+    default_severity=Severity.MEDIUM,
+    remediation=(
+        "Validate the request `Origin` header on $url against an explicit allowlist of trusted "
+        "origins rather than reflecting arbitrary origins when `Access-Control-Allow-Credentials: "
+        "true` is set, and include `Vary: Origin`."
+    ),
+    references=(
+        "https://fetch.spec.whatwg.org/#http-cors-protocol",
+        "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/07-Testing_Cross_Origin_Resource_Sharing",
+    ),
+)
+
 WEB_RULES: tuple[Rule, ...] = (
     VERSION_BANNER,
     KNOWN_VULNERABLE_COMPONENT,
@@ -169,4 +323,13 @@ WEB_RULES: tuple[Rule, ...] = (
     TLS_WEAK_KEY,
     TLS_WEAK_SIGNATURE,
     TLS_LEGACY_PROTOCOL,
+    HEADERS_HSTS_MISSING,
+    HEADERS_HSTS_WEAK,
+    HEADERS_CSP_MISSING,
+    HEADERS_CSP_UNSAFE,
+    HEADERS_CLICKJACKING,
+    HEADERS_NOSNIFF_MISSING,
+    COOKIES_INSECURE_FLAGS,
+    HTTPS_NO_REDIRECT,
+    CORS_WILDCARD_CREDENTIALS,
 )

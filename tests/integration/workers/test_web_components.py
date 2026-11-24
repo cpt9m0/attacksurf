@@ -29,6 +29,7 @@ from attacksurf.infra.tls import RawTlsHandshake
 from attacksurf.scanners.profiles import PROFILES
 from attacksurf.scanners.registry import registry
 from attacksurf.scanners.web import components as _web_components  # noqa: F401
+from attacksurf.scanners.web import headers as _web_headers  # noqa: F401
 from attacksurf.scanners.web import probe as _web_probe  # noqa: F401
 from attacksurf.scanners.web import tls as _web_tls  # noqa: F401
 from attacksurf.services import assets as assets_service
@@ -259,6 +260,8 @@ def test_web_components_pipeline_flags_known_cves_and_tolerates_epss_updates(
         assert sorted(t.task_name for t in q_chk.header) == [
             "active.scan",
             "active.scan",
+            "active.scan",
+            "passive.scan",
             "passive.scan",
         ]
         for task in q_chk.header:

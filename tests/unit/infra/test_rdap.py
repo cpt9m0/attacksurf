@@ -52,7 +52,7 @@ class StubHttp:
         self.requests: list[str] = []
         self.policies: list[Any] = []
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         raise AssertionError("the adapter must request through with_redirect_policy")
 
     def close(self) -> None:
@@ -81,7 +81,7 @@ class RunHttp:
         self._inner = inner
         self._allowed = allowed
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         if not self._allowed(url):
             raise ScopeError("The target is out of scope.")
         self._inner.requests.append(url)

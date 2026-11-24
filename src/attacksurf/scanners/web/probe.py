@@ -8,7 +8,7 @@ inactive on rescan.
 
 import hashlib
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import cast
@@ -44,6 +44,7 @@ MAX_TITLE_CHARS = 200
 MAX_TITLE_PARSE_BYTES = 64 * 1024
 MAX_HEADERS = 30
 MAX_HEADER_VALUE_CHARS = 256
+MAX_CSP_HEADER_VALUE_CHARS = 4096
 MAX_COOKIES = 20
 DNS_LOOKUPS = 16
 REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
@@ -51,6 +52,7 @@ _HTML_CONTENT_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 _SAFE_COOKIE_ATTRS = frozenset(
     {"path", "domain", "expires", "max-age", "secure", "httponly", "samesite", "partitioned"}
 )
+_SECURITY_COOKIE_ATTRS = frozenset({"secure", "httponly", "samesite", "max-age", "expires"})
 _PRIORITY_HEADERS = frozenset(
     {
         "server",
@@ -83,6 +85,8 @@ class ProbeResult:
     headers: dict[str, str]
     cookies: tuple[str, ...]
     body_excerpt: str
+    headers_truncated: tuple[str, ...] = ()
+    cookies_truncated: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -133,51 +137,108 @@ def extract_html_title(content: bytes, content_type: str) -> str:
     return collapsed[:MAX_TITLE_CHARS]
 
 
-def redact_set_cookie(raw_cookie: str) -> str:
-    """Keep cookie name and security attributes while replacing its value with `<redacted>`."""
+def _parse_cookie_tokens(attrs: Sequence[str]) -> tuple[list[str], list[str], list[str]]:
+    in_order: list[str] = []
+    sec_by_key: dict[str, str] = {}
+    other: list[str] = []
+    for attr in attrs:
+        attr_key, eq, attr_val = attr.partition("=")
+        clean_key = attr_key.strip()
+        key_lower = clean_key.lower()
+        if key_lower not in _SAFE_COOKIE_ATTRS:
+            continue
+        token = f"{clean_key}={attr_val.strip()[:64]}" if eq else clean_key
+        in_order.append(token)
+        if key_lower in _SECURITY_COOKIE_ATTRS:
+            sec_by_key[key_lower] = token
+        else:
+            other.append(token)
+    return in_order, list(sec_by_key.values()), other
+
+
+def _redact_set_cookie(raw_cookie: str) -> tuple[str, str | None]:
     parts = [part.strip() for part in raw_cookie.split(";") if part.strip()]
     if not parts:
-        return ""
+        return "", None
     name_part, sep, _value = parts[0].partition("=")
     name = name_part.strip().replace("\x00", "")[:64]
     if not sep or not name:
-        return "<redacted>"
-    tokens = [f"{name}=<redacted>"]
-    for attr in parts[1:]:
-        attr_key, eq, attr_val = attr.partition("=")
-        clean_key = attr_key.strip()
-        if clean_key.lower() not in _SAFE_COOKIE_ATTRS:
-            continue
-        if eq:
-            tokens.append(f"{clean_key}={attr_val.strip()[:64]}")
-        else:
-            tokens.append(clean_key)
-    return "; ".join(tokens)[:MAX_HEADER_VALUE_CHARS]
+        return "<redacted>", None
+    head = f"{name}=<redacted>"
+    in_order, security, other = _parse_cookie_tokens(parts[1:])
+    full = "; ".join([head, *in_order])
+    if len(full) <= MAX_HEADER_VALUE_CHARS:
+        return full, None
+    # Prioritize security-critical flags before Path/Domain so long cookies keep hardening flags.
+    fitted = "; ".join([head, *security])
+    if len(fitted) > MAX_HEADER_VALUE_CHARS:
+        return fitted[:MAX_HEADER_VALUE_CHARS], name.lower()
+    for token in other:
+        candidate = f"{fitted}; {token}"
+        if len(candidate) > MAX_HEADER_VALUE_CHARS:
+            break
+        fitted = candidate
+    return fitted, None
 
 
-def sanitize_headers(headers: Mapping[str, str]) -> tuple[dict[str, str], tuple[str, ...]]:
-    """Return lowercase capped response headers (without Set-Cookie) and redacted Set-Cookies."""
-    get_list = getattr(headers, "get_list", None)
-    raw_cookies: list[str] = []
-    if callable(get_list):
-        list_fn = cast(Callable[[str], list[str]], get_list)
-        raw_cookies = list(list_fn("set-cookie"))
-    else:
-        raw_cookies = [v for k, v in headers.items() if k.lower() == "set-cookie"]
+def redact_set_cookie(raw_cookie: str) -> str:
+    """Keep cookie name and security attributes while replacing its value with `<redacted>`."""
+    redacted, _truncated_name = _redact_set_cookie(raw_cookie)
+    return redacted
 
-    cookies = tuple(
-        redacted for raw in raw_cookies[:MAX_COOKIES] if (redacted := redact_set_cookie(raw))
+
+def _sanitize_cookies(
+    headers: Mapping[str, str],
+    list_fn: Callable[[str], list[str]] | None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    raw_cookies = (
+        list(list_fn("set-cookie"))
+        if list_fn is not None
+        else [v for k, v in headers.items() if k.lower() == "set-cookie"]
     )
+    cookies_list: list[str] = []
+    truncated_names: set[str] = set()
+    for raw in raw_cookies[:MAX_COOKIES]:
+        redacted, trunc_name = _redact_set_cookie(raw)
+        if redacted:
+            cookies_list.append(redacted)
+        if trunc_name:
+            truncated_names.add(trunc_name)
+    return tuple(cookies_list), tuple(sorted(truncated_names))
+
+
+def _sanitize_headers(
+    headers: Mapping[str, str],
+) -> tuple[dict[str, str], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Return capped headers, redacted cookies, and truncated header/cookie names."""
+    get_list = getattr(headers, "get_list", None)
+    list_fn = cast(Callable[[str], list[str]], get_list) if callable(get_list) else None
+    cookies, cookies_truncated = _sanitize_cookies(headers, list_fn)
 
     cleaned: dict[str, str] = {}
     extra: list[tuple[str, str]] = []
+    truncated: set[str] = set()
     seen_keys: set[str] = set()
     for key, val in headers.items():
         norm_key = key.strip().lower()[:128]
         if not norm_key or norm_key == "set-cookie" or norm_key in seen_keys:
             continue
         seen_keys.add(norm_key)
-        clean_val = val.strip().replace("\x00", "")[:MAX_HEADER_VALUE_CHARS]
+        raw_val = val
+        # RFC 6797 §8.1: user agents only process the first Strict-Transport-Security field.
+        if norm_key == "strict-transport-security" and list_fn is not None:
+            hsts_fields = list(list_fn("strict-transport-security"))
+            if hsts_fields:
+                raw_val = hsts_fields[0]
+        stripped_val = raw_val.strip().replace("\x00", "")
+        cap = (
+            MAX_CSP_HEADER_VALUE_CHARS
+            if norm_key == "content-security-policy"
+            else MAX_HEADER_VALUE_CHARS
+        )
+        if len(stripped_val) > cap:
+            truncated.add(norm_key)
+        clean_val = stripped_val[:cap]
         if norm_key in _PRIORITY_HEADERS:
             cleaned[norm_key] = clean_val
         else:
@@ -186,6 +247,13 @@ def sanitize_headers(headers: Mapping[str, str]) -> tuple[dict[str, str], tuple[
         if len(cleaned) >= MAX_HEADERS:
             break
         cleaned[norm_key] = clean_val
+    kept_truncated = tuple(sorted(k for k in truncated if k in cleaned))
+    return cleaned, cookies, kept_truncated, cookies_truncated
+
+
+def sanitize_headers(headers: Mapping[str, str]) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Return lowercase capped response headers (without Set-Cookie) and redacted Set-Cookies."""
+    cleaned, cookies, _truncated, _cookies_truncated = _sanitize_headers(headers)
     return cleaned, cookies
 
 
@@ -221,7 +289,7 @@ def _to_probe_result(initial_url: str, body: HttpBody) -> ProbeResult:
         (_normalize_url_safe(hop_url, hop_url), hop_status)
         for hop_url, hop_status in body.redirect_chain
     )
-    headers, cookies = sanitize_headers(body.headers)
+    headers, cookies, headers_truncated, cookies_truncated = _sanitize_headers(body.headers)
     content_type = headers.get("content-type", "")
     location = headers.get("location", "")
     stopped_oos = body.status_code in REDIRECT_CODES and bool(location)
@@ -244,6 +312,8 @@ def _to_probe_result(initial_url: str, body: HttpBody) -> ProbeResult:
         headers=headers,
         cookies=cookies,
         body_excerpt=excerpt,
+        headers_truncated=headers_truncated,
+        cookies_truncated=cookies_truncated,
     )
 
 
@@ -284,17 +354,23 @@ def _web_details(probe: ProbeResult) -> dict[str, JsonValue]:
         "body_bytes": probe.body_bytes,
         "body_truncated": probe.body_truncated,
         "headers": dict(probe.headers),
+        "headers_truncated": list(probe.headers_truncated),
         "cookies": list(probe.cookies),
+        "cookies_truncated": list(probe.cookies_truncated),
     }
 
 
 def _trim_headers_to_budget(details: dict[str, JsonValue], headers: dict[str, JsonValue]) -> None:
     drop_order = [k for k in headers if k not in _PRIORITY_HEADERS]
     drop_order.extend(k for k in headers if k in _PRIORITY_HEADERS)
+    web = details.get("web")
+    truncated = web.get("headers_truncated") if isinstance(web, dict) else None
     for key in reversed(drop_order):
         if _details_bytes(details) <= MAX_ASSET_DETAILS_BYTES:
             break
         headers.pop(key, None)
+        if isinstance(truncated, list) and key not in truncated:
+            truncated.append(key)
 
 
 def _fit_observation_details(

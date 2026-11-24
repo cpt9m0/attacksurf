@@ -7,7 +7,7 @@ HTTP host against the plugin's declared `ScannerGrant` (ADR 0013).
 
 import ipaddress
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Protocol
 from urllib.parse import SplitResult, urlsplit
 from uuid import UUID
@@ -362,9 +362,9 @@ class _GuardedHttp:
         )
         return port in self._allowed_ports and host_ok
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
         self.require_allowed(url)
-        return self._inner.get(url, limit=bounded_limit(limit))
+        return self._inner.get(url, limit=bounded_limit(limit), headers=headers)
 
     def require_allowed(self, url: str) -> None:
         if not self.host_allowed(url):
