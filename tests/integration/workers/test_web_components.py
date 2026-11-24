@@ -112,6 +112,31 @@ def _seed_vuln_intel(db_session: Session) -> VulnCve:
             ),
         ]
     )
+    for idx in range(25):
+        cid = f"CVE-2021-9{idx:03d}"
+        db_session.add(
+            VulnCve(
+                cve_id=cid,
+                description=f"Equal-CVSS nginx issue {idx}.",
+                published_at=datetime(2021, 7, 1, tzinfo=UTC),
+                last_modified_at=now,
+                cvss_v3_score=7.5,
+                in_kev=False,
+                epss_score=0.40 - (idx * 0.01),
+                epss_percentile=0.80,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db_session.flush()
+        db_session.add(
+            VulnCpeRange(
+                cve_id=cid,
+                vendor="f5",
+                product="nginx",
+                exact_version="1.18.0",
+            )
+        )
     db_session.commit()
     return kev_cve
 
@@ -143,15 +168,11 @@ def _build_guard(db_session: Session) -> tuple[ScopeGuard, FakeScopeHttp]:
     return guard, http
 
 
-def test_web_components_pipeline_flags_known_cves_and_tolerates_epss_updates(
-    db_session: Session,
-) -> None:
-    kev_cve = _seed_vuln_intel(db_session)
+def _setup_verified_org(db_session: Session, now: datetime) -> tuple[Org, Asset]:
     org = Org(name="Acme", slug="acme")
     db_session.add(org)
     db_session.flush()
     root = assets_service.add_root_domain(db_session, org.id, "example.com", actor_id=None)
-    now = datetime.now(UTC)
     db_session.add(
         Verification(
             org_id=org.id,
@@ -166,6 +187,15 @@ def test_web_components_pipeline_flags_known_cves_and_tolerates_epss_updates(
         )
     )
     db_session.commit()
+    return org, root
+
+
+def test_web_components_pipeline_flags_known_cves_and_tolerates_epss_updates(
+    db_session: Session,
+) -> None:
+    kev_cve = _seed_vuln_intel(db_session)
+    now = datetime.now(UTC)
+    org, root = _setup_verified_org(db_session, now)
 
     guard, _ = _build_guard(db_session)
     events = _Events()
@@ -240,17 +270,24 @@ def test_web_components_pipeline_flags_known_cves_and_tolerates_epss_updates(
     assert ev.data["product"] == "Nginx"
     assert ev.data["version"] == "1.18.0"
     assert ev.data["kev_count"] == 1
-    assert [c["cve_id"] for c in ev.data["cves"]] == ["CVE-2021-3618", "CVE-2021-23017"]
+    assert ev.data["cves_truncated"] is True
+    assert ev.data["cves"][0]["cve_id"] == "CVE-2021-3618"
 
-    # Suppress finding; daily EPSS changes alone must not reopen it on the next rescan.
+    # Suppress finding; EPSS updates that cross the top-20 display cutoff keep it suppressed.
     comp_finding.status = FindingStatus.FALSE_POSITIVE
     scan1.status = ScanStatus.COMPLETED
     kev_row = db_session.get_one(VulnCve, kev_cve.cve_id)
     kev_row.epss_score = 0.91
+    promoted_row = db_session.get_one(VulnCve, "CVE-2021-9024")
+    promoted_row.epss_score = 0.95
     db_session.commit()
 
     scan2, comp_after = _run_web_active_cycle()
     assert comp_after.status is FindingStatus.FALSE_POSITIVE
+    evs = db_session.scalars(
+        scoped(Evidence, org.id).where(Evidence.finding_id == comp_finding.id)
+    ).all()
+    assert any(any(c["cve_id"] == "CVE-2021-9024" for c in row.data["cves"]) for row in evs)
 
     # Adding a new matching CVE changes the evidence digest and reopens the finding.
     scan2.status = ScanStatus.COMPLETED

@@ -731,12 +731,15 @@ def _digest_json(data: dict[str, Any]) -> str:
             continue
         if isinstance(items, list) and all(isinstance(item, str) for item in items):
             normalized[key] = sorted(items)
-    cves = normalized.get("cves")
-    if isinstance(cves, list) and all(isinstance(item, dict) for item in cves):
-        normalized["cves"] = sorted(
-            ({k: v for k, v in item.items() if k not in _VOLATILE_CVE_KEYS} for item in cves),
-            key=lambda item: str(item.get("cve_id", "")),
-        )
+    if "vuln_set_sha256" in normalized:
+        normalized.pop("cves", None)
+    else:
+        cves = normalized.get("cves")
+        if isinstance(cves, list) and all(isinstance(item, dict) for item in cves):
+            normalized["cves"] = sorted(
+                ({k: v for k, v in item.items() if k not in _VOLATILE_CVE_KEYS} for item in cves),
+                key=lambda item: str(item.get("cve_id", "")),
+            )
     return _canonical_json(normalized)
 
 

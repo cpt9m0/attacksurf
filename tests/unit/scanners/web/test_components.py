@@ -17,6 +17,7 @@ from attacksurf.scanners.web.components import (
     severity_for_vulnerabilities,
 )
 from attacksurf.scanners.web.fingerprint import load_fingerprints
+from attacksurf.services.scan_results import _evidence_digest
 
 
 class _StubDns:
@@ -231,3 +232,52 @@ def test_web_components_caps_cve_evidence_at_limit_and_byte_budget() -> None:
     assert ev.data["cves_truncated"] is True
     assert len(ev.data["cves"]) == MAX_EVIDENCE_CVES  # type: ignore[arg-type]
     assert out.findings[0].remediation_context["cve_summary"].endswith("(+27 more)")
+
+
+def test_web_components_normalizes_dokuwiki_release_label() -> None:
+    url_ref = AssetRef(type=AssetType.URL, value="https://wiki.acme.example/")
+    details: dict[str, object] = {
+        "technologies": [{"name": "DokuWiki", "version": "Release 2024-02-06"}]
+    }
+    intel = _FakeVulnIntel(
+        {("dokuwiki", "dokuwiki", "2024-02-06"): (_vuln("CVE-2024-4100", cvss=6.1),)}
+    )
+    out = WebComponents().run(_ctx(details, intel), url_ref)
+    assert intel.calls == [("dokuwiki", "dokuwiki", "2024-02-06")]
+    assert len(out.findings) == 1
+    assert out.findings[0].evidence[0].data["version"] == "2024-02-06"
+
+
+def test_web_components_vuln_set_sha256_is_independent_of_epss_cutoff_reordering() -> None:
+    url_ref = AssetRef(type=AssetType.URL, value="https://acme.example/")
+    details: dict[str, object] = {"technologies": [{"name": "Nginx", "version": "1.14.0"}]}
+    day1_vulns = tuple(
+        _vuln(f"CVE-2024-{i:04d}", cvss=7.5, epss=0.9 - (i * 0.01))
+        for i in range(MAX_EVIDENCE_CVES + 5)
+    )
+    # Day 2: CVE #24 overtakes the cutoff via EPSS without any CVSS, KEV, or membership change.
+    day2_vulns = tuple(
+        _vuln(
+            f"CVE-2024-{i:04d}",
+            cvss=7.5,
+            epss=0.99 if i == MAX_EVIDENCE_CVES + 4 else 0.9 - (i * 0.01),
+        )
+        for i in range(MAX_EVIDENCE_CVES + 5)
+    )
+
+    out1 = WebComponents().run(
+        _ctx(details, _FakeVulnIntel({("f5", "nginx", "1.14.0"): day1_vulns})), url_ref
+    )
+    out2 = WebComponents().run(
+        _ctx(details, _FakeVulnIntel({("f5", "nginx", "1.14.0"): day2_vulns})), url_ref
+    )
+
+    ev1 = out1.findings[0].evidence[0]
+    ev2 = out2.findings[0].evidence[0]
+    ids1 = [c["cve_id"] for c in ev1.data["cves"]]  # type: ignore[union-attr]
+    ids2 = [c["cve_id"] for c in ev2.data["cves"]]  # type: ignore[union-attr]
+    assert ids1 != ids2
+    assert ev1.data["vuln_set_sha256"] == ev2.data["vuln_set_sha256"]
+    assert _evidence_digest(out1.findings[0].evidence) == _evidence_digest(
+        out2.findings[0].evidence
+    )

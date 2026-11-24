@@ -1,5 +1,8 @@
 """Match fingerprinted web components against local CVE/KEV/EPSS intelligence (#75)."""
 
+import hashlib
+import json
+import re
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 
@@ -104,9 +107,17 @@ TECHNOLOGY_CPES: Mapping[str, tuple[tuple[str, str], ...]] = MappingProxyType(
 )
 
 
+_LEADING_RELEASE_RE = re.compile(r"^(?:release|ver(?:sion)?)\.?\s+", re.IGNORECASE)
+
+
 def lookup_cpes(tech_name: str) -> tuple[tuple[str, str], ...]:
     """Return curated `(vendor, product)` pairs for a fingerprinted technology name."""
     return TECHNOLOGY_CPES.get(tech_name.strip().lower(), ())
+
+
+def normalize_component_version(version: str) -> str:
+    """Strip release-label prefixes (e.g. DokuWiki `Release 2024-02-06`) before matching."""
+    return _LEADING_RELEASE_RE.sub("", version.strip()).strip()
 
 
 def _bump_severity(severity: Severity) -> Severity:
@@ -145,7 +156,7 @@ def _extract_versioned_technologies(details: Mapping[str, JsonValue]) -> list[tu
         if not isinstance(name, str) or not isinstance(version, str):
             continue
         clean_name = name.strip()
-        clean_version = version.strip()
+        clean_version = normalize_component_version(version)
         key = clean_name.lower()
         if not key or key in seen or not is_valid_version(clean_version):
             continue
@@ -193,6 +204,21 @@ def _match_component(
     return cpes, vulns
 
 
+def _vuln_set_digest(vulns: Sequence[ProductVulnerability]) -> str:
+    """SHA-256 over the full matched CVE set, independent of EPSS scores or descriptions."""
+    canonical = [
+        {
+            "cve_id": v.cve_id,
+            "cvss": v.max_cvss,
+            "in_kev": v.in_kev,
+            "kev_date_added": v.kev_date_added.isoformat() if v.kev_date_added else None,
+        }
+        for v in sorted(vulns, key=lambda item: item.cve_id)
+    ]
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
 def _component_finding(
     asset: AssetRef,
     name: str,
@@ -216,6 +242,7 @@ def _component_finding(
         "kev_count": kev_count,
         "total_cves": len(vulns),
         "cves_truncated": len(vulns) > MAX_EVIDENCE_CVES,
+        "vuln_set_sha256": _vuln_set_digest(vulns),
         "cves": [_serialize_cve(v) for v in capped],
     }
     return RawFinding(
