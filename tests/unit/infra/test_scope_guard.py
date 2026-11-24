@@ -880,10 +880,12 @@ class _RecordingTlsConnector:
         port: int,
         server_hostname: str,
         verify: bool,
+        check_hostname: bool = True,
         timeout: float,
         min_version: object = None,
         max_version: object = None,
     ) -> RawTlsHandshake:
+        del check_hostname, timeout, min_version, max_version
         self.calls.append((address, port, server_hostname, verify))
         return self.outcome
 

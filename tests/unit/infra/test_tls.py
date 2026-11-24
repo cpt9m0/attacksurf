@@ -53,6 +53,7 @@ class FakeTlsConnector:
         port: int,
         server_hostname: str,
         verify: bool,
+        check_hostname: bool = True,
         timeout: float,
         min_version: ssl.TLSVersion | None = None,
         max_version: ssl.TLSVersion | None = None,
@@ -63,6 +64,7 @@ class FakeTlsConnector:
                 "port": port,
                 "server_hostname": server_hostname,
                 "verify": verify,
+                "check_hostname": check_hostname,
                 "timeout": timeout,
                 "min_version": min_version,
                 "max_version": max_version,
@@ -205,6 +207,13 @@ def test_bad_certificates_are_reported_not_raised(
         sans=("acme.example",),
         key_kind="rsa1024",
     )
+    second_outcome = RawTlsHandshake(
+        protocol="TLSv1.2",
+        cipher_name="ECDHE-RSA-AES128-GCM-SHA256",
+        cipher_bits=128,
+        chain_der=(der,),
+        verified=expected_trusted,
+    )
     connector = FakeTlsConnector(
         [
             RawTlsHandshake(
@@ -215,6 +224,57 @@ def test_bad_certificates_are_reported_not_raised(
                 verified=False,
                 verify_code=verify_code,
                 verify_reason=verify_reason,
+            ),
+            second_outcome,
+        ]
+    )
+    client = SafeTlsClient(StaticResolver("93.184.216.34"), connector=connector)
+
+    info = client.inspect("acme.example")
+
+    if expected_error == "hostname_mismatch":
+        assert [(c["verify"], c["check_hostname"]) for c in connector.calls] == [
+            (True, True),
+            (True, False),
+        ]
+    else:
+        assert [c["verify"] for c in connector.calls] == [True, False]
+    assert info.validation.trusted_chain is expected_trusted
+    assert info.validation.hostname_matches is expected_host_match
+    assert info.validation.error_code == expected_error
+    assert info.chain[0].key_type == "RSA"
+    assert info.chain[0].key_size == 1024
+    assert info.chain[0].signature_hash == "sha256"
+    assert info.chain[0].is_self_signed is True
+
+
+def test_hostname_mismatch_with_expired_chain_reports_untrusted_and_expired() -> None:
+    der, _, _ = _make_cert(
+        cn="other.example",
+        issuer_cn="other.example",
+        sans=("other.example",),
+        days_before=-30,
+        days_after=-1,
+    )
+    connector = FakeTlsConnector(
+        [
+            RawTlsHandshake(
+                protocol="",
+                cipher_name="",
+                cipher_bits=None,
+                chain_der=(),
+                verified=False,
+                verify_code=62,
+                verify_reason="Hostname mismatch",
+            ),
+            RawTlsHandshake(
+                protocol="",
+                cipher_name="",
+                cipher_bits=None,
+                chain_der=(),
+                verified=False,
+                verify_code=10,
+                verify_reason="certificate has expired",
             ),
             RawTlsHandshake(
                 protocol="TLSv1.2",
@@ -229,14 +289,14 @@ def test_bad_certificates_are_reported_not_raised(
 
     info = client.inspect("acme.example")
 
-    assert [c["verify"] for c in connector.calls] == [True, False]
-    assert info.validation.trusted_chain is expected_trusted
-    assert info.validation.hostname_matches is expected_host_match
-    assert info.validation.error_code == expected_error
-    assert info.chain[0].key_type == "RSA"
-    assert info.chain[0].key_size == 1024
-    assert info.chain[0].signature_hash == "sha256"
-    assert info.chain[0].is_self_signed is True
+    assert [(c["verify"], c["check_hostname"]) for c in connector.calls] == [
+        (True, True),
+        (True, False),
+        (False, True),
+    ]
+    assert info.validation.trusted_chain is False
+    assert info.validation.hostname_matches is False
+    assert info.validation.error_code == "certificate_expired"
 
 
 @pytest.mark.parametrize(
@@ -328,6 +388,43 @@ def test_legacy_protocol_probing_records_accepted_and_untested_versions() -> Non
     assert info.legacy_protocols_untested == ("TLSv1.1",)
     assert connector.calls[1]["min_version"] == ssl.TLSVersion.TLSv1
     assert connector.calls[2]["min_version"] == ssl.TLSVersion.TLSv1_1
+
+
+def test_legacy_only_server_succeeds_when_probe_legacy_is_enabled() -> None:
+    der, _, _ = _make_cert(cn="acme.example", issuer_cn="acme.example", sans=("acme.example",))
+    connector = FakeTlsConnector(
+        [
+            TlsError("The TLS handshake failed."),
+            RawTlsHandshake("TLSv1", "ECDHE-RSA-AES128-SHA", 128, (der,), verified=False),
+            TlsError("The TLS handshake failed."),
+            RawTlsHandshake("", "", None, (), verified=False, verify_code=18),
+            RawTlsHandshake("TLSv1", "ECDHE-RSA-AES128-SHA", 128, (der,), verified=False),
+        ]
+    )
+    client = SafeTlsClient(StaticResolver("93.184.216.34"), connector=connector)
+
+    info = client.inspect("acme.example", probe_legacy=True)
+
+    assert info.protocol == "TLSv1"
+    assert info.legacy_protocols_accepted == ("TLSv1",)
+    assert info.legacy_protocols_untested == ()
+    assert info.validation.trusted_chain is False
+    assert info.validation.error_code == "self_signed_certificate"
+    assert info.validation.hostname_matches is True
+
+
+def test_legacy_only_server_reraises_when_all_legacy_probes_fail() -> None:
+    connector = FakeTlsConnector(
+        [
+            TlsError("The TLS handshake failed."),
+            TlsError("TLSv1 rejected"),
+            LegacyProbeUnsupported(),
+        ]
+    )
+    client = SafeTlsClient(StaticResolver("93.184.216.34"), connector=connector)
+
+    with pytest.raises(TlsError, match="TLS handshake failed"):
+        client.inspect("acme.example", probe_legacy=True)
 
 
 def test_rate_limiter_is_enforced_per_handshake_and_propagates_transient_error() -> None:

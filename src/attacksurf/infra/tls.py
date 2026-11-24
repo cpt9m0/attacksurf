@@ -76,6 +76,7 @@ class TlsConnector(Protocol):
         port: int,
         server_hostname: str,
         verify: bool,
+        check_hostname: bool = True,
         timeout: float,
         min_version: ssl.TLSVersion | None = None,
         max_version: ssl.TLSVersion | None = None,
@@ -92,11 +93,17 @@ class SocketTlsConnector:
         port: int,
         server_hostname: str,
         verify: bool,
+        check_hostname: bool = True,
         timeout: float,
         min_version: ssl.TLSVersion | None = None,
         max_version: ssl.TLSVersion | None = None,
     ) -> RawTlsHandshake:
-        ctx = _build_ssl_context(verify=verify, min_version=min_version, max_version=max_version)
+        ctx = _build_ssl_context(
+            verify=verify,
+            check_hostname=check_hostname,
+            min_version=min_version,
+            max_version=max_version,
+        )
         raw_sock: socket.socket | None = None
         tls_sock: ssl.SSLSocket | None = None
         try:
@@ -146,11 +153,16 @@ class SocketTlsConnector:
 def _build_ssl_context(
     *,
     verify: bool,
+    check_hostname: bool,
     min_version: ssl.TLSVersion | None,
     max_version: ssl.TLSVersion | None,
 ) -> ssl.SSLContext:
     if verify:
         ctx = ssl.create_default_context()
+        if not check_hostname:
+            # Intentional: validate chain trust independently from hostname matching so an expired
+            # or untrusted chain is not masked by an earlier OpenSSL hostname-mismatch error.
+            ctx.check_hostname = False
     else:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
@@ -216,79 +228,171 @@ class SafeTlsClient(TlsInspector):
             raise ScopeError("The TLS target has no host.")
         address = connection_address(self._resolver.resolve_name(norm_host))
 
+        if not probe_legacy:
+            raw, chain, truncated, validation = self._inspect_handshake(
+                address=address, port=port, host=norm_host
+            )
+            return _build_inspection(
+                host=norm_host,
+                port=port,
+                address=address,
+                raw=raw,
+                chain=chain,
+                truncated=truncated,
+                validation=validation,
+                accepted_legacy=(),
+                untested_legacy=(),
+            )
+
+        try:
+            raw, chain, truncated, validation = self._inspect_handshake(
+                address=address, port=port, host=norm_host
+            )
+            accepted, untested, _ = self._probe_legacy_protocols(
+                address=address, port=port, host=norm_host
+            )
+        except TlsError:
+            accepted, untested, best_probe = self._probe_legacy_protocols(
+                address=address, port=port, host=norm_host
+            )
+            if best_probe is None:
+                raise
+            best_version, best_raw = best_probe
+            raw, chain, truncated, validation = self._inspect_fallback_legacy(
+                address=address,
+                port=port,
+                host=norm_host,
+                version=best_version,
+                fallback_raw=best_raw,
+            )
+
+        return _build_inspection(
+            host=norm_host,
+            port=port,
+            address=address,
+            raw=raw,
+            chain=chain,
+            truncated=truncated,
+            validation=validation,
+            accepted_legacy=accepted,
+            untested_legacy=untested,
+        )
+
+    def _inspect_handshake(
+        self,
+        *,
+        address: str,
+        port: int,
+        host: str,
+        min_version: ssl.TLSVersion | None = None,
+        max_version: ssl.TLSVersion | None = None,
+    ) -> tuple[RawTlsHandshake, tuple[TlsCertificate, ...], bool, TlsValidation]:
         verified_res = self._handshake(
             address=address,
             port=port,
-            server_hostname=norm_host,
+            server_hostname=host,
             verify=True,
-            rate_host=norm_host,
+            rate_host=host,
+            min_version=min_version,
+            max_version=max_version,
         )
         if verified_res.verified:
-            raw = verified_res
-            chain, truncated, parsed_certs = _parse_chain(raw.chain_der)
+            chain, truncated, _parsed = _parse_chain(verified_res.chain_der)
             validation = TlsValidation(trusted_chain=True, hostname_matches=True, error_code=None)
-        else:
-            raw = self._handshake(
+            return verified_res, chain, truncated, validation
+
+        error_code = _classify_verify_error(verified_res.verify_code, verified_res.verify_reason)
+        if error_code == "hostname_mismatch":
+            chain_check = self._handshake(
                 address=address,
                 port=port,
-                server_hostname=norm_host,
-                verify=False,
-                rate_host=norm_host,
+                server_hostname=host,
+                verify=True,
+                check_hostname=False,
+                rate_host=host,
+                min_version=min_version,
+                max_version=max_version,
             )
-            chain, truncated, parsed_certs = _parse_chain(raw.chain_der)
-            error_code = _classify_verify_error(
-                verified_res.verify_code, verified_res.verify_reason
-            )
-            if error_code == "hostname_mismatch":
+            if chain_check.verified:
+                chain, truncated, _parsed = _parse_chain(chain_check.chain_der)
                 validation = TlsValidation(
                     trusted_chain=True,
                     hostname_matches=False,
                     error_code=error_code,
                 )
-            else:
-                matches = (
-                    _cert_matches_hostname(parsed_certs[0], norm_host) if parsed_certs else False
-                )
-                validation = TlsValidation(
-                    trusted_chain=False,
-                    hostname_matches=matches,
-                    error_code=error_code,
-                )
+                return chain_check, chain, truncated, validation
+            error_code = _classify_verify_error(chain_check.verify_code, chain_check.verify_reason)
 
-        accepted_legacy: list[str] = []
-        untested_legacy: list[str] = []
-        if probe_legacy:
-            for version, label in _LEGACY_PROBE_VERSIONS:
-                try:
-                    self._handshake(
-                        address=address,
-                        port=port,
-                        server_hostname=norm_host,
-                        verify=False,
-                        rate_host=norm_host,
-                        min_version=version,
-                        max_version=version,
-                    )
-                except LegacyProbeUnsupported:
-                    untested_legacy.append(label)
-                except (TlsError, ScopeError):
-                    continue
-                else:
-                    accepted_legacy.append(label)
-
-        return TlsInspection(
-            host=norm_host,
-            port=port,
+        raw = self._handshake(
             address=address,
-            protocol=raw.protocol,
-            cipher=raw.cipher_name,
-            cipher_bits=raw.cipher_bits,
-            chain=chain,
-            chain_truncated=truncated,
-            validation=validation,
-            legacy_protocols_accepted=tuple(accepted_legacy),
-            legacy_protocols_untested=tuple(untested_legacy),
+            port=port,
+            server_hostname=host,
+            verify=False,
+            rate_host=host,
+            min_version=min_version,
+            max_version=max_version,
         )
+        chain, truncated, parsed_certs = _parse_chain(raw.chain_der)
+        matches = _cert_matches_hostname(parsed_certs[0], host) if parsed_certs else False
+        validation = TlsValidation(
+            trusted_chain=False,
+            hostname_matches=matches,
+            error_code=error_code,
+        )
+        return raw, chain, truncated, validation
+
+    def _probe_legacy_protocols(
+        self, *, address: str, port: int, host: str
+    ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[ssl.TLSVersion, RawTlsHandshake] | None]:
+        accepted: list[str] = []
+        untested: list[str] = []
+        best_probe: tuple[ssl.TLSVersion, RawTlsHandshake] | None = None
+        for version, label in _LEGACY_PROBE_VERSIONS:
+            try:
+                probe_raw = self._handshake(
+                    address=address,
+                    port=port,
+                    server_hostname=host,
+                    verify=False,
+                    rate_host=host,
+                    min_version=version,
+                    max_version=version,
+                )
+            except LegacyProbeUnsupported:
+                untested.append(label)
+            except (TlsError, ScopeError):
+                continue
+            else:
+                accepted.append(label)
+                best_probe = (version, probe_raw)
+        return tuple(accepted), tuple(untested), best_probe
+
+    def _inspect_fallback_legacy(
+        self,
+        *,
+        address: str,
+        port: int,
+        host: str,
+        version: ssl.TLSVersion,
+        fallback_raw: RawTlsHandshake,
+    ) -> tuple[RawTlsHandshake, tuple[TlsCertificate, ...], bool, TlsValidation]:
+        try:
+            return self._inspect_handshake(
+                address=address,
+                port=port,
+                host=host,
+                min_version=version,
+                max_version=version,
+            )
+        except (LegacyProbeUnsupported, TlsError):
+            chain, truncated, parsed_certs = _parse_chain(fallback_raw.chain_der)
+            matches = _cert_matches_hostname(parsed_certs[0], host) if parsed_certs else False
+            validation = TlsValidation(
+                trusted_chain=False,
+                hostname_matches=matches,
+                error_code="verification_failed",
+            )
+            return fallback_raw, chain, truncated, validation
 
     def _handshake(
         self,
@@ -297,6 +401,7 @@ class SafeTlsClient(TlsInspector):
         port: int,
         server_hostname: str,
         verify: bool,
+        check_hostname: bool = True,
         rate_host: str,
         min_version: ssl.TLSVersion | None = None,
         max_version: ssl.TLSVersion | None = None,
@@ -312,10 +417,38 @@ class SafeTlsClient(TlsInspector):
                 port=port,
                 server_hostname=server_hostname,
                 verify=verify,
+                check_hostname=check_hostname,
                 timeout=self._timeout,
                 min_version=min_version,
                 max_version=max_version,
             )
+
+
+def _build_inspection(
+    *,
+    host: str,
+    port: int,
+    address: str,
+    raw: RawTlsHandshake,
+    chain: tuple[TlsCertificate, ...],
+    truncated: bool,
+    validation: TlsValidation,
+    accepted_legacy: tuple[str, ...],
+    untested_legacy: tuple[str, ...],
+) -> TlsInspection:
+    return TlsInspection(
+        host=host,
+        port=port,
+        address=address,
+        protocol=raw.protocol,
+        cipher=raw.cipher_name,
+        cipher_bits=raw.cipher_bits,
+        chain=chain,
+        chain_truncated=truncated,
+        validation=validation,
+        legacy_protocols_accepted=accepted_legacy,
+        legacy_protocols_untested=untested_legacy,
+    )
 
 
 _VERIFY_REASON_MATCHES: tuple[tuple[tuple[str, ...], str], ...] = (
