@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 
 ## [Unreleased]
 
+### Added
+- [ADR 0033](docs/adr/0033-website-network-grants.md) defining network grants, guarded TLS
+  handshakes, allowed HTTP methods/ports/paths, `active` queue isolation, per-target rate limits,
+  identifying `User-Agent`, `ACTIVE_SCANS_ENABLED` kill switch, and hard defensive boundaries for
+  website checks (#69).
+
 ## [0.1.0] - 2026-11-22
 
 First public alpha release (MVP): AI-powered attack surface management with passive and verified-active DNS discovery/checks, finding lifecycle and rescan diffing, AI triage and exposure summaries, recurring schedules, email digests, and single-VPS Docker deployment.
