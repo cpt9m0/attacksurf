@@ -2,19 +2,18 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-24 · **Branch:** `75-web-components` · **Issue:** #75 (Flag known-vulnerable web components from fingerprints)
+**Updated:** 2026-11-24 · **Branch:** `76-web-tls-checks` · **Issue:** #76 (Check TLS certificates and configuration of web hosts)
 
 ## Status
-Implemented and tested on branch `75-web-components`; running full verification and opening PR #75.
+Implemented and tested on branch `76-web-tls-checks`; verifying full suite and opening PR #76.
 
 ## Last task
-- Added `web.components.known_vulnerable` rule in `src/attacksurf/domain/rules/web.py` (#75).
-- Exposed read-only `VulnIntelLookup` (`domain.net`), `DbVulnIntelLookup` (`services.vulnintel`), `ScopeGuard(vuln_intel=...)`, `workers/runtime.py` wiring, and `ScanContext.target_details` (`scanner_jobs.py`), plus volatile EPSS/description stripping in `_digest_json` (`scan_results.py`) (#75).
-- Implemented `web.components` (`scanners/web/components.py`) with curated technology → CPE mapping, CVSS severity + CISA KEV severity bump, `Confidence.MEDIUM`, and capped CVE/KEV/EPSS evidence, and wired it into `web_active.checks`, `app.py`, and `workers/app.py` (#75).
-- Added unit tests (`tests/unit/scanners/web/test_components.py`, `test_profiles.py`) and Postgres integration tests (`tests/integration/workers/test_web_components.py`), and updated `docs/scanners.md`, `docs/security.md`, and `CHANGELOG.md` (#75).
+- Added 7 TLS rules (`web.tls.cert_expired`, `cert_expiring`, `hostname_mismatch`, `untrusted_chain`, `weak_key`, `weak_signature`, `legacy_protocol`) in `src/attacksurf/domain/rules/web.py` (#76).
+- Implemented `web.tls` (`src/attacksurf/scanners/web/tls.py`) using `ctx.runtime.tls.inspect`, recording capped `Asset.details["tls"]` and deterministic parsed-chain-summary evidence, and registered it in `web_active.checks`, `app.py`, and `workers/app.py` (#76).
+- Added unit tests (`tests/unit/scanners/web/test_tls.py`, `test_profiles.py`) and Postgres integration tests (`tests/integration/workers/test_web_tls.py`), and synced `docs/scanners.md`, `docs/security.md`, and `CHANGELOG.md` (#76).
 
 ## Next step
-Implement #76: Check TLS certificates and configuration of web hosts (start after #75 PR is merged).
+Implement #77: Check HTTP security headers, cookies and HTTPS redirects (start after #76 PR is merged).
 
 ## Open threads
 - **Proxy trust:** the proxy has no caller authentication and `worker-analysis` shares the `sandbox` network with it (`docs/security.md`; #92 must close it before prod).

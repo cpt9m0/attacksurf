@@ -6,6 +6,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Guarded TLS certificate and protocol configuration check (`web.tls`, `scanners/web/tls.py`)
+  wired into `web_active.checks`, `app.py`, and `workers/app.py`: inspects verified `https://`
+  URLs over `ctx.runtime.tls`, records capped `Asset.details["tls"]`, and checks all 7 TLS rules
+  (`web.tls.cert_expired`, `cert_expiring`, `hostname_mismatch`, `untrusted_chain`, `weak_key`,
+  `weak_signature`, `legacy_protocol`) with parsed chain-summary evidence (#76).
 - Known-vulnerable web component matcher (`web.components`, `scanners/web/components.py`),
   wired into `web_active.checks`, `VulnIntelLookup` / `DbVulnIntelLookup`, and
   `ScanContext.target_details`: maps fingerprinted URL technologies with versions to NVD CPEs,
