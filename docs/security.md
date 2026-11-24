@@ -127,7 +127,9 @@ Technology fingerprinting (`scanners/web/fingerprint.py`, #73) inspects only the
 already captured by `web.probe` (zero extra network requests, cookie names only, ReDoS-audited
 subset of GPL-3.0 `enthec/webappanalyzer` rules). Known-vulnerable component matching
 (`web.components`, #75) runs passively with `ScannerGrant()` (no outbound network) against the
-local global `vuln_cves` / `vuln_cpe_ranges` catalog via `VulnIntelLookup`.
+local global `vuln_cves` / `vuln_cpe_ranges` catalog via `VulnIntelLookup`. `web.tls` (#76)
+inspects verified HTTPS URLs via `ctx.runtime.tls.inspect(..., probe_legacy=True)` on the
+allowlisted web ports and records only parsed chain-summary metadata (never private keys).
 Planned #77–#79 checks will expand `ScannerGrant` with `http_methods`,
 `http_paths`, and `soft_404_probe`. CT discovery's
 random-label wildcard probes use the same guarded DNS adapter and DNS budget; a wildcard marker

@@ -11,7 +11,7 @@ in this catalog (`src/attacksurf/domain/rules/`).
 | Profile | Availability | Discovery plugins | Check plugins | Discovery cap |
 |---|---|---|---|---|
 | `dns_passive` | UI, API, CLI | `dns.discovery.ct` | `dns.resolve`, `dns.email`, `dns.takeover`, `dns.takeover.http`, `dns.dnssec`, `dns.ns`, `dns.mx`, `dns.caa`, `dns.whois`, `dns.axfr` | `1000` assets / root |
-| `web_active` | UI, API, CLI | `web.probe` | `web.components` | `1000` assets / root |
+| `web_active` | UI, API, CLI | `web.probe` | `web.components`, `web.tls` | `1000` assets / root |
 | `dns_scheduled` | Scheduled rescans only (internal) | — | `dns.resolve`, `dns.email`, `dns.dnssec` | `1000` assets / root |
 
 > [!NOTE]
@@ -43,10 +43,11 @@ job status when active scans are disabled or the target is unverified.
 | `dns.axfr` | `domain` | **Yes** (`zone_transfer`) | 60 s | Authoritative `AXFR` (16 lookups) | Sends one zone-transfer request per nameserver when the scanned domain owns `NS` records itself; records only whether AXFR succeeded and the record count (never stores zone contents). |
 | `web.probe` | `domain`, `subdomain`, `url` | **Yes** (`TARGET`) | 60 s | `TARGET` HTTP (256 KiB GET on ports `80`/`443`, verified same-root redirects ≤ 4 hops), 16 DNS lookups | Probes `https://` then `http://` on active verified hosts, creates `url` assets and `serves` relations with capped metadata (`headers`, redacted `Set-Cookie`, trimmed title, body SHA-256), passively fingerprints `technologies` from the captured response (`scanners/web/fingerprint.py`), flags versioned `Server`/`X-Powered-By` headers (`web.disclosure.version_banner`), stops cleanly before out-of-scope redirects, and deactivates non-responding discovered `url` assets on rescan. |
 | `web.components` | `url` | No | 30 s | None (`VulnIntelLookup` read-only DB catalog) | Matches fingerprinted `Asset.details["technologies"]` with concrete versions against the local NVD/KEV/EPSS store using a curated technology → CPE mapping, emitting CVSS-scored `web.components.known_vulnerable` findings bumped on CISA KEV. |
+| `web.tls` | `domain`, `subdomain`, `url` (`https://`) | **Yes** (`tls`) | 30 s | Guarded TLS on ports `443`, `8000`, `8080`, `8443`, `8888`, 4 DNS lookups | Inspects TLS certificate chains, hostname match, expiry, key strength, signature algorithms, and legacy TLS 1.0/1.1 acceptance via `ctx.runtime.tls`, storing `Asset.details["tls"]` and chain-summary evidence. |
 
 ---
 
-## Detection Rules (27)
+## Detection Rules (34)
 
 ### DNS Records (`dns.resolve`)
 
@@ -109,6 +110,18 @@ job status when active scans are disabled or the target is unverified.
 | Rule ID | Default severity | Title | References |
 |---|---|---|---|
 | `web.components.known_vulnerable` | `medium` *(CVSS + KEV bump)* | Web component matches known vulnerabilities | [NVD](https://nvd.nist.gov/), [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog), [FIRST EPSS](https://www.first.org/epss/) |
+
+### Web TLS (`web.tls`)
+
+| Rule ID | Default severity | Title | References |
+|---|---|---|---|
+| `web.tls.cert_expired` | `high` | TLS certificate is expired | [RFC 5280 §4.1.2.5](https://www.rfc-editor.org/rfc/rfc5280#section-4.1.2.5), [OWASP WSTG-CRYP-01](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/09-Testing_for_Weak_Cryptography/01-Testing_for_Weak_Transport_Layer_Security) |
+| `web.tls.cert_expiring` | `medium` *(high ≤ 7 days)* | TLS certificate expires soon | [RFC 5280 §4.1.2.5](https://www.rfc-editor.org/rfc/rfc5280#section-4.1.2.5) |
+| `web.tls.hostname_mismatch` | `high` | TLS certificate does not match the hostname | [RFC 6125](https://www.rfc-editor.org/rfc/rfc6125), [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) |
+| `web.tls.untrusted_chain` | `high` | TLS certificate chain is not trusted | [RFC 5280](https://www.rfc-editor.org/rfc/rfc5280), [OWASP WSTG-CRYP-01](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/09-Testing_for_Weak_Cryptography/01-Testing_for_Weak_Transport_Layer_Security) |
+| `web.tls.weak_key` | `high` | TLS certificate uses a weak public key | [NIST SP 800-52r2](https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-52r2.pdf) |
+| `web.tls.weak_signature` | `high` | TLS certificate uses a weak signature algorithm | [RFC 8996](https://www.rfc-editor.org/rfc/rfc8996), [CA/B Forum BRs](https://cabforum.org/working-groups/server/baseline-requirements/documents/) |
+| `web.tls.legacy_protocol` | `medium` | Server accepts deprecated legacy TLS protocol | [RFC 8996](https://www.rfc-editor.org/rfc/rfc8996) |
 
 ---
 

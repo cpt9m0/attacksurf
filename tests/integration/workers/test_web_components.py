@@ -25,10 +25,12 @@ from attacksurf.infra.db.models import (
 )
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.infra.scope_guard import ScopeGuard
+from attacksurf.infra.tls import RawTlsHandshake
 from attacksurf.scanners.profiles import PROFILES
 from attacksurf.scanners.registry import registry
 from attacksurf.scanners.web import components as _web_components  # noqa: F401
 from attacksurf.scanners.web import probe as _web_probe  # noqa: F401
+from attacksurf.scanners.web import tls as _web_tls  # noqa: F401
 from attacksurf.services import assets as assets_service
 from attacksurf.services import scans
 from attacksurf.services.ownership import DbOwnershipChecker
@@ -141,6 +143,17 @@ def _seed_vuln_intel(db_session: Session) -> VulnCve:
     return kev_cve
 
 
+class _NoOpTlsConnector:
+    def handshake(self, **_kwargs: object) -> RawTlsHandshake:
+        return RawTlsHandshake(
+            protocol="TLSv1.3",
+            cipher_name="TLS_AES_256_GCM_SHA384",
+            cipher_bits=256,
+            chain_der=(),
+            verified=True,
+        )
+
+
 def _build_guard(db_session: Session) -> tuple[ScopeGuard, FakeScopeHttp]:
     dns = MutableDnsZone()
     dns.set_records("example.com", "A", ("93.184.216.34",))
@@ -163,6 +176,7 @@ def _build_guard(db_session: Session) -> tuple[ScopeGuard, FakeScopeHttp]:
         ownership=DbOwnershipChecker(factory),
         classify=public_suffix.classify,
         active_scans_enabled=True,
+        tls=_NoOpTlsConnector(),  # type: ignore[arg-type]
         vuln_intel=DbVulnIntelLookup(factory),
     )
     return guard, http
@@ -242,7 +256,11 @@ def test_web_components_pipeline_flags_known_cves_and_tolerates_epss_updates(
             profiles=PROFILES,
         )
         db_session.commit()
-        assert [(t.task_name) for t in q_chk.header] == ["passive.scan"]
+        assert sorted(t.task_name for t in q_chk.header) == [
+            "active.scan",
+            "active.scan",
+            "passive.scan",
+        ]
         for task in q_chk.header:
             run_check(
                 db_session,

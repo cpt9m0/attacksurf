@@ -24,6 +24,7 @@ from attacksurf.scanners.dns import takeover_http as _dns_takeover_http  # noqa:
 from attacksurf.scanners.dns import whois as _dns_whois  # noqa: F401
 from attacksurf.scanners.web import components as _web_components  # noqa: F401
 from attacksurf.scanners.web import probe as _web_probe  # noqa: F401
+from attacksurf.scanners.web import tls as _web_tls  # noqa: F401
 from attacksurf.workers import runtime
 
 TASK_MODULES = (

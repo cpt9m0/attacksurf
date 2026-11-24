@@ -17,6 +17,7 @@ from attacksurf.scanners.profiles import MAX_DISCOVERED_ASSETS, PROFILES, WORKER
 from attacksurf.scanners.registry import registry
 from attacksurf.scanners.web import components as _web_components  # noqa: F401
 from attacksurf.scanners.web import probe as _web_probe  # noqa: F401
+from attacksurf.scanners.web import tls as _web_tls  # noqa: F401
 
 
 def test_dns_passive_profile_is_valid_and_selects_the_ct_discovery_scanner() -> None:
@@ -49,14 +50,18 @@ def test_web_active_profile_is_valid_and_selects_active_web_probe() -> None:
     registry.validate(profile)
 
     assert profile.discover == ("web.probe",)
-    assert profile.checks == ("web.components",)
+    assert profile.checks == ("web.components", "web.tls")
     assert profile.max_discovered_assets == MAX_DISCOVERED_ASSETS
     scanner = registry.get(profile.discover[0])
     assert scanner.queue == "active"
     assert scanner.requires_verification is True
-    check_scanner = registry.get(profile.checks[0])
-    assert check_scanner.queue == "passive"
-    assert check_scanner.grant.http is HttpPermission.NONE
+    comp_scanner = registry.get("web.components")
+    assert comp_scanner.queue == "passive"
+    assert comp_scanner.grant.http is HttpPermission.NONE
+    tls_scanner = registry.get("web.tls")
+    assert tls_scanner.queue == "active"
+    assert tls_scanner.requires_verification is True
+    assert tls_scanner.grant.tls is True
 
 
 def test_scheduled_profile_is_dns_only_and_not_public() -> None:
