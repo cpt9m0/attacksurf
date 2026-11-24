@@ -50,6 +50,10 @@ def test_vendored_dataset_loads_cleanly_with_expected_size_and_implies() -> None
             '[{"name": "BadMod", "categories": ["CMS"], "html": ["ok\\\\;unknown:1"]}]',
             "unsupported modifier",
         ),
+        (
+            '[{"name": "BadCookieHdr", "categories": ["CMS"], "headers": {"set-cookie": ["foo"]}}]',
+            "use the cookies channel",
+        ),
     ],
 )
 def test_parse_fingerprints_rejects_corrupt_documents(raw: str, match: str) -> None:
@@ -161,3 +165,60 @@ def test_fingerprint_performance_on_large_html_payload() -> None:
     fingerprint_response({"Server": "nginx/1.26.2"}, body, "text/html")
     elapsed = time.monotonic() - start
     assert elapsed < 1.0
+
+
+def test_fingerprint_flask_does_not_inherit_werkzeug_version() -> None:
+    techs = fingerprint_response(
+        {"Server": "Werkzeug/3.1.3 Python/3.12.0", "Content-Type": "text/html"},
+        b"<html></html>",
+        "text/html",
+    )
+    by_name = {t.name: t for t in techs}
+    assert by_name["Flask"].version is None
+    assert by_name["Python"].version == "3.12.0"
+
+
+def test_fingerprint_cookie_only_phpmyadmin_and_aspnet_core() -> None:
+    pma_techs = fingerprint_response(
+        {"Set-Cookie": "phpMyAdmin_https=secret-pma-token; Path=/; HttpOnly"},
+        b"",
+        "text/html",
+    )
+    assert "phpMyAdmin" in {t.name for t in pma_techs}
+    assert "secret-pma-token" not in json.dumps([t.to_dict() for t in pma_techs])
+
+    asp_techs = fingerprint_response(
+        {"Set-Cookie": ".AspNetCore.Antiforgery.abc=secret-asp-token; Path=/; HttpOnly"},
+        b"",
+        "text/html",
+    )
+    assert "Microsoft ASP.NET" in {t.name for t in asp_techs}
+    assert "secret-asp-token" not in json.dumps([t.to_dict() for t in asp_techs])
+
+
+def test_fingerprint_bootstrap_and_adversarial_near_misses_stay_linear() -> None:
+    html = (
+        b"<html><head>"
+        b'<link rel="stylesheet" href="/static/bootstrap-5.3.3.min.css">'
+        b'<script src="/js/bootstrap-5.3.3.bundle.min.js"></script>'
+        b"</head><body></body></html>"
+    )
+    techs = fingerprint_response({"Content-Type": "text/html"}, html, "text/html")
+    by_name = {t.name: t for t in techs}
+    assert by_name["Bootstrap"].version == "5.3.3"
+
+    adversarial_bodies = [
+        ("<link href=bootstrap" + ("1" * 2000)).encode(),
+        ("<link " * 2000).encode(),
+        ("Powered by <a" + (" " * 5000)).encode(),
+        ("<div " + ("x-data " * 2000)).encode(),
+        ("<![CDATA[" + ("x" * 10000)).encode(),
+        (
+            f'<script src="/bootstrap-{"1" * 400}">'
+            f'</script><script src="vue-{"1." * 200}"></script>'
+        ).encode(),
+    ]
+    start = time.monotonic()
+    for payload in adversarial_bodies:
+        fingerprint_response({"Content-Type": "text/html"}, payload, "text/html")
+    assert time.monotonic() - start < 0.5

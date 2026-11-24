@@ -20,9 +20,14 @@ pinned commit:
   retained only `implies` edges targeting technologies within the curated subset.
 - Restricted `cookies` entries strictly to cookie-name presence patterns (`^(?:<name>)$`); any
   upstream cookie rule that inspects a cookie value was dropped so secret cookie values are never
-  examined or matched.
-- Audited every regular expression at extraction time to reject invalid patterns or nested
-  quantifiers (catastrophic backtracking / ReDoS risk on untrusted HTML responses).
+  examined or matched, and upstream `headers.set-cookie` entries (`Microsoft ASP.NET` `.AspNetCore`,
+  `phpMyAdmin` `phpMyAdmin_https`) were moved into `cookies` so they are matched on cookie names
+  only rather than an ignored header key.
+- Omitted the `Werkzeug` version capture on `Flask`'s `Server` header rule so a standalone
+  `Werkzeug/X.Y.Z` server banner does not assign Werkzeug's version number to Flask.
+- Audited every regular expression and rewrote or bounded backtracking-prone HTML/script regexes
+  (`Bootstrap`, `Alpine.js`, `PrestaShop`, `Vue.js`, `WooCommerce`, and unbounded `<tag[^>]+` /
+  `[^<]*` tag scans) for linear-time matching on untrusted response bodies.
 
 To update: re-fetch `src/categories.json` and `src/technologies/*.json` from
 `enthec/webappanalyzer` at a new pinned commit, re-apply the curation and transformation rules

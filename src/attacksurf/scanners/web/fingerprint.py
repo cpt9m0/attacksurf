@@ -373,10 +373,15 @@ def _parse_entry(entry: object) -> TechSignature:
     if not isinstance(implies_raw, list) or not all(isinstance(i, str) and i for i in implies_raw):
         raise FingerprintError(f"{name!r} has invalid implies list")
 
+    headers = _parse_pattern_map(entry.get("headers", {}), field=f"{name}.headers")
+    if "set-cookie" in headers:
+        raise FingerprintError(
+            f"{name}.headers must not contain 'set-cookie'; use the cookies channel"
+        )
     return TechSignature(
         name=name,
         categories=tuple(categories),
-        headers=_parse_pattern_map(entry.get("headers", {}), field=f"{name}.headers"),
+        headers=headers,
         cookies=_parse_pattern_list(entry.get("cookies", []), field=f"{name}.cookies"),
         meta=_parse_pattern_map(entry.get("meta", {}), field=f"{name}.meta"),
         script_src=_parse_pattern_list(entry.get("script_src", []), field=f"{name}.script_src"),

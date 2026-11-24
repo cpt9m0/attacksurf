@@ -25,7 +25,7 @@
       "/alpine(?:\\.min)?\\.js"
     ],
     "html": [
-      "<[^>]+[^\\w-]x-data[^\\w-][^<]+\\;confidence:75"
+      "<[a-z][a-z0-9-]{0,32}\\b[^<>]{0,512}\\bx-data(?:=|\\s|>)\\;confidence:75"
     ]
   },
   {
@@ -112,11 +112,11 @@
       "UI frameworks"
     ],
     "script_src": [
-      "(?:/|-)bootstrap(?:[^/]*?([0-9a-fA-F]{7,40}|[\\d]+(?:\\.[\\d]+(?:\\.[\\d]+)?)?)|)[^/]*?(?:\\.min)?\\.js\\;version:\\1"
+      "(?:/|-)bootstrap(?:-(\\d+\\.\\d+(?:\\.\\d+)?))?(?:\\.bundle)?(?:\\.min)?\\.js\\;version:\\1"
     ],
     "html": [
-      "<style>\\s+/\\*!\\s+\\* Bootstrap v(\\d\\.\\d\\.\\d)\\;version:\\1",
-      "<link[^>]* href=[^>]*?bootstrap(?:[^>]*?([0-9a-fA-F]{7,40}|[\\d]+(?:.[\\d]+(?:.[\\d]+)?)?)|)[^>-]*?(?:\\.min)?\\.css\\;version:\\1"
+      "<style>\\s+/\\*!\\s+\\* Bootstrap v(\\d+\\.\\d+\\.\\d+)\\;version:\\1",
+      "<link\\b[^<>]{0,200}href=[\"']?[^\"'\\s<>]{0,200}(?:/|-)bootstrap(?:-(\\d+\\.\\d+(?:\\.\\d+)?))?(?:\\.bundle)?(?:\\.min)?\\.css\\;version:\\1"
     ]
   },
   {
@@ -164,7 +164,7 @@
       "^(?:django_language)$"
     ],
     "html": [
-      "(?:powered by <a[^>]+>Django ?([\\d.]+)?<\\/a>|<input[^>]*name=[\"']csrfmiddlewaretoken[\"'][^>]*>)\\;version:\\1"
+      "(?:powered by <a[^<>]{0,256}>Django ?([\\d.]+)?<\\/a>|<input[^<>]{0,256}name=[\"']csrfmiddlewaretoken[\"'][^<>]{0,256}>)\\;version:\\1"
     ],
     "implies": [
       "Python"
@@ -215,7 +215,7 @@
       "drupal\\.js"
     ],
     "html": [
-      "<(?:link|style)[^>]+\"/sites/(?:default|all)/(?:themes|modules)/"
+      "<(?:link|style)[^<>]{1,512}\"/sites/(?:default|all)/(?:themes|modules)/"
     ],
     "implies": [
       "PHP"
@@ -288,7 +288,7 @@
     ],
     "headers": {
       "server": [
-        "Werkzeug/?([\\d\\.]+)?\\;version:\\1"
+        "Werkzeug(?:/[\\d.]+)?\\;confidence:50"
       ]
     },
     "implies": [
@@ -330,7 +330,7 @@
       ]
     },
     "html": [
-      "<meta content=\"https?://[^/]+/assets/gitlab_logo-",
+      "<meta content=\"https?://[^/\"<>]{1,256}/assets/gitlab_logo-",
       "<header class=\"navbar navbar-fixed-top navbar-gitlab with-horizontal-nav\">"
     ],
     "implies": [
@@ -344,7 +344,7 @@
       "Analytics"
     ],
     "script_src": [
-      "grafana\\..+\\.com/public/build/"
+      "grafana\\.[^/]{1,128}\\.com/public/build/"
     ]
   },
   {
@@ -398,7 +398,7 @@
       ]
     },
     "html": [
-      "Powered by <a href=\"https?://jekyllrb\\.com\"[^>]*>Jekyll</",
+      "Powered by <a href=\"https?://jekyllrb\\.com\"[^<>]{0,256}>Jekyll</",
       "<!-- Created with Jekyll Now -",
       "<!-- Begin Jekyll SEO tag"
     ],
@@ -459,7 +459,7 @@
       "(?:^|/)(feed/com_|components/com_)"
     ],
     "html": [
-      "(?:<div[^>]+id=\"wrapper_r\"|<(?:link|script)[^>]+(?:feed|components)/com_|<table[^>]+class=\"pill)\\;confidence:50"
+      "(?:<div[^<>]{1,256}id=\"wrapper_r\"|<(?:link|script)[^<>]{1,256}(?:feed|components)/com_|<table[^<>]{1,256}class=\"pill)\\;confidence:50"
     ],
     "implies": [
       "PHP"
@@ -532,7 +532,7 @@
       "JavaScript libraries"
     ],
     "script_src": [
-      "lodash.*\\.js"
+      "lodash[^/?]{0,64}\\.js"
     ]
   },
   {
@@ -595,9 +595,9 @@
       ]
     },
     "html": [
-      "<body[^>]+class=\"mediawiki\"",
-      "<(?:a|img)[^>]+>Powered by MediaWiki</a>",
-      "<a[^>]+/Special:WhatLinksHere/"
+      "<body[^<>]{1,256}class=\"mediawiki\"",
+      "<(?:a|img)[^<>]{1,256}>Powered by MediaWiki</a>",
+      "<a[^<>]{1,256}/Special:WhatLinksHere/"
     ],
     "implies": [
       "PHP"
@@ -614,18 +614,16 @@
       ],
       "x-powered-by": [
         "^ASP\\.NET"
-      ],
-      "set-cookie": [
-        "\\.AspNetCore"
       ]
     },
     "cookies": [
       "^(?:ASPSESSION)$",
       "^(?:ASP\\.NET_SessionId)$",
-      "^(?:\\.ASPXAUTH)$"
+      "^(?:\\.ASPXAUTH)$",
+      "^\\.AspNetCore"
     ],
     "html": [
-      "<input[^>]+name=\"__VIEWSTATE"
+      "<input[^<>]{1,256}name=\"__VIEWSTATE"
     ]
   },
   {
@@ -652,7 +650,7 @@
       ]
     },
     "html": [
-      "<img[^>]+moodlelogo"
+      "<img[^<>]{1,256}moodlelogo"
     ],
     "implies": [
       "PHP"
@@ -710,8 +708,8 @@
       "/_nuxt/"
     ],
     "html": [
-      "<div [^>]*id=\"__nuxt\"",
-      "<script [^>]*>window\\.__NUXT__"
+      "<div [^<>]{0,256}id=\"__nuxt\"",
+      "<script [^<>]{0,256}>window\\.__NUXT__"
     ],
     "implies": [
       "Vue.js"
@@ -742,7 +740,7 @@
       ]
     },
     "html": [
-      "<link[^>]+/owa/auth/([\\d\\.]+)/themes/resources\\;version:\\1"
+      "<link[^<>]{1,256}/owa/auth/([\\d\\.]{1,32})/themes/resources\\;version:\\1"
     ],
     "implies": [
       "Microsoft ASP.NET"
@@ -787,9 +785,9 @@
       "/modules/ps_[a-z]+/"
     ],
     "html": [
-      "Powered by <a\\s+[^>]+>PrestaShop",
-      "<!-- /Block [a-z ]+ module (?:HEADER|TOP)?\\s?-->",
-      "<!-- /Module Block [a-z ]+ -->"
+      "Powered by <a\\s[^<>]{0,200}>PrestaShop",
+      "<!-- /Block [a-z ]{1,64} module (?:HEADER|TOP)?\\s?-->",
+      "<!-- /Module Block [a-z ]{1,64} -->"
     ],
     "implies": [
       "PHP"
@@ -820,11 +818,11 @@
       ]
     },
     "script_src": [
-      "/([\\d\\.]+)/react(?:\\.min)?\\.js\\;version:\\1",
-      "^react\\b.*\\.js"
+      "/([\\d\\.]{1,32})/react(?:\\.min)?\\.js\\;version:\\1",
+      "^react\\b[^/]{0,64}\\.js"
     ],
     "html": [
-      "<[^>]+data-react"
+      "<[a-z][a-z0-9-]{0,32}[^<>]{0,256}data-react"
     ]
   },
   {
@@ -1035,11 +1033,11 @@
       "JavaScript frameworks"
     ],
     "script_src": [
-      "vue[.-]([\\d.]*\\d)[^/]*\\.js\\;version:\\1",
-      "(?:/([\\d.]+))?/vue(?:\\.min)?\\.js\\;version:\\1"
+      "vue[.-](\\d+(?:\\.\\d+)*)[^/]{0,64}\\.js\\;version:\\1",
+      "(?:/([\\d.]{1,32}))?/vue(?:\\.min)?\\.js\\;version:\\1"
     ],
     "html": [
-      "<(?:[^s<>]|s[^v<>]|sv[^g<>])[^<>]*\\sdata-v(?:ue)?-|<(?:s|sv)\\sdata-v(?:ue)?-"
+      "<(?:[^s<>]|s[^v<>]|sv[^g<>])[^<>]{0,512}\\sdata-v(?:ue)?-|<(?:s|sv)\\sdata-v(?:ue)?-"
     ]
   },
   {
@@ -1057,8 +1055,8 @@
       ]
     },
     "script_src": [
-      "^(?!.*?/wp-content/plugins/[^/]+/js/integrations/woocommerce\\.js(?:\\?ver=[\\d.]+)?$).*woocommerce",
-      "^(?!.*?/wp-content/plugins/[^/]+/js/integrations/woocommerce\\.js(?:\\?ver=[\\d.]+)?$).*/woocommerce(?:\\.min)?\\.js(?:\\?ver=([0-9.]+))?\\;version:\\1"
+      "^(?!.{0,512}/wp-content/plugins/[^/]{1,128}/js/integrations/woocommerce\\.js(?:\\?ver=[\\d.]{1,32})?$)[^?]{0,512}woocommerce",
+      "^(?!.{0,512}/wp-content/plugins/[^/]{1,128}/js/integrations/woocommerce\\.js(?:\\?ver=[\\d.]{1,32})?$)[^?]{0,512}/woocommerce(?:\\.min)?\\.js(?:\\?ver=([0-9.]{1,32}))?\\;version:\\1"
     ]
   },
   {
@@ -1089,8 +1087,8 @@
       "wp-static\\.assets\\.sh/"
     ],
     "html": [
-      "<link rel=[\"']stylesheet[\"'] [^>]+/wp-(?:content|includes)/",
-      "<link[^>]+s\\d+\\.wp\\.com"
+      "<link rel=[\"']stylesheet[\"'] [^<>]{1,512}/wp-(?:content|includes)/",
+      "<link[^<>]{1,256}s\\d+\\.wp\\.com"
     ],
     "implies": [
       "PHP"
@@ -1125,17 +1123,15 @@
     "categories": [
       "Database managers"
     ],
-    "headers": {
-      "set-cookie": [
-        "phpMyAdmin_https"
-      ]
-    },
     "html": [
-      "!\\[CDATA\\[[^<]*PMA_VERSION:\\\"([\\d.]+)\\;version:\\1",
-      "(?: \\| phpMyAdmin ([\\d.]+)<\\/title>|PMA_sendHeaderLocation\\(|<link [^>]*href=\"[^\"]*phpmyadmin\\.css\\.php)\\;version:\\1"
+      "!\\[CDATA\\[[^<]{0,512}PMA_VERSION:\"([\\d.]{1,32})\\;version:\\1",
+      "(?: \\| phpMyAdmin ([\\d.]{1,32})</title>|PMA_sendHeaderLocation\\(|<link [^<>]{0,256}href=\"[^\"<>]{0,256}phpmyadmin\\.css\\.php)\\;version:\\1"
     ],
     "implies": [
       "PHP"
+    ],
+    "cookies": [
+      "^phpMyAdmin_https$"
     ]
   }
 ]
