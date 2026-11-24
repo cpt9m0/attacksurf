@@ -717,6 +717,51 @@ def test_web_headers_flags_malformed_hsts_max_age_values(header_value: str) -> N
     assert out.findings[0].evidence[0].data["max_age"] is None
 
 
+def test_web_headers_rejects_malformed_nonce_and_honors_strict_dynamic() -> None:
+    malformed_ctx, _ = _ctx(
+        web_details={
+            "final_url": "https://acme.com/",
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": {
+                "strict-transport-security": "max-age=31536000",
+                "content-security-policy": (
+                    "default-src 'self'; script-src 'self' 'unsafe-inline' 'nonce-***'; "
+                    "frame-ancestors 'none'"
+                ),
+                "x-content-type-options": "nosniff",
+            },
+            "cookies": [],
+        }
+    )
+    malformed_out = WebHeaders().run(
+        malformed_ctx, AssetRef(type=AssetType.URL, value="https://acme.com/")
+    )
+    assert [f.rule_id for f in malformed_out.findings] == ["web.headers.csp_unsafe"]
+    assert malformed_out.findings[0].evidence[0].data["unsafe_tokens"] == ["'unsafe-inline'"]
+
+    strict_ctx, _ = _ctx(
+        web_details={
+            "final_url": "https://acme.com/",
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": {
+                "strict-transport-security": "max-age=31536000",
+                "content-security-policy": (
+                    "default-src 'self'; script-src 'unsafe-inline' 'strict-dynamic'; "
+                    "frame-ancestors 'none'"
+                ),
+                "x-content-type-options": "nosniff",
+            },
+            "cookies": [],
+        }
+    )
+    strict_out = WebHeaders().run(
+        strict_ctx, AssetRef(type=AssetType.URL, value="https://acme.com/")
+    )
+    assert strict_out.findings == ()
+
+
 def test_web_rules_catalog_includes_all_issue_77_rules_with_expected_severities() -> None:
     catalog = build_catalog(WEB_RULES)
     expected = {

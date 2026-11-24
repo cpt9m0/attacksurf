@@ -45,7 +45,7 @@ _WILDCARD_FRAME_ANCESTORS = frozenset({"*", "http:", "https:"})
 
 _COOKIE_MAX_AGE_RE = re.compile(r"^-?[0-9]+$")
 _NONCE_OR_HASH_RE = re.compile(
-    r"^'(?:nonce-[^']+|sha(?:256|384|512)-[^']+)'$",
+    r"^'(?:nonce|sha(?:256|384|512))-[A-Za-z0-9+/_-]+={0,2}'$",
     re.IGNORECASE,
 )
 _SESSION_COOKIE_NAME_RE = re.compile(
@@ -127,16 +127,19 @@ def _eval_script_tokens(directives: Mapping[str, tuple[str, ...]]) -> tuple[str,
     return None
 
 
+def _source_list_permits_unsafe_inline(vals: tuple[str, ...]) -> bool:
+    lower_vals = {token.lower() for token in vals}
+    if "'unsafe-inline'" not in lower_vals or "'strict-dynamic'" in lower_vals:
+        return False
+    return not any(_NONCE_OR_HASH_RE.match(token) for token in vals)
+
+
 def _permits_unsafe_inline(
     policies: Sequence[Mapping[str, tuple[str, ...]]],
     selector: Callable[[Mapping[str, tuple[str, ...]]], tuple[str, ...] | None],
 ) -> bool:
     selected = [vals for policy in policies if (vals := selector(policy)) is not None]
-    return bool(selected) and all(
-        "'unsafe-inline'" in {token.lower() for token in vals}
-        and not any(_NONCE_OR_HASH_RE.match(token) for token in vals)
-        for vals in selected
-    )
+    return bool(selected) and all(_source_list_permits_unsafe_inline(vals) for vals in selected)
 
 
 def _csp_unsafe_tokens(policies: Sequence[Mapping[str, tuple[str, ...]]]) -> tuple[str, ...]:
