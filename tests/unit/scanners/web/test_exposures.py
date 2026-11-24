@@ -184,7 +184,8 @@ def test_git_svn_and_ds_store_validators_and_credential_redaction() -> None:
             "/.git/config": HttpBody(
                 status_code=200,
                 content=(
-                    b"[core]\n\trepositoryformatversion = 0\n"
+                    b"[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n"
+                    b"[http]\n\textraheader = AUTHORIZATION: basic dXNlcjpzZWNyZXQ=\n"
                     b'[remote "origin"]\n\turl = https://ci:ghp_secret123@git.acme.com/app.git\n'
                 ),
                 headers={"Content-Type": "text/plain"},
@@ -213,9 +214,16 @@ def test_git_svn_and_ds_store_validators_and_credential_redaction() -> None:
     assert set(by_loc) == {"/.git/HEAD", "/.git/config", "/.svn/entries", "/.DS_Store"}
     assert by_loc["/.git/HEAD"].rule_id == "web.exposure.git_repo"
     assert by_loc["/.git/config"].rule_id == "web.exposure.git_repo"
-    cfg_excerpt = str(by_loc["/.git/config"].evidence[0].data["excerpt"])
-    assert "ghp_secret123" not in cfg_excerpt
-    assert "://<redacted>@git.acme.com" in cfg_excerpt
+    cfg_data = by_loc["/.git/config"].evidence[0].data
+    assert cfg_data["sections"] == ["core", "http", "remote"]
+    assert cfg_data["core_keys"] == ["filemode", "repositoryformatversion"]
+    assert cfg_data["remote_count"] == 1
+    assert "excerpt" not in cfg_data
+    serialized = json.dumps(out.model_dump(mode="json"))
+    assert "ghp_secret123" not in serialized
+    assert "dXNlcjpzZWNyZXQ=" not in serialized
+    assert "extraheader" not in serialized
+    assert "git.acme.com" not in serialized
     assert by_loc["/.DS_Store"].rule_id == "web.exposure.backup_archive"
     assert by_loc["/.DS_Store"].severity is Severity.LOW
 

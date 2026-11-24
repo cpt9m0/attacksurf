@@ -67,7 +67,14 @@ _HEAPDUMP_TYPES = frozenset(
 )
 
 _GIT_HEAD_REF_RE = re.compile(r"^(?:ref:\s+refs/\S+|[0-9a-f]{40})\s*$", re.IGNORECASE)
-_GIT_CREDS_RE = re.compile(r"://[^/\s@]+@")
+_GIT_SECTION_RE = re.compile(r'^\s*\[([A-Za-z0-9_.-]+)(?:\s+"[^"]*")?\]\s*(?:[#;].*)?$')
+_GIT_KV_RE = re.compile(r"^\s*([A-Za-z0-9_.-]+)\s*=")
+_SAFE_GIT_SECTIONS = frozenset(
+    {"branch", "core", "credential", "http", "init", "lfs", "remote", "submodule", "user"}
+)
+_SAFE_GIT_CORE_KEYS = frozenset(
+    {"bare", "filemode", "ignorecase", "logallrefupdates", "repositoryformatversion", "symlinks"}
+)
 _SVN_ENTRIES_RE = re.compile(r"^(?:\d+\r?\n\r?\ndir\b|.*<wc-entries\b|SQLite format 3)", re.DOTALL)
 _DS_STORE_MAGIC = b"\x00\x00\x00\x01Bud1"
 _ENV_LINE_RE = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
@@ -224,8 +231,30 @@ def _validate_git_config(body: HttpBody) -> dict[str, JsonValue] | None:
     markers = ("repositoryformatversion", "filemode", "bare", "[remote ")
     if not any(tok in lowered for tok in markers):
         return None
-    sanitized = _GIT_CREDS_RE.sub("://<redacted>@", text)
-    return {"excerpt": sanitized[:MAX_SNIPPET_CHARS]}
+    sections: set[str] = set()
+    core_keys: set[str] = set()
+    remote_count = 0
+    current_section: str | None = None
+    for line in text.splitlines():
+        sec_match = _GIT_SECTION_RE.match(line)
+        if sec_match:
+            current_section = sec_match.group(1).lower()
+            if current_section == "remote":
+                remote_count += 1
+            if current_section in _SAFE_GIT_SECTIONS:
+                sections.add(current_section)
+            continue
+        if current_section == "core":
+            kv_match = _GIT_KV_RE.match(line)
+            if kv_match:
+                key = kv_match.group(1).lower()
+                if key in _SAFE_GIT_CORE_KEYS:
+                    core_keys.add(key)
+    return {
+        "sections": cast(list[JsonValue], sorted(sections)),
+        "core_keys": cast(list[JsonValue], sorted(core_keys)),
+        "remote_count": remote_count,
+    }
 
 
 def _validate_svn_entries(body: HttpBody) -> dict[str, JsonValue] | None:

@@ -137,9 +137,10 @@ redacted `<redacted>` cookie attributes only, while `web.cors` (#77) issues a si
 `http_methods` (`GET`/`HEAD` only, `SafeHttpClient.head` skips bodies while retaining
 `Content-Length`), code-reviewed `http_paths` (≤ 50 normalized paths), `soft_404_probe`
 (one random `/attacksurf-not-found-<hex>` sentinel per host), and `follow_redirects=False`
-through `ScopeGuard`; backups and `/actuator/heapdump` use `HEAD` only, `.git/config`
-URLs are redacted, `/actuator/env` records source/profile names only, and `.env*`
-evidence stores key names only (never values across DB, evidence, or logs). Planned #79
+through `ScopeGuard`; backups and `/actuator/heapdump` use `HEAD` only, `.git/config` records
+allowlisted section/core-key metadata only (no raw values, headers, or URLs),
+`/actuator/env` records source/profile names only, and `.env*` evidence stores key names
+only (never values across DB, evidence, or logs). Planned #79 checks will reuse `http_paths`
 checks will reuse `http_paths` for WordPress exposures. CT discovery's
 random-label wildcard probes use the same guarded DNS adapter and DNS budget; a wildcard marker
 (`Asset.details["wildcard"] = true`) is data for later resolution, never a finding or a claim
