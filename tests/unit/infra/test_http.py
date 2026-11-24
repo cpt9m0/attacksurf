@@ -42,13 +42,21 @@ class StaticResolver:
 class Handler(BaseHTTPRequestHandler):
     hits: ClassVar[list[tuple[str, str | None]]] = []
     user_agents: ClassVar[list[str | None]] = []
+    api_keys: ClassVar[list[str | None]] = []
 
     def do_GET(self) -> None:
         type(self).hits.append((self.path, self.headers.get("Host")))
         type(self).user_agents.append(self.headers.get("User-Agent"))
+        type(self).api_keys.append(self.headers.get("apiKey"))
         if self.path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/landed")
+            self.end_headers()
+        elif self.path == "/cross-redirect":
+            host = self.headers.get("Host", "127.0.0.1")
+            port = host.rsplit(":", 1)[1] if ":" in host else "80"
+            self.send_response(302)
+            self.send_header("Location", f"http://other.example:{port}/landed")
             self.end_headers()
         elif self.path == "/loop":
             self.send_response(301)
@@ -118,6 +126,7 @@ def server_url() -> Iterator[str]:
 def _clear_hits() -> None:
     Handler.hits.clear()
     Handler.user_agents.clear()
+    Handler.api_keys.clear()
 
 
 def client_for(server_url: str, **kwargs: object) -> tuple[SafeHttpClient, StaticResolver]:
@@ -490,3 +499,49 @@ def test_slow_drip_response_hits_total_request_deadline_and_releases_lease(
     body = scoped.get(f"http://public.example:{port}/ok", limit=100)
     scoped.close()
     assert body.content == b"path=/ok"
+
+
+def test_custom_headers_forward_keep_host_pinned_and_strip_secrets_on_cross_origin_redirect(
+    server_url: str,
+) -> None:
+    port = server_url.rsplit(":", 1)[1]
+    base, resolver = client_for(server_url)
+    scoped = base.with_redirect_policy(
+        resolver,
+        redirect_allowed=lambda url: True,
+        max_redirects=2,
+    )
+
+    body = scoped.get(
+        f"http://public.example:{port}/redirect",
+        limit=100,
+        headers={"apiKey": "secret-key", "Host": "evil.example"},
+    )
+    assert body.content == b"path=/landed"
+    assert Handler.hits == [
+        ("/redirect", f"public.example:{port}"),
+        ("/landed", f"public.example:{port}"),
+    ]
+    assert Handler.api_keys == ["secret-key", "secret-key"]
+
+    Handler.hits.clear()
+    Handler.api_keys.clear()
+    body2 = scoped.get(
+        f"http://public.example:{port}/cross-redirect",
+        limit=100,
+        headers={"apiKey": "secret-key"},
+    )
+    scoped.close()
+    assert body2.content == b"path=/landed"
+    assert Handler.api_keys == ["secret-key", None]
+
+
+def test_client_honors_custom_max_body_bytes(server_url: str) -> None:
+    port = server_url.rsplit(":", 1)[1]
+    client, _ = client_for(server_url, max_body_bytes=50000)
+
+    body = client.get(f"http://public.example:{port}/big", limit=200000)
+    client.close()
+
+    assert len(body.content) == 50000
+    assert body.truncated is True

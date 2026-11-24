@@ -187,6 +187,9 @@ class Settings(BaseSettings):
     sentry_release: str | None = None
     sentry_traces_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
 
+    # Vulnerability intelligence sync (#74): optional NVD API key for higher request quotas.
+    nvd_api_key: SecretStr | None = None
+
     _secret_key_generated: bool = PrivateAttr(default=False)
 
     @model_validator(mode="after")
@@ -209,6 +212,16 @@ class Settings(BaseSettings):
     @classmethod
     def _empty_optional_str(cls, value: str | None) -> str | None:
         return value.strip() or None if isinstance(value, str) else value
+
+    @field_validator("nvd_api_key")
+    @classmethod
+    def _empty_nvd_api_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
+        cleaned = value.get_secret_value().strip()
+        if not cleaned:
+            return None
+        return value if cleaned == value.get_secret_value() else SecretStr(cleaned)
 
     @field_validator("sentry_dsn")
     @classmethod
