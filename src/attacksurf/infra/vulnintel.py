@@ -1,12 +1,14 @@
 """External vulnerability intelligence feed clients and parsers (NVD, CISA KEV, FIRST EPSS)."""
 
 import json
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 from urllib.parse import urlencode, urlsplit
 
 from attacksurf.domain.net import HttpBody
+from attacksurf.domain.scope import check_addresses, check_public_hostname
 from attacksurf.domain.vulnintel import (
     MAX_CPE_PART_CHARS,
     MAX_CVE_DESCRIPTION_CHARS,
@@ -19,6 +21,7 @@ from attacksurf.domain.vulnintel import (
     normalize_cve_id,
     parse_cpe23_uri,
 )
+from attacksurf.infra import public_suffix
 from attacksurf.infra.http import AddressResolver, SafeHttpClient
 
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
@@ -29,9 +32,23 @@ MAX_VULNINTEL_FEED_BYTES = 16 * 1024 * 1024
 NVD_MAX_WINDOW_DAYS = 120
 NVD_RESULTS_PER_PAGE = 2000
 MAX_NVD_PAGES = 500
+NVD_PUBLIC_REQUEST_INTERVAL_SECONDS = 6.0
+NVD_API_KEY_REQUEST_INTERVAL_SECONDS = 0.6
+NVD_MAX_RETRIES = 3
+NVD_RETRY_BASE_SECONDS = 6.0
 _MAX_VERSION_BOUND_CHARS = 128
 _HTTP_OK = 200
 _MAX_CVSS_SCORE = 10.0
+_RETRYABLE_NVD_STATUSES = frozenset({403, 429, 503})
+_RETRYABLE_HTTP_STATUSES = frozenset({429, 503})
+
+
+class UpstreamHttpError(ValueError):
+    """Non-200 HTTP status returned by an upstream vulnerability feed."""
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(f"Upstream feed returned HTTP {status_code}.")
 
 
 class VulnIntelHttpClient(Protocol):
@@ -42,6 +59,19 @@ class VulnIntelHttpClient(Protocol):
     ) -> HttpBody: ...
 
     def close(self) -> None: ...
+
+
+class _PublicAddressResolver:
+    """Validate public hostname and resolved IP ranges on every feed lookup (SSRF guard)."""
+
+    def __init__(self, resolver: AddressResolver) -> None:
+        self._resolver = resolver
+
+    def resolve_name(self, host: str) -> tuple[str, ...]:
+        cleaned = check_public_hostname(host, public_suffix.classify(host))
+        return tuple(
+            str(address) for address in check_addresses(self._resolver.resolve_name(cleaned))
+        )
 
 
 def _vulnintel_url_allowed(url: str) -> bool:
@@ -65,7 +95,7 @@ def build_vulnintel_http_client(
 ) -> SafeHttpClient:
     """Return a SafeHttpClient locked down to the approved NVD/CISA/FIRST HTTPS hosts."""
     return SafeHttpClient(
-        resolver,
+        _PublicAddressResolver(resolver),
         redirect_allowed=_vulnintel_url_allowed,
         max_redirects=2,
         timeout_seconds=30.0,
@@ -86,7 +116,7 @@ def _get_json(
     if body.truncated:
         raise ValueError("Upstream response exceeded size cap.")
     if body.status_code != _HTTP_OK:
-        raise ValueError(f"Upstream feed returned HTTP {body.status_code}.")
+        raise UpstreamHttpError(body.status_code)
     try:
         parsed = json.loads(body.content)
     except ValueError:
@@ -94,6 +124,27 @@ def _get_json(
     if not isinstance(parsed, dict):
         raise ValueError("Upstream feed returned a non-object JSON payload.")
     return parsed
+
+
+def _get_json_with_retry(
+    client: VulnIntelHttpClient,
+    url: str,
+    *,
+    limit: int = MAX_VULNINTEL_FEED_BYTES,
+    headers: Mapping[str, str] | None = None,
+    retry_statuses: frozenset[int] = _RETRYABLE_HTTP_STATUSES,
+    max_retries: int = NVD_MAX_RETRIES,
+    retry_base_seconds: float = NVD_RETRY_BASE_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    for attempt in range(max_retries + 1):
+        try:
+            return _get_json(client, url, limit=limit, headers=headers)
+        except UpstreamHttpError as exc:
+            if exc.status_code not in retry_statuses or attempt >= max_retries:
+                raise
+            sleep(retry_base_seconds * (2**attempt))
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _parse_utc_dt(raw: object) -> datetime | None:
@@ -331,11 +382,22 @@ def fetch_nvd_modified(
     end: datetime,
     api_key: str | None = None,
     max_pages: int = MAX_NVD_PAGES,
+    request_interval: float | None = None,
+    retry_base_seconds: float = NVD_RETRY_BASE_SECONDS,
+    max_retries: int = NVD_MAX_RETRIES,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> tuple[list[CveRecord], dict[str, list[CpeRange]]]:
-    """Fetch NVD CVEs modified within `[start, end]`, splitting into <=120-day windows."""
+    """Fetch NVD CVEs modified within `[start, end]`, pacing requests for NVD rate limits."""
     if start >= end:
         return [], {}
     headers = {"apiKey": api_key} if api_key else None
+    interval = (
+        request_interval
+        if request_interval is not None
+        else (
+            NVD_API_KEY_REQUEST_INTERVAL_SECONDS if api_key else NVD_PUBLIC_REQUEST_INTERVAL_SECONDS
+        )
+    )
     records_by_cve: dict[str, CveRecord] = {}
     ranges_by_cve: dict[str, list[CpeRange]] = {}
 
@@ -345,6 +407,8 @@ def fetch_nvd_modified(
         window_end = min(end, window_start + timedelta(days=NVD_MAX_WINDOW_DAYS))
         start_index = 0
         while pages_used < max_pages:
+            if pages_used > 0 and interval > 0:
+                sleep(interval)
             query = urlencode(
                 {
                     "lastModStartDate": _format_nvd_ts(window_start),
@@ -353,7 +417,15 @@ def fetch_nvd_modified(
                     "startIndex": str(start_index),
                 }
             )
-            payload = _get_json(client, f"{NVD_API_URL}?{query}", headers=headers)
+            payload = _get_json_with_retry(
+                client,
+                f"{NVD_API_URL}?{query}",
+                headers=headers,
+                retry_statuses=_RETRYABLE_NVD_STATUSES,
+                max_retries=max_retries,
+                retry_base_seconds=retry_base_seconds,
+                sleep=sleep,
+            )
             pages_used += 1
             page_records, page_ranges, total_results, per_page = parse_nvd_page(payload)
             for rec in page_records:
@@ -371,7 +443,7 @@ def fetch_nvd_modified(
 
 def fetch_kev_catalog(client: VulnIntelHttpClient) -> tuple[str | None, list[KevEntry]]:
     """Download and parse CISA's KEV catalog."""
-    payload = _get_json(client, CISA_KEV_URL)
+    payload = _get_json_with_retry(client, CISA_KEV_URL)
     return parse_kev_catalog(payload)
 
 
@@ -383,5 +455,5 @@ def fetch_epss_scores(
     if not normalized:
         return None, []
     query = urlencode({"cve": ",".join(normalized)})
-    payload = _get_json(client, f"{FIRST_EPSS_URL}?{query}")
+    payload = _get_json_with_retry(client, f"{FIRST_EPSS_URL}?{query}")
     return parse_epss_response(payload)

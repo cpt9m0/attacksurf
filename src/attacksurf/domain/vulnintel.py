@@ -19,6 +19,7 @@ VULNINTEL_GRANT = ScannerGrant(
 )
 
 _CVE_ID_RE = re.compile(r"CVE-\d{4}-\d{4,}")
+_PRERELEASE_SEP_RE = re.compile(r"[-~]")
 _VER_SPLIT_RE = re.compile(r"[._~\-]+")
 _VER_CHUNK_RE = re.compile(r"\d+|[a-z]+")
 _CPE_PARTS = frozenset({"a", "o", "h"})
@@ -184,23 +185,31 @@ def _clean_bound(value: str | None) -> str | None:
     return None if cleaned in {"", "*", "-"} else cleaned
 
 
-def _tokenize_version(raw: str) -> tuple[list[int], list[str]]:
+def _tokenize_version(raw: str) -> tuple[list[int], list[str], bool]:
     cleaned = raw.strip()
     if len(cleaned) > 1 and cleaned[0] in {"v", "V"} and cleaned[1].isdigit():
         cleaned = cleaned[1:]
     cleaned = cleaned.split("+", 1)[0]
-    tokens: list[str] = []
-    for segment in _VER_SPLIT_RE.split(cleaned):
+    release_part, *rest_parts = _PRERELEASE_SEP_RE.split(cleaned, maxsplit=1)
+    release_tokens: list[str] = []
+    for segment in _VER_SPLIT_RE.split(release_part):
         if segment:
-            tokens.extend(_VER_CHUNK_RE.findall(segment.lower()))
+            release_tokens.extend(_VER_CHUNK_RE.findall(segment.lower()))
+    suffix_tokens: list[str] = []
+    if rest_parts:
+        for segment in _VER_SPLIT_RE.split(rest_parts[0]):
+            if segment:
+                suffix_tokens.extend(_VER_CHUNK_RE.findall(segment.lower()))
     core: list[int] = []
     idx = 0
-    while idx < len(tokens) and tokens[idx].isdigit():
-        core.append(int(tokens[idx]))
+    while idx < len(release_tokens) and release_tokens[idx].isdigit():
+        core.append(int(release_tokens[idx]))
         idx += 1
     while core and core[-1] == 0:
         core.pop()
-    return core, tokens[idx:]
+    inline_tail = release_tokens[idx:]
+    from_separator = not inline_tail and bool(suffix_tokens)
+    return core, inline_tail + suffix_tokens, from_separator
 
 
 def _encode_tokens(tokens: list[str]) -> tuple[tuple[int, int | str], ...]:
@@ -213,7 +222,9 @@ def _encode_tokens(tokens: list[str]) -> tuple[tuple[int, int | str], ...]:
     return tuple(encoded)
 
 
-def _qualifier_key(tail: list[str]) -> tuple[int, tuple[tuple[int, int | str], ...]]:
+def _qualifier_key(
+    tail: list[str], *, from_separator: bool = False
+) -> tuple[int, tuple[tuple[int, int | str], ...]]:
     if not tail:
         return (0, ())
     head, rest = tail[0], tail[1:]
@@ -228,17 +239,20 @@ def _qualifier_key(tail: list[str]) -> tuple[int, tuple[tuple[int, int | str], .
         result = (2, ((1, head), *_encode_tokens(rest)))
     elif len(head) == 1 and head.isalpha():
         result = (1, ((0, ord(head)), *_encode_tokens(rest)))
+    elif from_separator:
+        rank = -6 if head.isdigit() else -4
+        result = (rank, _encode_tokens(tail))
     return result
 
 
 def compare_versions(left: str, right: str) -> int:
     """Compare two software version strings; returns `-1`, `0`, or `1`."""
-    left_core, left_tail = _tokenize_version(left)
-    right_core, right_tail = _tokenize_version(right)
+    left_core, left_tail, left_sep = _tokenize_version(left)
+    right_core, right_tail, right_sep = _tokenize_version(right)
     if left_core != right_core:
         return -1 if left_core < right_core else 1
-    left_q = _qualifier_key(left_tail)
-    right_q = _qualifier_key(right_tail)
+    left_q = _qualifier_key(left_tail, from_separator=left_sep)
+    right_q = _qualifier_key(right_tail, from_separator=right_sep)
     if left_q == right_q:
         return 0
     return -1 if left_q < right_q else 1

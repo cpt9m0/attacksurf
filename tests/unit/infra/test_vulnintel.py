@@ -5,12 +5,15 @@ from datetime import UTC, date, datetime
 import pytest
 
 from attacksurf.domain.net import HttpBody
-from attacksurf.domain.scope import ScopeError
+from attacksurf.domain.scope import AddressError, ScopeError
 from attacksurf.domain.vulnintel import MAX_CVE_DESCRIPTION_CHARS
 from attacksurf.infra.vulnintel import (
     CISA_KEV_URL,
     FIRST_EPSS_URL,
+    NVD_API_KEY_REQUEST_INTERVAL_SECONDS,
     NVD_API_URL,
+    NVD_PUBLIC_REQUEST_INTERVAL_SECONDS,
+    UpstreamHttpError,
     build_vulnintel_http_client,
     fetch_nvd_modified,
     parse_epss_response,
@@ -224,14 +227,17 @@ def test_fetch_nvd_modified_chunks_windows_paginates_and_rejects_truncated_body(
         b'"vulnerabilities": [{"cve": {"id": "CVE-2024-0003"}}]}'
     )
     client = _StubVulnClient([HttpBody(200, page1), HttpBody(200, page2), HttpBody(200, page3)])
+    sleeps: list[float] = []
     records, _ = fetch_nvd_modified(
         client,
         start=datetime(2026, 1, 1, tzinfo=UTC),
         end=datetime(2026, 5, 10, tzinfo=UTC),
         api_key="test-nvd-key",
+        sleep=sleeps.append,
     )
 
     assert [r.cve_id for r in records] == ["CVE-2024-0001", "CVE-2024-0002", "CVE-2024-0003"]
+    assert sleeps == [NVD_API_KEY_REQUEST_INTERVAL_SECONDS, NVD_API_KEY_REQUEST_INTERVAL_SECONDS]
     assert all(hdrs == {"apiKey": "test-nvd-key"} for _url, hdrs in client.requests)
     assert "startIndex=1" in client.requests[1][0]
 
@@ -242,3 +248,60 @@ def test_fetch_nvd_modified_chunks_windows_paginates_and_rejects_truncated_body(
             start=datetime(2026, 11, 1, tzinfo=UTC),
             end=datetime(2026, 11, 2, tzinfo=UTC),
         )
+
+
+@pytest.mark.parametrize("private_ip", ["127.0.0.1", "169.254.169.254", "10.0.0.1"])
+def test_build_vulnintel_http_client_blocks_private_dns_answers(private_ip: str) -> None:
+    class _PrivateResolver:
+        def resolve_name(self, host: str) -> tuple[str, ...]:
+            return (private_ip,)
+
+    client = build_vulnintel_http_client(_PrivateResolver())
+    try:
+        with pytest.raises(AddressError):
+            client.get(f"{NVD_API_URL}?startIndex=0", limit=1024)
+    finally:
+        client.close()
+
+
+def test_fetch_nvd_modified_paces_public_requests_and_retries_throttling() -> None:
+    page1 = (
+        b'{"totalResults": 2, "resultsPerPage": 1, '
+        b'"vulnerabilities": [{"cve": {"id": "CVE-2024-0001"}}]}'
+    )
+    page2 = (
+        b'{"totalResults": 2, "resultsPerPage": 1, '
+        b'"vulnerabilities": [{"cve": {"id": "CVE-2024-0002"}}]}'
+    )
+    client = _StubVulnClient(
+        [
+            HttpBody(200, page1),
+            HttpBody(403, b"rate limited"),
+            HttpBody(429, b"slow down"),
+            HttpBody(200, page2),
+        ]
+    )
+    sleeps: list[float] = []
+
+    records, _ = fetch_nvd_modified(
+        client,
+        start=datetime(2026, 11, 1, tzinfo=UTC),
+        end=datetime(2026, 11, 2, tzinfo=UTC),
+        sleep=sleeps.append,
+    )
+
+    assert [r.cve_id for r in records] == ["CVE-2024-0001", "CVE-2024-0002"]
+    assert sleeps == [NVD_PUBLIC_REQUEST_INTERVAL_SECONDS, 6.0, 12.0]
+
+    exhausted_client = _StubVulnClient([HttpBody(429, b""), HttpBody(429, b"")])
+    exhausted_sleeps: list[float] = []
+    with pytest.raises(UpstreamHttpError, match="HTTP 429"):
+        fetch_nvd_modified(
+            exhausted_client,
+            start=datetime(2026, 11, 1, tzinfo=UTC),
+            end=datetime(2026, 11, 2, tzinfo=UTC),
+            max_retries=1,
+            retry_base_seconds=1.5,
+            sleep=exhausted_sleeps.append,
+        )
+    assert exhausted_sleeps == [1.5]

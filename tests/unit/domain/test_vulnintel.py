@@ -78,6 +78,12 @@ def test_parse_cpe23_uri(criteria: str, expected: tuple[str, str, str | None] | 
         ("1.0.0-alpha.1", "1.0.0-beta.1", -1),
         ("1.0.0-beta.1", "1.0.0-rc.1", -1),
         ("1.0.0-rc.1", "1.0.0", -1),
+        ("1.0.0-0", "1.0.0", -1),
+        ("1.0.0-1", "1.0.0", -1),
+        ("1.0.0-0", "1.0.0-1", -1),
+        ("1.0.0-1", "1.0.0-alpha", -1),
+        ("1.0.0~1", "1.0.0", -1),
+        ("1.0.0-p1", "1.0.0", 1),
         ("1.0.0a1", "1.0.0b1", -1),
         ("1.1.1", "1.1.1a", -1),
         ("1.1.1a", "1.1.1w", -1),
@@ -115,6 +121,8 @@ def test_compare_versions_handles_semver_prerelease_and_vendor_suffixes(
         # Upper exclusive bound only
         ("1.25.2", {"version_end_excluding": "1.25.3"}, True),
         ("1.25.3", {"version_end_excluding": "1.25.3"}, False),
+        ("1.0.0-1", {"version_end_excluding": "1.0.0"}, True),
+        ("1.0.0-0", {"version_end_excluding": "1.0.0"}, True),
         # Combined start + end boundaries
         (
             "1.25.0",
