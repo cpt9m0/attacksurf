@@ -17,7 +17,7 @@ import pytest
 
 from attacksurf.domain.jobs import TransientJobError
 from attacksurf.domain.net import DnsError
-from attacksurf.domain.scope import AddressError, ScopeError
+from attacksurf.domain.scope import AddressError, ScopeError, ScopePolicyError
 from attacksurf.infra.http import (
     MAX_REDIRECTS,
     SafeHttpClient,
@@ -93,6 +93,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Encoding", "identity")
             self.end_headers()
             self.wfile.write(body)
+
+    def do_HEAD(self) -> None:
+        type(self).hits.append((f"HEAD:{self.path}", self.headers.get("Host")))
+        if self.path == "/big-archive.zip":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", "52428800")
+            self.end_headers()
+            return
+        self.send_response(404)
+        self.end_headers()
 
     def _serve_drip(self) -> None:
         self.send_response(200)
@@ -597,3 +608,59 @@ def test_redirects_record_final_url_chain_and_can_stop_at_out_of_scope_hop(
     assert stopped.status_code == 302
     assert stopped.final_url == f"http://public.example:{port}/cross-redirect"
     raising_stop.close()
+
+
+def test_head_requests_skip_body_and_preserve_content_length(server_url: str) -> None:
+    port = server_url.rsplit(":", 1)[1]
+    client, _ = client_for(server_url)
+    body = client.head(f"http://public.example:{port}/big-archive.zip")
+    client.close()
+
+    assert body.status_code == 200
+    assert body.content == b""
+    assert body.truncated is False
+    assert body.headers.get("content-type") == "application/zip"
+    assert body.headers.get("content-length") == "52428800"
+    assert Handler.hits[-1] == ("HEAD:/big-archive.zip", f"public.example:{port}")
+
+
+def test_request_allowed_blocks_initial_request_before_wire_and_allows_redirect_hops(
+    server_url: str,
+) -> None:
+    port = server_url.rsplit(":", 1)[1]
+    seen_policies: list[tuple[str, str]] = []
+    hits_before = len(Handler.hits)
+
+    def allow_request(method: str, url: str) -> bool:
+        seen_policies.append((method, url))
+        path = urlsplit(url).path
+        return method == "GET" and path == "/redirect"
+
+    base, _ = client_for(server_url)
+    client = base.with_redirect_policy(
+        base._resolver,
+        redirect_allowed=lambda url: "public.example" in url,
+        request_allowed=allow_request,
+        max_redirects=2,
+    )
+
+    with pytest.raises(ScopePolicyError, match="method or path"):
+        client.head(f"http://public.example:{port}/redirect")
+    with pytest.raises(ScopePolicyError, match="method or path"):
+        client.get(f"http://public.example:{port}/landed", limit=100)
+
+    # Initial /redirect passes request_allowed; redirect hops only check redirect_allowed.
+    landed = client.get(f"http://public.example:{port}/redirect", limit=100)
+    client.close()
+
+    assert landed.status_code == 200
+    assert landed.final_url == f"http://public.example:{port}/landed"
+    assert seen_policies == [
+        ("HEAD", f"http://public.example:{port}/redirect"),
+        ("GET", f"http://public.example:{port}/landed"),
+        ("GET", f"http://public.example:{port}/redirect"),
+    ]
+    assert Handler.hits[hits_before:] == [
+        ("/redirect", f"public.example:{port}"),
+        ("/landed", f"public.example:{port}"),
+    ]

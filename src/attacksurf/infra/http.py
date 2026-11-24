@@ -20,9 +20,10 @@ import httpcore
 import httpx
 
 from attacksurf.domain.net import DnsError, HttpBody, TargetRateLimiter
-from attacksurf.domain.scope import AddressError, ScopeError
+from attacksurf.domain.scope import AddressError, ScopeError, ScopePolicyError
 
 REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
+_ALLOWED_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 MAX_REDIRECTS = 4
 # Hard ceiling on a response body, independent of what a scanner asks for: plugins must not be
 # able to make a worker buffer an unbounded body by passing a huge `limit`.
@@ -95,6 +96,7 @@ class SafeHttpClient:
         resolver: AddressResolver,
         *,
         redirect_allowed: Callable[[str], bool] | None = None,
+        request_allowed: Callable[[str, str], bool] | None = None,
         max_redirects: int = MAX_REDIRECTS,
         stop_on_out_of_scope_redirect: bool = False,
         timeout_seconds: float = 5.0,
@@ -109,6 +111,7 @@ class SafeHttpClient:
         # `None` means no allowlist was installed (a bare transport client); an installed hook
         # is consulted before the first request as well as at every redirect.
         self._redirect_allowed = redirect_allowed
+        self._request_allowed = request_allowed
         self._max_redirects = min(max_redirects, MAX_REDIRECTS)
         self._stop_on_out_of_scope_redirect = stop_on_out_of_scope_redirect
         self._timeout = timeout_seconds
@@ -127,6 +130,7 @@ class SafeHttpClient:
         resolver: AddressResolver,
         *,
         redirect_allowed: Callable[[str], bool],
+        request_allowed: Callable[[str, str], bool] | None = None,
         max_redirects: int,
         stop_on_out_of_scope_redirect: bool = False,
         rate_limiter: TargetRateLimiter | None = None,
@@ -137,6 +141,7 @@ class SafeHttpClient:
         return SafeHttpClient(
             resolver,
             redirect_allowed=redirect_allowed,
+            request_allowed=request_allowed,
             max_redirects=max_redirects,
             stop_on_out_of_scope_redirect=stop_on_out_of_scope_redirect,
             timeout_seconds=self._timeout,
@@ -152,13 +157,29 @@ class SafeHttpClient:
 
     def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
         """GET `url`; an installed policy hook is consulted before this request, not just hops."""
+        return self._send("GET", url, limit=limit, headers=headers)
+
+    def head(self, url: str, *, headers: Mapping[str, str] | None = None) -> HttpBody:
+        """HEAD `url` without reading a body; preserves headers including Content-Length."""
+        return self._send("HEAD", url, limit=0, headers=headers)
+
+    def _send(
+        self,
+        method: str,
+        url: str,
+        *,
+        limit: int,
+        headers: Mapping[str, str] | None = None,
+    ) -> HttpBody:
         cap = max(1, min(limit, self._max_body_bytes))
         hop_headers = _merge_request_headers(headers, user_agent=None)
         chain: list[tuple[str, int]] = []
         if self._redirect_allowed is not None and not self._redirect_allowed(url):
             raise ScopeError("The target is out of scope.")
+        if self._request_allowed is not None and not self._request_allowed(method, url):
+            raise ScopePolicyError("The request method or path is outside the scanner grant.")
         for _hop in range(self._max_redirects + 1):
-            body = self._request(url, limit=cap, headers=hop_headers)
+            body = self._request(url, limit=cap, headers=hop_headers, method=method)
             if body.status_code not in REDIRECT_CODES or self._max_redirects == 0:
                 return HttpBody(
                     body.status_code,
@@ -220,8 +241,15 @@ class SafeHttpClient:
             pool.close()
 
     def _request(
-        self, url: str, *, limit: int, headers: Mapping[str, str] | None = None
+        self,
+        url: str,
+        *,
+        limit: int,
+        headers: Mapping[str, str] | None = None,
+        method: str = "GET",
     ) -> HttpBody:
+        if method not in _ALLOWED_METHODS:
+            raise ScopePolicyError("Unsupported HTTP method.")
         if self._closed:
             raise ScopeError("The client was closed.")
         try:
@@ -239,10 +267,10 @@ class SafeHttpClient:
         address = connection_address(self._resolver.resolve_name(host))
         pool = self._pool_for(host, address)
         req_headers = _merge_request_headers(headers, user_agent=self._user_agent)
-        request = httpx.Request("GET", url, headers=req_headers or None)
+        request = httpx.Request(method, url, headers=req_headers or None)
         per_io_timeout = min(self._timeout, self._max_request_seconds)
         core_request = httpcore.Request(
-            method="GET",
+            method=method.encode("ascii"),
             url=httpcore.URL(
                 scheme=b"https" if parts.scheme == "https" else b"http",
                 host=_encoded_host(host),
@@ -262,27 +290,8 @@ class SafeHttpClient:
             deadline = time.monotonic() + self._max_request_seconds
             try:
                 core_response = pool.handle_request(core_request)
-                try:
-                    if time.monotonic() > deadline:
-                        raise httpcore.ReadTimeout("Request deadline exceeded.")
-                    encoding = _header(core_response.headers, b"content-encoding")
-                    # A plain body is read up to `limit`; an encoded one may need more wire bytes
-                    # than its decoded size, but never unlimited (decompression expands).
-                    wire_cap = (
-                        min(limit * MAX_EXPANSION, self._max_body_bytes * 2)
-                        if _is_encoded(encoding)
-                        else limit
-                    )
-                    raw, truncated = _read_capped(core_response, wire_cap, deadline=deadline)
-                    content, decoded_truncated = _decoded(raw, encoding, limit)
-                finally:
-                    core_response.close()
-                response_headers = _headers_without_encoding(core_response.headers)
-                response = httpx.Response(
-                    core_response.status,
-                    headers=response_headers,
-                    content=content,
-                    request=request,
+                response, truncated, decoded_truncated = self._read_core_response(
+                    core_response, request, limit=limit, deadline=deadline, method=method
                 )
             except httpcore.ConnectError:
                 self._drop_pool()
@@ -299,6 +308,43 @@ class SafeHttpClient:
             truncated or decoded_truncated,
             response.headers,
         )
+
+    def _read_core_response(
+        self,
+        core_response: httpcore.Response,
+        request: httpx.Request,
+        *,
+        limit: int,
+        deadline: float,
+        method: str,
+    ) -> tuple[httpx.Response, bool, bool]:
+        try:
+            if time.monotonic() > deadline:
+                raise httpcore.ReadTimeout("Request deadline exceeded.")
+            if method == "HEAD":
+                raw, truncated, decoded_truncated = b"", False, False
+                response_headers = list(core_response.headers)
+            else:
+                encoding = _header(core_response.headers, b"content-encoding")
+                # A plain body is read up to `limit`; an encoded one may need more wire
+                # bytes than its decoded size, but never unlimited (decompression expands).
+                wire_cap = (
+                    min(limit * MAX_EXPANSION, self._max_body_bytes * 2)
+                    if _is_encoded(encoding)
+                    else limit
+                )
+                raw, truncated = _read_capped(core_response, wire_cap, deadline=deadline)
+                raw, decoded_truncated = _decoded(raw, encoding, limit)
+                response_headers = _headers_without_encoding(core_response.headers)
+        finally:
+            core_response.close()
+        response = httpx.Response(
+            core_response.status,
+            headers=response_headers,
+            content=raw,
+            request=request,
+        )
+        return response, truncated, decoded_truncated
 
     def _pool_for(self, host: str, address: str) -> httpcore.ConnectionPool:
         if self._pool is not None and self._pinned_to == (host, address):

@@ -30,6 +30,9 @@ class FakeHttp:
         self.responses = list(responses)
         self.calls: list[str] = []
 
+    def head(self, url: str, *, headers: object | None = None) -> HttpBody:
+        raise AssertionError("ct client uses GET only")
+
     def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         self.calls.append(url)
         response = self.responses.pop(0)

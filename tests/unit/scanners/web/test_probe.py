@@ -40,6 +40,9 @@ class _StubHttp:
         self._responses = responses
         self.calls: list[tuple[str, int]] = []
 
+    def head(self, url: str, *, headers: object | None = None) -> HttpBody:
+        raise AssertionError("web.probe must not call HEAD")
+
     def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         self.calls.append((url, limit))
         outcome = self._responses.get(url)

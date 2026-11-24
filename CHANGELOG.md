@@ -6,6 +6,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Fixed-path exposed sensitive file, debug endpoint, API docs, admin panel, and `security.txt`
+  scanner (`web.exposures`, `scanners/web/exposures.py`) wired into `web_active.checks`, `app.py`,
+  and `workers/app.py`, alongside ADR 0033 `ScopeGuard` enforcement (`http_methods`, `http_paths`,
+  single-shot `soft_404_probe`) and `SafeHttpClient.head`: detects `web.exposure.git_repo`,
+  `env_file`, `backup_archive`, `debug_endpoint`, `api_docs`, `admin_panel`, and
+  `web.security.security_txt_missing` using soft-404 calibration, per-path content validators,
+  `HEAD`-only probes for archives and `/actuator/heapdump`, and key-name-only `.env` evidence
+  (#78).
 - HTTP security headers, cookie flags, HTTPS redirect, and CORS credential reflection checks
   (`web.headers`, `web.cors`, `scanners/web/headers.py`) wired into `web_active.checks`, `app.py`,
   and `workers/app.py`, plus `SafeHttpClient.get(..., headers=...)` forwarding through
