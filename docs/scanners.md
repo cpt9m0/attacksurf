@@ -11,7 +11,7 @@ in this catalog (`src/attacksurf/domain/rules/`).
 | Profile | Availability | Discovery plugins | Check plugins | Discovery cap |
 |---|---|---|---|---|
 | `dns_passive` | UI, API, CLI | `dns.discovery.ct` | `dns.resolve`, `dns.email`, `dns.takeover`, `dns.takeover.http`, `dns.dnssec`, `dns.ns`, `dns.mx`, `dns.caa`, `dns.whois`, `dns.axfr` | `1000` assets / root |
-| `web_active` | UI, API, CLI | `web.probe` | `web.components`, `web.tls`, `web.headers`, `web.cors` | `1000` assets / root |
+| `web_active` | UI, API, CLI | `web.probe` | `web.components`, `web.tls`, `web.headers`, `web.cors`, `web.exposures` | `1000` assets / root |
 | `dns_scheduled` | Scheduled rescans only (internal) | — | `dns.resolve`, `dns.email`, `dns.dnssec` | `1000` assets / root |
 
 > [!NOTE]
@@ -46,10 +46,11 @@ job status when active scans are disabled or the target is unverified.
 | `web.tls` | `domain`, `subdomain`, `url` (`https://`) | **Yes** (`tls`) | 30 s | Guarded TLS on ports `443`, `8000`, `8080`, `8443`, `8888`, 4 DNS lookups | Inspects TLS certificate chains, hostname match, expiry, key strength, signature algorithms, and legacy TLS 1.0/1.1 acceptance via `ctx.runtime.tls`, storing `Asset.details["tls"]` and chain-summary evidence. |
 | `web.headers` | `url` | No | 10 s | None (`Asset.details["web"]` captured by `web.probe`) | Checks HSTS presence/max-age (`≥ 180` days), HTML CSP presence & unsafe script directives without nonces/hashes, clickjacking (`X-Frame-Options` / `frame-ancestors`), `X-Content-Type-Options: nosniff`, redacted session cookie hardening flags, and unredirected HTTP port 80 responses. |
 | `web.cors` | `url` | **Yes** (`TARGET`) | 15 s | `TARGET` HTTP (16 KiB GET, `follow_redirects=False`, allowed web ports), 4 DNS lookups | Issues one `GET` with `Origin: https://cors-probe.invalid` and flags reflected foreign `Access-Control-Allow-Origin` paired with `Access-Control-Allow-Credentials: true`. |
+| `web.exposures` | `url` | **Yes** (`TARGET`) | 120 s | `TARGET` HTTP (`GET`/`HEAD` on fixed `http_paths` allowlist + 1 soft-404 baseline, `follow_redirects=False`, allowed web ports), 40 DNS lookups | Calibrates a random soft-404 baseline and probes a fixed set of 33 sensitive/admin/API/security.txt paths with strict content validators (`HEAD`-only on backups & `/actuator/heapdump`, key names only on `.env*`, credential redaction on `.git/config`). |
 
 ---
 
-## Detection Rules (43)
+## Detection Rules (50)
 
 ### DNS Records (`dns.resolve`)
 
@@ -138,6 +139,18 @@ job status when active scans are disabled or the target is unverified.
 | `web.cookies.insecure_flags` | `low` | Session-like cookie missing Secure, HttpOnly, or SameSite attribute | [RFC 6265](https://www.rfc-editor.org/rfc/rfc6265), [OWASP SecureCookieAttribute](https://owasp.org/www-community/controls/SecureCookieAttribute) |
 | `web.https.no_redirect` | `low` | Plain HTTP endpoint serves content without redirecting to HTTPS | [OWASP WSTG-CRYP-03](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/09-Testing_for_Weak_Cryptography/03-Testing_for_Sensitive_Information_Sent_via_Unencrypted_Channels) |
 | `web.cors.wildcard_credentials` | `medium` | CORS reflects arbitrary origin with credentials allowed | [Fetch CORS](https://fetch.spec.whatwg.org/#http-cors-protocol), [OWASP WSTG-CLNT-07](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/07-Testing_Cross_Origin_Resource_Sharing) |
+
+### Web Exposures (`web.exposures`)
+
+| Rule ID | Default severity | Title | References |
+|---|---|---|---|
+| `web.exposure.git_repo` | `high` | Exposed version control metadata on web host | [OWASP WSTG-CONF-05](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/05-Enumerate_Infrastructure_and_Application_Admin_Interfaces), [CWE-538](https://cwe.mitre.org/data/definitions/538.html) |
+| `web.exposure.env_file` | `critical` | Exposed environment configuration file on web host | [CWE-538](https://cwe.mitre.org/data/definitions/538.html), [OWASP WSTG-CONF-04](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information) |
+| `web.exposure.backup_archive` | `high` *(`low` `.DS_Store`)* | Exposed backup archive or metadata file on web host | [OWASP WSTG-CONF-04](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information), [CWE-530](https://cwe.mitre.org/data/definitions/530.html) |
+| `web.exposure.debug_endpoint` | `high` *(`medium` Apache/PHP info)* | Exposed diagnostic or debug endpoint on web host | [CWE-215](https://cwe.mitre.org/data/definitions/215.html), [OWASP WSTG-CONF-05](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/05-Enumerate_Infrastructure_and_Application_Admin_Interfaces) |
+| `web.exposure.api_docs` | `info` | Public API documentation endpoint exposed | [OWASP API9:2023](https://owasp.org/API-Security/editions/2023/en/0xa9-improper-inventory-management/) |
+| `web.exposure.admin_panel` | `info` | Publicly reachable administrative or login interface | [OWASP WSTG-CONF-05](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/05-Enumerate_Infrastructure_and_Application_Admin_Interfaces) |
+| `web.security.security_txt_missing` | `info` | Host lacks a valid security.txt vulnerability disclosure policy | [RFC 9116](https://www.rfc-editor.org/rfc/rfc9116) |
 
 ---
 

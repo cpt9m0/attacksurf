@@ -29,6 +29,7 @@ from attacksurf.infra.scope_guard import ScopeGuard
 from attacksurf.scanners.profiles import PROFILES
 from attacksurf.scanners.registry import registry
 from attacksurf.scanners.web import components as _web_components  # noqa: F401
+from attacksurf.scanners.web import exposures as _web_exposures  # noqa: F401
 from attacksurf.scanners.web import headers as _web_headers  # noqa: F401
 from attacksurf.scanners.web import probe as _web_probe  # noqa: F401
 from attacksurf.scanners.web import tls as _web_tls  # noqa: F401

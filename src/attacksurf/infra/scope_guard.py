@@ -42,12 +42,16 @@ from attacksurf.domain.net import (
 from attacksurf.domain.sandbox import SandboxResult, SandboxRunner, UnconfiguredSandboxRunner
 from attacksurf.domain.scanners import (
     ALLOWED_WEB_PORTS,
+    DEFAULT_HTTP_METHODS,
+    DEFAULT_HTTP_PATHS,
     DEFAULT_HTTP_PORTS,
+    SOFT_404_PATH_RE,
     AssetRef,
     ScanContext,
     Scanner,
     ScannerGate,
     ScannerGrant,
+    has_unsafe_http_path,
 )
 from attacksurf.domain.scope import (
     HttpPermission,
@@ -143,12 +147,18 @@ class ScopeGuard(ScannerGate):
             if is_target_http and ctx.root_asset.type is AssetType.DOMAIN
             else None
         )
+        asset_url = urlsplit(asset.value) if asset.type is AssetType.URL else None
         http = _GuardedHttp(
             self._http,
             target=target_host if is_target_http else None,
             verified_root=verified_root,
             services=grant.http_hosts,
             allowed_ports=grant.http_ports,
+            allowed_methods=grant.http_methods,
+            allowed_paths=grant.http_paths,
+            target_url_path=(asset_url.path or "/") if asset_url is not None else None,
+            target_url_query=asset_url.query if asset_url is not None else "",
+            soft_404_probe=grant.soft_404_probe,
             follow_redirects=grant.follow_redirects,
             stop_on_out_of_scope_redirect=is_target_http and grant.follow_redirects,
             check_host=self._check_host,
@@ -323,6 +333,11 @@ class _GuardedHttp:
         verified_root: str | None = None,
         services: frozenset[str],
         allowed_ports: frozenset[int] = DEFAULT_HTTP_PORTS,
+        allowed_methods: frozenset[str] = DEFAULT_HTTP_METHODS,
+        allowed_paths: frozenset[str] = DEFAULT_HTTP_PATHS,
+        target_url_path: str | None = None,
+        target_url_query: str = "",
+        soft_404_probe: bool = False,
         follow_redirects: bool = True,
         stop_on_out_of_scope_redirect: bool = False,
         check_host: Callable[[str], str],
@@ -335,6 +350,12 @@ class _GuardedHttp:
         self._verified_root = verified_root
         self._services = services
         self._allowed_ports = allowed_ports
+        self._allowed_methods = allowed_methods
+        self._allowed_paths = allowed_paths
+        self._target_url_path = target_url_path
+        self._target_url_query = target_url_query
+        self._soft_404_probe = soft_404_probe
+        self._soft_404_hosts_used: set[str] = set()
         self._follow_redirects = follow_redirects
         self._stop_on_out_of_scope_redirect = stop_on_out_of_scope_redirect
         self._check_host = check_host
@@ -362,23 +383,56 @@ class _GuardedHttp:
         )
         return port in self._allowed_ports and host_ok
 
+    def request_allowed(self, method: str, url: str) -> bool:
+        if method not in self._allowed_methods:
+            return False
+        host = self._check_host(request_host(url))
+        if self._target is None or (self._services and hostname_allowed(host, self._services)):
+            return True
+        parts = urlsplit(url)
+        path = parts.path or "/"
+        if has_unsafe_http_path(path):
+            return False
+        target_path_ok = (
+            self._target_url_path is not None
+            and "/" in self._allowed_paths
+            and path == self._target_url_path
+            and (not parts.query or parts.query == self._target_url_query)
+        )
+        if (path in self._allowed_paths and not parts.query) or target_path_ok:
+            return True
+        if (
+            self._soft_404_probe
+            and not parts.query
+            and SOFT_404_PATH_RE.fullmatch(path) is not None
+            and host not in self._soft_404_hosts_used
+        ):
+            self._soft_404_hosts_used.add(host)
+            return True
+        return False
+
     def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
         self.require_allowed(url)
+        if not self.request_allowed("GET", url):
+            raise ScopePolicyError("The request method or path is outside the scanner grant.")
         return self._inner.get(url, limit=bounded_limit(limit), headers=headers)
+
+    def head(self, url: str, *, headers: Mapping[str, str] | None = None) -> HttpBody:
+        self.require_allowed(url)
+        if not self.request_allowed("HEAD", url):
+            raise ScopePolicyError("The request method or path is outside the scanner grant.")
+        return self._inner.head(url, headers=headers)
 
     def require_allowed(self, url: str) -> None:
         if not self.host_allowed(url):
             raise ScopePolicyError("The scanner may not contact this host.")
 
     def client_for(self, resolver: DnsResolver) -> SafeHttpClient:
-        """A pinned client whose redirects come back to this allowlist at every hop.
-
-        The allowlist is the client's policy hook, which `SafeHttpClient.get()` now consults
-        before the first request too, so handing the inner client to a run is not a bypass.
-        """
+        """A pinned client enforcing host allowlists on redirects and path/method on requests."""
         return self._inner.with_redirect_policy(
             resolver,
             redirect_allowed=self.host_allowed,
+            request_allowed=self.request_allowed,
             max_redirects=MAX_REDIRECTS if self._follow_redirects else 0,
             stop_on_out_of_scope_redirect=self._stop_on_out_of_scope_redirect,
             rate_limiter=self._rate_limiter,

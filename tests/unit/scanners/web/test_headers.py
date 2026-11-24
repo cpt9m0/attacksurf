@@ -29,6 +29,9 @@ class _StubHttp:
         self.response = response
         self.requests: list[tuple[str, int, dict[str, str] | None]] = []
 
+    def head(self, url: str, *, headers: Mapping[str, str] | None = None) -> HttpBody:
+        raise AssertionError("web.headers/web.cors must not call HEAD")
+
     def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
         self.requests.append((url, limit, dict(headers) if headers is not None else None))
         if isinstance(self.response, Exception):

@@ -73,6 +73,9 @@ class FakeDns:
 
 
 class FakeHttp:
+    def head(self, url: str, *, headers: object | None = None) -> HttpBody:
+        raise AssertionError("dns.email is DNS-only and must not use HTTP")
+
     def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         raise AssertionError("dns.email is DNS-only and must not use HTTP")
 

@@ -313,6 +313,127 @@ CORS_WILDCARD_CREDENTIALS = Rule(
     ),
 )
 
+EXPOSURE_GIT_REPO = Rule(
+    id="web.exposure.git_repo",
+    title="Exposed version control metadata on web host",
+    description=(
+        "Publicly accessible version control metadata ($path) at $url exposes repository state, "
+        "commit history, or source code structure to unauthorized download."
+    ),
+    default_severity=Severity.HIGH,
+    remediation=(
+        "Deny external web access to `/.git` and `/.svn` directories in your web server or "
+        "reverse proxy configuration for $url, and rotate any credentials stored in config."
+    ),
+    references=(
+        "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/05-Enumerate_Infrastructure_and_Application_Admin_Interfaces",
+        "https://cwe.mitre.org/data/definitions/538.html",
+    ),
+)
+
+EXPOSURE_ENV_FILE = Rule(
+    id="web.exposure.env_file",
+    title="Exposed environment configuration file on web host",
+    description=(
+        "A dotenv configuration file ($path) was retrieved from $url containing environment keys. "
+        "Exposed `.env` files commonly leak database passwords, signing secrets, and API tokens."
+    ),
+    default_severity=Severity.CRITICAL,
+    remediation=(
+        "Block HTTP access to `/.env*` files on $url immediately, move secrets outside the web "
+        "root, and rotate all secrets corresponding to keys exposed in $path."
+    ),
+    references=(
+        "https://cwe.mitre.org/data/definitions/538.html",
+        "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information",
+    ),
+)
+
+EXPOSURE_BACKUP_ARCHIVE = Rule(
+    id="web.exposure.backup_archive",
+    title="Exposed backup archive or metadata file on web host",
+    description=(
+        "A publicly downloadable backup archive, SQL dump, or filesystem metadata file ($path) is "
+        "reachable at $url, risking disclosure of source code, database dumps, or directory layout."
+    ),
+    default_severity=Severity.HIGH,
+    remediation=(
+        "Remove backup archives, SQL dumps, and `.DS_Store` metadata from public web roots on "
+        "$url and block access to backup extensions at the proxy."
+    ),
+    references=(
+        "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information",
+        "https://cwe.mitre.org/data/definitions/530.html",
+    ),
+)
+
+EXPOSURE_DEBUG_ENDPOINT = Rule(
+    id="web.exposure.debug_endpoint",
+    title="Exposed diagnostic or debug endpoint on web host",
+    description=(
+        "A server or framework diagnostic endpoint ($path) is publicly accessible at $url, "
+        "exposing runtime configuration, environment properties, memory dumps, or request activity."
+    ),
+    default_severity=Severity.HIGH,
+    remediation=(
+        "Disable $path or restrict it to internal management networks and authenticated "
+        "administrators on $url."
+    ),
+    references=(
+        "https://cwe.mitre.org/data/definitions/215.html",
+        "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/05-Enumerate_Infrastructure_and_Application_Admin_Interfaces",
+    ),
+)
+
+EXPOSURE_API_DOCS = Rule(
+    id="web.exposure.api_docs",
+    title="Public API documentation endpoint exposed",
+    description=(
+        "OpenAPI/Swagger documentation or interactive API UI ($path) is publicly reachable at "
+        "$url, cataloging endpoints, schemas, and parameters."
+    ),
+    default_severity=Severity.INFO,
+    remediation=(
+        "If API specifications on $url are internal-only, restrict $path behind authentication "
+        "or an internal network; if intentionally public, review listed endpoints."
+    ),
+    references=(
+        "https://owasp.org/API-Security/editions/2023/en/0xa9-improper-inventory-management/",
+    ),
+)
+
+EXPOSURE_ADMIN_PANEL = Rule(
+    id="web.exposure.admin_panel",
+    title="Publicly reachable administrative or login interface",
+    description=(
+        "An administrative interface or login page ($path) is exposed on $url without "
+        "network-level restrictions, expanding the credential-attack surface."
+    ),
+    default_severity=Severity.INFO,
+    remediation=(
+        "Confirm $path on $url enforces strong authentication with MFA and consider restricting "
+        "administrative paths to VPN or allowlisted IPs."
+    ),
+    references=(
+        "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/05-Enumerate_Infrastructure_and_Application_Admin_Interfaces",
+    ),
+)
+
+SECURITY_TXT_MISSING = Rule(
+    id="web.security.security_txt_missing",
+    title="Host lacks a valid security.txt vulnerability disclosure policy",
+    description=(
+        "Neither `/.well-known/security.txt` nor `/security.txt` on $url returned a valid RFC "
+        "9116 policy with a `Contact:` directive."
+    ),
+    default_severity=Severity.INFO,
+    remediation=(
+        "Publish `/.well-known/security.txt` on $url following RFC 9116 with at least one "
+        "`Contact:` URI and an `Expires:` timestamp."
+    ),
+    references=("https://www.rfc-editor.org/rfc/rfc9116",),
+)
+
 WEB_RULES: tuple[Rule, ...] = (
     VERSION_BANNER,
     KNOWN_VULNERABLE_COMPONENT,
@@ -332,4 +453,11 @@ WEB_RULES: tuple[Rule, ...] = (
     COOKIES_INSECURE_FLAGS,
     HTTPS_NO_REDIRECT,
     CORS_WILDCARD_CREDENTIALS,
+    EXPOSURE_GIT_REPO,
+    EXPOSURE_ENV_FILE,
+    EXPOSURE_BACKUP_ARCHIVE,
+    EXPOSURE_DEBUG_ENDPOINT,
+    EXPOSURE_API_DOCS,
+    EXPOSURE_ADMIN_PANEL,
+    SECURITY_TXT_MISSING,
 )

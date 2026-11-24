@@ -27,6 +27,9 @@ class _DummyClient:
         self.closed = False
         self.should_fail = should_fail
 
+    def head(self, *_args: object, **_kwargs: object) -> object:
+        raise NotImplementedError
+
     def get(self, *_args: object, **_kwargs: object) -> object:
         raise NotImplementedError
 
