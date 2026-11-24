@@ -12,6 +12,7 @@ from attacksurf.sandbox_launcher import container
 from attacksurf.sandbox_launcher.artifacts import resolve_artifact
 from attacksurf.sandbox_launcher.catalog import (
     CATALOG,
+    FIXTURE_SPECS,
     LIMIT_CEILINGS,
     Analyzer,
     AnalyzerSpec,
@@ -182,14 +183,15 @@ def test_resolved_artifact_path_feeds_the_builder(tmp_path: Path) -> None:
     validate_create(body, proxy_policy(root=root))
 
 
-@pytest.mark.parametrize("spec", CATALOG, ids=lambda spec: spec.name)
-def test_every_catalog_spec_builds_an_accepted_body(spec: AnalyzerSpec) -> None:
+@pytest.mark.parametrize("runtime", ["runsc", "runc"])
+@pytest.mark.parametrize("spec", CATALOG + FIXTURE_SPECS, ids=lambda spec: spec.name)
+def test_every_catalog_spec_builds_an_accepted_body(spec: AnalyzerSpec, runtime: str) -> None:
     image = OSV_IMAGE if spec.name == policy.OSV_ANALYZER else IMAGE
     osv_image = OSV_IMAGE if spec.name == policy.OSV_ANALYZER else None
 
-    body = build_create_body(Analyzer(spec, image), ARTIFACT_DIR, "runsc")
+    body = build_create_body(Analyzer(spec, image), ARTIFACT_DIR, runtime)
 
-    validate_create(body, proxy_policy(image=image, osv_image=osv_image))
+    validate_create(body, proxy_policy(image=image, osv_image=osv_image, runtime=runtime))
 
 
 # --- B. Boundary cases --------------------------------------------------------------------------

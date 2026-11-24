@@ -76,8 +76,21 @@ class Analyzer:
     image: str
 
 
-# Empty until an analyzer ships; the fixture analyzer arrives with the real-runtime CI job.
+# Empty until an analyzer ships (#92 onward).
 CATALOG: tuple[AnalyzerSpec, ...] = ()
+
+# Test-only analyzers for the sandbox runtime tests (ADR 0016): one harmless image, one fixed
+# command per behavior it can show. They are never part of `CATALOG`; `__main__.select_specs` adds
+# them only outside prod and only when asked, and they run only if the lock names them. Default
+# limits on purpose: the wall time and the output cap must be what stops `sleep` and `flood`.
+_FIXTURE_PYTHON = "/usr/local/bin/python"
+_FIXTURE_PROBE = "/opt/fixture/probe.py"
+FIXTURE_SPECS: tuple[AnalyzerSpec, ...] = (
+    AnalyzerSpec("fixture-ok", (_FIXTURE_PYTHON, _FIXTURE_PROBE, "ok")),
+    AnalyzerSpec("fixture-probe", (_FIXTURE_PYTHON, _FIXTURE_PROBE, "probe")),
+    AnalyzerSpec("fixture-sleep", (_FIXTURE_PYTHON, _FIXTURE_PROBE, "sleep")),
+    AnalyzerSpec("fixture-flood", (_FIXTURE_PYTHON, _FIXTURE_PROBE, "flood")),
+)
 
 
 def load_catalog(

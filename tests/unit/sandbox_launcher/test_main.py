@@ -7,10 +7,17 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 from structlog.testing import capture_logs
 
 from attacksurf.sandbox_launcher import __main__ as launcher_main
-from attacksurf.sandbox_launcher.__main__ import RuntimeUnavailable, main, select_runtime
+from attacksurf.sandbox_launcher.__main__ import (
+    RuntimeUnavailable,
+    main,
+    select_runtime,
+    select_specs,
+)
+from attacksurf.sandbox_launcher.catalog import CATALOG, FIXTURE_SPECS
 from attacksurf.sandbox_launcher.server import LauncherServer
 from tests.docker_fakes import FakeDocker
 from tests.unit.sandbox_launcher.test_container import analyzer
@@ -79,6 +86,18 @@ def list_runtimes(docker: FakeDocker, *names: str) -> None:
     docker.info_body = json.dumps({"Runtimes": {name: {} for name in names}}).encode()
 
 
+def fixture_lock(tmp_path: Path, *names: str) -> str:
+    """A lock file naming `names` (all fixtures by default); returns its path."""
+    path = tmp_path / "fixtures.lock"
+    entries = names or tuple(spec.name for spec in FIXTURE_SPECS)
+    path.write_text(json.dumps(dict.fromkeys(entries, "sha256:" + "c" * 64)))
+    return str(path)
+
+
+def events(logs: list[Any], name: str) -> list[Any]:
+    return [entry for entry in logs if entry["event"] == name]
+
+
 # --- A. Happy path ------------------------------------------------------------------------------
 
 
@@ -104,7 +123,59 @@ def test_main_serves_with_the_chosen_runtime(
     assert event["analyzers"] == 0
 
 
+def test_select_specs_adds_the_fixtures_outside_prod_when_asked() -> None:
+    assert select_specs(prod=False, fixtures=True) == CATALOG + FIXTURE_SPECS
+
+
+def test_main_serves_the_fixture_analyzers_when_enabled(
+    configure: Callable[..., None], proxy_port: int, started: Started, tmp_path: Path
+) -> None:
+    configure(
+        url_of(proxy_port),
+        SANDBOX_FIXTURE_ANALYZERS="true",
+        SANDBOX_IMAGES_LOCK=fixture_lock(tmp_path),
+    )
+
+    with capture_logs() as logs:
+        main()
+
+    assert set(started.servers[0].catalog) == {spec.name for spec in FIXTURE_SPECS}
+    (warning,) = events(logs, "sandbox_launcher_fixture_analyzers_enabled")
+    assert warning["log_level"] == "warning"
+
+
 # --- B. Boundary cases --------------------------------------------------------------------------
+
+
+def test_select_specs_is_the_catalog_by_default() -> None:
+    assert select_specs(prod=False, fixtures=False) == CATALOG
+    assert select_specs(prod=True, fixtures=False) == CATALOG
+
+
+def test_main_ignores_fixtures_in_the_lock_when_disabled(
+    configure: Callable[..., None], proxy_port: int, started: Started, tmp_path: Path
+) -> None:
+    configure(url_of(proxy_port), SANDBOX_IMAGES_LOCK=fixture_lock(tmp_path))
+
+    with capture_logs() as logs:
+        main()
+
+    assert started.servers[0].catalog == {}
+    assert events(logs, "sandbox_launcher_fixture_analyzers_enabled") == []
+
+
+def test_main_serves_only_fixtures_named_in_the_lock(
+    configure: Callable[..., None], proxy_port: int, started: Started, tmp_path: Path
+) -> None:
+    configure(
+        url_of(proxy_port),
+        SANDBOX_FIXTURE_ANALYZERS="true",
+        SANDBOX_IMAGES_LOCK=fixture_lock(tmp_path, "fixture-ok"),
+    )
+
+    main()
+
+    assert set(started.servers[0].catalog) == {"fixture-ok"}
 
 
 def test_select_runtime_falls_back_to_runc_only_when_allowed_outside_prod() -> None:
@@ -159,6 +230,26 @@ def test_select_runtime_refuses_when_neither_is_listed() -> None:
 def test_select_runtime_never_returns_runc_in_prod() -> None:
     with pytest.raises(RuntimeUnavailable):
         select_runtime(["runc"], prod=True, allow_runc=True)
+
+
+def test_select_specs_never_adds_the_fixtures_in_prod() -> None:
+    assert select_specs(prod=True, fixtures=True) == CATALOG
+
+
+def test_main_refuses_fixture_analyzers_in_prod(
+    configure: Callable[..., None], proxy_port: int, started: Started, tmp_path: Path
+) -> None:
+    configure(
+        url_of(proxy_port),
+        ENV="prod",
+        SANDBOX_FIXTURE_ANALYZERS="true",
+        SANDBOX_IMAGES_LOCK=fixture_lock(tmp_path),
+    )
+
+    with pytest.raises(ValidationError, match="SANDBOX_FIXTURE_ANALYZERS"):
+        main()
+
+    assert started.servers == []
 
 
 def test_main_exits_without_runsc_in_prod(

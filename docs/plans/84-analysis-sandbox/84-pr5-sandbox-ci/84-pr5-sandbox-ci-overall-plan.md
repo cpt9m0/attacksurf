@@ -74,7 +74,7 @@ Each commit leaves ruff, pyright, lint-imports and pytest green, and tests come 
 | # | Subject | Non-test files |
 |---|---|---|
 | 1 | `build(infra): add the sandbox fixture analyzer image` | `sandbox/images/fixture/Dockerfile`, `.../probe.py`, `scripts/build-sandbox-images.sh`, `Makefile` target, `.github/dependabot.yml` |
-| 2 | `feat(infra): add fixture analyzers to the launcher for dev and CI` | `sandbox_launcher/catalog.py`, `config.py`, `sandbox_launcher/__main__.py`, `.env.example` |
+| 2 | `feat(infra): add fixture analyzers to the launcher for dev and CI` | `sandbox_launcher/catalog.py`, `config.py`, `sandbox_launcher/__main__.py`, `compose.yaml` (launcher env), `.env.example` |
 | 3 | `test(infra): run the sandbox end to end under a real runtime` | `pyproject.toml` (marker), tests only otherwise |
 | 4 | `ci(security): build sandbox images and run runsc tests` | `.github/workflows/sandbox-images.yml`, `.github/workflows/ci.yml`, `scripts/install-runsc.sh` |
 | 5 | `test(infra): guard sandbox service isolation in compose` | tests only (compose config + lock guards) |
