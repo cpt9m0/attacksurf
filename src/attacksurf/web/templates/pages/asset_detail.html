@@ -26,10 +26,17 @@
     {%- if active_scan %}
     <a class="btn btn-secondary" href="{{ url_for('ui.scan_detail', scan_id=active_scan.id) }}">View running scan</a>
     {%- else %}
-    <form method="post" action="{{ url_for('ui.create_scan') }}">
+    <form class="page-actions" method="post" action="{{ url_for('ui.create_scan') }}">
       {{ csrf_field() }}
       <input type="hidden" name="root_asset_id" value="{{ asset.id }}">
-      <input type="hidden" name="profile" value="dns_passive">
+      <div class="field">
+        <label class="visually-hidden" for="f-asset-profile">Scan profile</label>
+        <select id="f-asset-profile" name="profile">
+          {%- for value, label in profile_options | default([("dns_passive", "DNS passive (discovery & checks)")]) %}
+          <option value="{{ value }}"{% if value == "dns_passive" %} selected{% endif %}>{{ label }}</option>
+          {%- endfor %}
+        </select>
+      </div>
       <button type="submit" class="btn btn-primary">Scan now</button>
     </form>
     {%- endif %}

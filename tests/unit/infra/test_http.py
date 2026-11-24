@@ -545,3 +545,55 @@ def test_client_honors_custom_max_body_bytes(server_url: str) -> None:
 
     assert len(body.content) == 50000
     assert body.truncated is True
+
+
+def test_redirects_record_final_url_chain_and_can_stop_at_out_of_scope_hop(
+    server_url: str,
+) -> None:
+    port = server_url.rsplit(":", 1)[1]
+    base, resolver = client_for(server_url)
+    stop_client = base.with_redirect_policy(
+        resolver,
+        redirect_allowed=lambda url: "public.example" in url,
+        max_redirects=4,
+        stop_on_out_of_scope_redirect=True,
+    )
+
+    same_origin = stop_client.get(f"http://public.example:{port}/redirect", limit=100)
+    assert same_origin.status_code == 200
+    assert same_origin.final_url == f"http://public.example:{port}/landed"
+    assert same_origin.redirect_chain == ((f"http://public.example:{port}/redirect", 302),)
+
+    cross_origin = stop_client.get(f"http://public.example:{port}/cross-redirect", limit=100)
+    assert cross_origin.status_code == 302
+    assert cross_origin.final_url == f"http://public.example:{port}/cross-redirect"
+    assert cross_origin.redirect_chain == ()
+    assert cross_origin.headers.get("location") == f"http://other.example:{port}/landed"
+    stop_client.close()
+
+    no_follow = base.with_redirect_policy(
+        resolver,
+        redirect_allowed=lambda url: "public.example" in url,
+        max_redirects=0,
+    )
+    direct = no_follow.get(f"http://public.example:{port}/redirect", limit=100)
+    assert direct.status_code == 302
+    assert direct.final_url == f"http://public.example:{port}/redirect"
+    assert direct.redirect_chain == ()
+    no_follow.close()
+
+    def _raise_internal_host(url: str) -> bool:
+        if "other.example" in url:
+            raise ScopeError("internal hostname rejected")
+        return True
+
+    raising_stop = base.with_redirect_policy(
+        resolver,
+        redirect_allowed=_raise_internal_host,
+        max_redirects=4,
+        stop_on_out_of_scope_redirect=True,
+    )
+    stopped = raising_stop.get(f"http://public.example:{port}/cross-redirect", limit=100)
+    assert stopped.status_code == 302
+    assert stopped.final_url == f"http://public.example:{port}/cross-redirect"
+    raising_stop.close()

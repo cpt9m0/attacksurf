@@ -389,3 +389,27 @@ def test_broker_failure_marks_the_scan_failed(
     assert (
         session.scalars(scoped(Scan, _org_id(session, root_id))).one().status == ScanStatus.FAILED
     )
+
+
+def test_scans_and_asset_detail_offer_web_active_profile_and_start_it(
+    member: FlaskClient, db_session: Session
+) -> None:
+    root_id = _add_domain(member, "example.com")
+
+    scans_html = _html(member, "/scans")
+    asset_html = _html(member, f"/assets/{root_id}")
+    assert 'value="web_active"' in scans_html
+    assert 'value="web_active"' in asset_html
+
+    response = member.post(
+        "/scans",
+        data={
+            "root_asset_id": str(root_id),
+            "profile": "web_active",
+            "csrf_token": _csrf(member),
+        },
+    )
+    assert response.status_code == 303
+    scan_id = UUID(response.headers["Location"].rsplit("/", 1)[1])
+    detail = scan_views.get_scan_detail(db_session, _org_id(db_session, root_id), scan_id)
+    assert detail.scan.profile == "web_active"

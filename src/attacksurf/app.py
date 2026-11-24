@@ -20,6 +20,7 @@ from attacksurf.scanners.dns import resolve as _dns_resolve  # noqa: F401
 from attacksurf.scanners.dns import takeover as _dns_takeover  # noqa: F401
 from attacksurf.scanners.dns import takeover_http as _dns_takeover_http  # noqa: F401
 from attacksurf.scanners.dns import whois as _dns_whois  # noqa: F401
+from attacksurf.scanners.web import probe as _web_probe  # noqa: F401
 from attacksurf.web.api.v1 import bp as api_v1_bp
 from attacksurf.web.auth import init_auth
 from attacksurf.web.db import init_db

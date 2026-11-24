@@ -251,6 +251,8 @@ flowchart LR
   selects discovery/check plugins by name. `dns_passive` runs `dns.discovery.ct` for discovery
   and `dns.resolve`, `dns.email`, `dns.takeover`, `dns.takeover.http`, `dns.dnssec`, `dns.ns`,
   `dns.mx`, `dns.caa`, `dns.whois` and `dns.axfr` for checks, with `max_discovered_assets=1000`;
+  `web_active` runs `web.probe` on the `active` queue (`max_discovered_assets=1000`) to probe
+  `https://` then `http://` on active verified hosts and refresh discovered `url` assets (#72);
   empty/unknown profiles are rejected. `WORKER_PROFILES` also carries the background-only
   `dns_scheduled` profile (`dns.resolve`, `dns.email`, `dns.dnssec`) for recurring scans,
   with the same `MAX_DISCOVERED_ASSETS` cap as `dns_passive` because `dns.resolve` still emits
@@ -329,7 +331,8 @@ flowchart LR
   (`SCAN_MAX_STARTS_PER_HOUR`, all statuses count) refuse the rest. The quota count and the
   insert are serialised on the org row, so concurrent starts for different roots cannot both
   read a below-limit count. Two waves use Celery chords:
-  discovery on the root, then checks on the active root and its known direct children, filtered
+  discovery across the active root and its direct children filtered by each plugin's supported
+  `asset_types`, then checks on the active root and its known direct children, filtered
   by each plugin's supported asset types. Continuations use immutable signatures and tracked
   jobs: `checks`, then `persist → diff → finalize`. Batch rows commit before messages.
   `passive.triage` stays one release as a no-op so chains published before ADR 0029 finish.

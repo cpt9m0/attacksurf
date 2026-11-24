@@ -14,12 +14,12 @@
   {%- if scan_root_options %}
   <form id="start-scan" class="form form-inline" method="post" action="{{ url_for('ui.create_scan') }}">
     {{ csrf_field() }}
-    <input type="hidden" name="profile" value="dns_passive">
     {{ select_field("root_asset_id", "Root domain", scan_root_options, "") }}
+    {{ select_field("profile", "Scan profile", profile_options | default([("dns_passive", "DNS passive (discovery & checks)")]), "dns_passive") }}
     <button type="submit" class="btn btn-primary">Scan now</button>
   </form>
-  <p class="field-hint">Passive DNS checks of the domain and everything under it. The zone
-    transfer check runs automatically once the domain is verified.</p>
+  <p class="field-hint">DNS passive checks run on any root domain (zone transfer needs verification).
+    Web active checks probe HTTP/HTTPS on verified hosts only.</p>
   {%- else %}
   <p class="muted">Add a domain on the <a href="{{ url_for('ui.assets') }}">Assets</a>
     page first. Scans run on root domains.</p>

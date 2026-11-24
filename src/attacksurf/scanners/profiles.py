@@ -26,7 +26,13 @@ PROFILES = {
             "dns.axfr",
         ),
         max_discovered_assets=MAX_DISCOVERED_ASSETS,
-    )
+    ),
+    "web_active": ScanProfile(
+        name="web_active",
+        discover=("web.probe",),
+        checks=(),
+        max_discovered_assets=MAX_DISCOVERED_ASSETS,
+    ),
 }
 
 # Background-only monitoring profile for recurring scans (#27): read-only DNS configuration

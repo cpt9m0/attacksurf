@@ -123,6 +123,7 @@ class ScanOutput(OutputModel):
 _HOSTNAME = re.compile(r"(?=.{1,253}$)([a-z0-9_-]{1,63}\.)*[a-z0-9-]{1,63}")
 _ANALYZER_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 ALLOWED_WEB_PORTS = frozenset({80, 443, 8000, 8080, 8443, 8888})
+DEFAULT_HTTP_PORTS = frozenset({80, 443})
 DEFAULT_TLS_PORTS = frozenset({443})
 
 
@@ -132,6 +133,8 @@ class ScannerGrant:
 
     http: HttpPermission = HttpPermission.NONE
     http_hosts: frozenset[str] = frozenset()  # public data services the scanner may query
+    http_ports: frozenset[int] = DEFAULT_HTTP_PORTS
+    follow_redirects: bool = True
     dns_lookups: int = 0  # cap on resolver calls per run
     sandbox_analyzers: frozenset[str] = frozenset()  # analyzers the plugin may run (ADR 0016)
     # Read-only SOA/DNSKEY queries to the target zone's own nameservers (ADR 0026).
@@ -149,21 +152,45 @@ class ScannerGrant:
             raise ValueError("a services grant needs at least one http host")
         if self.http is not HttpPermission.SERVICES and self.http_hosts:
             raise ValueError("http hosts are only meaningful for services")
+        _validate_port_grant(
+            enabled=self.http is HttpPermission.TARGET,
+            ports=self.http_ports,
+            default_ports=DEFAULT_HTTP_PORTS,
+            field="http_ports",
+            purpose="target http",
+        )
+        _validate_port_grant(
+            enabled=self.tls,
+            ports=self.tls_ports,
+            default_ports=DEFAULT_TLS_PORTS,
+            field="tls_ports",
+            purpose="tls",
+        )
         if self.dns_lookups < 0:
             raise ValueError("negative dns budget")
-        if not self.tls and self.tls_ports != DEFAULT_TLS_PORTS:
-            raise ValueError("tls_ports is only meaningful when tls is enabled")
-        if self.tls:
-            if not self.tls_ports:
-                raise ValueError("a tls grant needs at least one port")
-            if not self.tls_ports <= ALLOWED_WEB_PORTS:
-                raise ValueError("tls_ports contains a port outside the allowed web ports")
         for host in self.http_hosts:
             if not _HOSTNAME.fullmatch(host) or "." not in host:
                 raise ValueError("invalid http host")
         for analyzer in self.sandbox_analyzers:
             if not _ANALYZER_NAME.fullmatch(analyzer):
                 raise ValueError("invalid analyzer name")
+
+
+def _validate_port_grant(
+    *,
+    enabled: bool,
+    ports: frozenset[int],
+    default_ports: frozenset[int],
+    field: str,
+    purpose: str,
+) -> None:
+    if not enabled and ports != default_ports:
+        raise ValueError(f"{field} is only meaningful when {purpose} is enabled")
+    if enabled:
+        if not ports:
+            raise ValueError(f"a {purpose} grant needs at least one port")
+        if not ports <= ALLOWED_WEB_PORTS:
+            raise ValueError(f"{field} contains a port outside the allowed web ports")
 
 
 @dataclass(frozen=True)

@@ -99,7 +99,7 @@ def test_an_ip_discovered_under_a_verified_root_does_not_verify(
     assert not checker.is_verified(acme.id, AssetRef(type=AssetType.IP, value="93.184.216.34"))
 
 
-def test_a_url_discovered_under_a_verified_root_does_not_verify(
+def test_a_url_under_a_verified_root_verifies_only_when_host_matches_root(
     checker: DbOwnershipChecker, db_session: Session, acme: Org, root: Asset
 ) -> None:
     _verified(db_session, acme.id, root.id)
@@ -111,9 +111,43 @@ def test_a_url_discovered_under_a_verified_root_does_not_verify(
         source=AssetSource.DISCOVERED,
         parent_id=root.id,
     )
+    record_asset(
+        db_session,
+        acme.id,
+        AssetType.URL,
+        "https://app.example.com/login",
+        source=AssetSource.DISCOVERED,
+        parent_id=root.id,
+    )
+    record_asset(
+        db_session,
+        acme.id,
+        AssetType.URL,
+        "https://other.net/",
+        source=AssetSource.DISCOVERED,
+        parent_id=root.id,
+    )
+    record_asset(
+        db_session,
+        acme.id,
+        AssetType.URL,
+        "https://93.184.216.34/",
+        source=AssetSource.DISCOVERED,
+        parent_id=root.id,
+    )
 
+    assert checker.is_verified(acme.id, AssetRef(type=AssetType.URL, value="https://example.com/"))
+    assert checker.is_verified(
+        acme.id, AssetRef(type=AssetType.URL, value="https://app.example.com/login")
+    )
     assert not checker.is_verified(
-        acme.id, AssetRef(type=AssetType.URL, value="https://example.com/")
+        acme.id, AssetRef(type=AssetType.URL, value="https://other.net/")
+    )
+    assert not checker.is_verified(
+        acme.id, AssetRef(type=AssetType.URL, value="https://93.184.216.34/")
+    )
+    assert not checker.is_verified(
+        acme.id, AssetRef(type=AssetType.URL, value="https://unrecorded.example.com/")
     )
 
 

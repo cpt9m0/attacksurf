@@ -117,8 +117,14 @@ depends on the worker's OpenSSL 3.x build: TLS 1.2/1.3 are always supported, TLS
 attempted best-effort via `DEFAULT:@SECLEVEL=0` and recorded in `legacy_protocols_untested` when
 compiled out or blocked by system crypto policy, SSLv2/SSLv3 are absent, and Python 3.12 reads
 only the leaf certificate when inspecting unverified/verified chains while Python 3.13+ reads the
-full peer chain. Planned #72–#79 checks will expand `ScannerGrant` with `http_methods`,
-`http_ports`, `http_paths`, `soft_404_probe`, and `follow_redirects`. CT discovery's
+full peer chain. `web.probe` (#72, `web_active` profile on `worker-active`) extends
+`ScannerGrant` with `http_ports` (validated within `ALLOWED_WEB_PORTS`, defaulting to `{80, 443}`)
+and `follow_redirects` (bounded same-root redirects up to 4 hops, stopping before dialing
+out-of-scope `Location` targets when `stop_on_out_of_scope_redirect=True`); `DbOwnershipChecker`
+verifies `URL` assets only when recorded under a verified active root domain whose hostname
+contains the URL host, and response `Set-Cookie` values are always redacted to `<redacted>`.
+Planned #77–#79 checks will expand `ScannerGrant` with `http_methods`,
+`http_paths`, and `soft_404_probe`. CT discovery's
 random-label wildcard probes use the same guarded DNS adapter and DNS budget; a wildcard marker
 (`Asset.details["wildcard"] = true`) is data for later resolution, never a finding or a claim
 that a name exists. `dns.resolve` records A/AAAA/CNAME/MX/NS/TXT/CAA/SOA in capped

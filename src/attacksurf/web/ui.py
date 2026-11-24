@@ -92,6 +92,15 @@ bp = Blueprint("ui", __name__)
 
 log = structlog.get_logger(__name__)
 
+_PROFILE_LABELS = {
+    "dns_passive": "DNS passive (discovery & checks)",
+    "web_active": "Web active (verified hosts)",
+}
+
+
+def _profile_options() -> list[tuple[str, str]]:
+    return [(name, _PROFILE_LABELS.get(name, name)) for name in PROFILES]
+
 
 @dataclass(frozen=True)
 class NavItem:
@@ -245,6 +254,7 @@ def asset_detail(asset_id: UUID) -> Response:
         and asset.type == AssetType.DOMAIN
         and asset.root_id is None
         and has_role(current_user.role, Role.ADMIN),
+        profile_options=_profile_options(),
         # Only roots carry a proof; a subdomain shows its root's, read-only.
         **(dict(ownership_context) if ownership_context else {}),
     )
@@ -855,6 +865,7 @@ def _scans_page(flt: ScanFilter, page: int, status: int = 200) -> Response:
         status_options=[("", "All statuses")]
         + [(s.value, s.value.replace("_", " ").capitalize()) for s in ScanStatus],
         scan_root_options=[(r.id, r.value) for r in roots if r.is_active],
+        profile_options=_profile_options(),
     )
 
 
