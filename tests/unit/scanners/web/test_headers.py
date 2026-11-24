@@ -648,6 +648,32 @@ def test_web_cors_ignores_redirect_responses_with_location() -> None:
     assert out.findings == ()
 
 
+def test_web_cors_ignores_non_lowercase_credentials_header() -> None:
+    ctx, _ = _ctx(
+        response=HttpBody(
+            status_code=200,
+            content=b"{}",
+            headers={
+                "Access-Control-Allow-Origin": FOREIGN_ORIGIN,
+                "Access-Control-Allow-Credentials": "True",
+            },
+        )
+    )
+
+    out = WebCors().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+    assert out.findings == ()
+
+
+def test_web_headers_ignores_malformed_cookie_max_age() -> None:
+    details = _hardened_web_details()
+    details["cookies"] = ["sessionid=<redacted>; Max-Age=--1; Path=/"]
+    ctx, _ = _ctx(web_details=details)
+
+    out = WebHeaders().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+
+    assert [f.rule_id for f in out.findings] == ["web.cookies.insecure_flags"]
+
+
 @pytest.mark.parametrize(
     "header_value",
     [

@@ -43,6 +43,7 @@ MAX_CSP_VALUE_CHARS = 4096
 _QUOTED_MIN_LEN = 2
 _WILDCARD_FRAME_ANCESTORS = frozenset({"*", "http:", "https:"})
 
+_COOKIE_MAX_AGE_RE = re.compile(r"^-?[0-9]+$")
 _NONCE_OR_HASH_RE = re.compile(
     r"^'(?:nonce-[^']+|sha(?:256|384|512)-[^']+)'$",
     re.IGNORECASE,
@@ -193,7 +194,7 @@ def _is_expired_cookie(raw_max_age: str | None, raw_expires: str | None) -> bool
     # RFC 6265 §5.2.2: valid Max-Age takes precedence over Expires; <= 0 deletes immediately.
     if raw_max_age is not None:
         cleaned = raw_max_age.strip()
-        if cleaned and (cleaned.lstrip("-").isdigit()):
+        if _COOKIE_MAX_AGE_RE.fullmatch(cleaned):
             return int(cleaned) <= 0
     if raw_expires is not None:
         try:
@@ -616,7 +617,8 @@ def _is_cors_vulnerable(body: HttpBody) -> tuple[bool, dict[str, JsonValue]]:
     if HTTP_REDIRECT_MIN <= body.status_code <= HTTP_REDIRECT_MAX and "location" in headers:
         return False, {}
     acao = headers.get("access-control-allow-origin", "").strip()
-    acac = headers.get("access-control-allow-credentials", "").strip().lower()
+    # Fetch requires an exact lowercase `true` match for credentials permission.
+    acac = headers.get("access-control-allow-credentials", "").strip()
     # Fetch CORS rejects wildcard `*` with credentials mode `include`, so only reflected
     # foreign origins with credentials expose authenticated responses cross-origin.
     vulnerable = acac == "true" and acao == FOREIGN_ORIGIN
