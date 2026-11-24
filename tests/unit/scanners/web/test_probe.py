@@ -545,3 +545,31 @@ def test_web_probe_preserves_security_cookie_flags_and_tracks_cookie_truncation(
     assert "HttpOnly" in first_cookie
     assert "SameSite=Strict" in first_cookie
     assert web["cookies_truncated"] == ["auth_session"]
+
+
+def test_web_probe_preserves_first_hsts_header_field() -> None:
+    http = _StubHttp(
+        {
+            "https://acme.example/": HttpBody(
+                200,
+                b"<html></html>",
+                False,
+                httpx.Headers(
+                    [
+                        ("content-type", "text/html"),
+                        ("strict-transport-security", "max-age=31536000; includeSubDomains"),
+                        ("strict-transport-security", "max-age=60"),
+                    ]
+                ),
+                final_url="https://acme.example/",
+            ),
+            "http://acme.example/": ScopeError("Unreachable."),
+        }
+    )
+
+    out = WebProbe().run(_ctx(http), AssetRef(type=AssetType.DOMAIN, value="acme.example"))
+    web = out.observations[0].details["web"]
+    assert isinstance(web, dict)
+    headers = web["headers"]
+    assert isinstance(headers, dict)
+    assert headers["strict-transport-security"] == "max-age=31536000; includeSubDomains"

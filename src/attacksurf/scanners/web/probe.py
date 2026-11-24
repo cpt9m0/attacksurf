@@ -187,28 +187,33 @@ def redact_set_cookie(raw_cookie: str) -> str:
     return redacted
 
 
-def _sanitize_headers(
+def _sanitize_cookies(
     headers: Mapping[str, str],
-) -> tuple[dict[str, str], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    """Return capped headers, redacted cookies, and truncated header/cookie names."""
-    get_list = getattr(headers, "get_list", None)
-    raw_cookies: list[str] = []
-    if callable(get_list):
-        list_fn = cast(Callable[[str], list[str]], get_list)
-        raw_cookies = list(list_fn("set-cookie"))
-    else:
-        raw_cookies = [v for k, v in headers.items() if k.lower() == "set-cookie"]
-
+    list_fn: Callable[[str], list[str]] | None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    raw_cookies = (
+        list(list_fn("set-cookie"))
+        if list_fn is not None
+        else [v for k, v in headers.items() if k.lower() == "set-cookie"]
+    )
     cookies_list: list[str] = []
-    truncated_cookie_names: set[str] = set()
+    truncated_names: set[str] = set()
     for raw in raw_cookies[:MAX_COOKIES]:
         redacted, trunc_name = _redact_set_cookie(raw)
         if redacted:
             cookies_list.append(redacted)
         if trunc_name:
-            truncated_cookie_names.add(trunc_name)
-    cookies = tuple(cookies_list)
-    cookies_truncated = tuple(sorted(truncated_cookie_names))
+            truncated_names.add(trunc_name)
+    return tuple(cookies_list), tuple(sorted(truncated_names))
+
+
+def _sanitize_headers(
+    headers: Mapping[str, str],
+) -> tuple[dict[str, str], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Return capped headers, redacted cookies, and truncated header/cookie names."""
+    get_list = getattr(headers, "get_list", None)
+    list_fn = cast(Callable[[str], list[str]], get_list) if callable(get_list) else None
+    cookies, cookies_truncated = _sanitize_cookies(headers, list_fn)
 
     cleaned: dict[str, str] = {}
     extra: list[tuple[str, str]] = []
@@ -219,7 +224,13 @@ def _sanitize_headers(
         if not norm_key or norm_key == "set-cookie" or norm_key in seen_keys:
             continue
         seen_keys.add(norm_key)
-        stripped_val = val.strip().replace("\x00", "")
+        raw_val = val
+        # RFC 6797 §8.1: user agents only process the first Strict-Transport-Security field.
+        if norm_key == "strict-transport-security" and list_fn is not None:
+            hsts_fields = list(list_fn("strict-transport-security"))
+            if hsts_fields:
+                raw_val = hsts_fields[0]
+        stripped_val = raw_val.strip().replace("\x00", "")
         cap = (
             MAX_CSP_HEADER_VALUE_CHARS
             if norm_key == "content-security-policy"

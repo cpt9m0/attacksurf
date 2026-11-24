@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from attacksurf.domain.assets import AssetType
@@ -19,7 +20,7 @@ from attacksurf.scanners.web.headers import (
     WebCors,
     WebHeaders,
 )
-from attacksurf.scanners.web.probe import redact_set_cookie
+from attacksurf.scanners.web.probe import redact_set_cookie, sanitize_headers
 from tests.scanner_fixtures import StubDns
 
 
@@ -864,6 +865,52 @@ def test_web_headers_accepts_combined_duplicate_nosniff_headers() -> None:
     summary = out.observations[0].details["security_headers"]
     assert isinstance(summary, dict)
     assert summary["nosniff"] is True
+
+
+def test_web_headers_honors_first_hsts_field_from_sanitized_duplicate_headers() -> None:
+    sanitized, _ = sanitize_headers(
+        httpx.Headers(
+            [
+                ("content-type", "text/html"),
+                ("strict-transport-security", "max-age=31536000"),
+                ("strict-transport-security", "max-age=31536000"),
+                ("content-security-policy", "default-src 'self'; frame-ancestors 'none'"),
+                ("x-content-type-options", "nosniff"),
+            ]
+        )
+    )
+    ctx, _ = _ctx(
+        web_details={
+            "final_url": "https://acme.com/",
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": sanitized,
+            "cookies": [],
+        }
+    )
+
+    out = WebHeaders().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+
+    assert out.findings == ()
+    summary = out.observations[0].details["security_headers"]
+    assert isinstance(summary, dict)
+    assert summary["hsts"] is True
+
+    comma_ctx, _ = _ctx(
+        web_details={
+            "final_url": "https://acme.com/",
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": {
+                "strict-transport-security": "max-age=31536000, includeSubDomains",
+                "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
+                "x-content-type-options": "nosniff",
+            },
+            "cookies": [],
+        }
+    )
+    comma_out = WebHeaders().run(comma_ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+    assert [f.rule_id for f in comma_out.findings] == ["web.headers.hsts_weak"]
 
 
 def test_web_rules_catalog_includes_all_issue_77_rules_with_expected_severities() -> None:
