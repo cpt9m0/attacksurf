@@ -27,6 +27,7 @@ from attacksurf.infra.scope_guard import ScopeGuard
 from attacksurf.infra.storage import LocalArtifactStore
 from attacksurf.infra.vulnintel import build_vulnintel_http_client
 from attacksurf.services.ownership import DbOwnershipChecker
+from attacksurf.services.vulnintel import DbVulnIntelLookup
 
 # crt.sh regularly takes several seconds; the client's 5 s default is too tight for it.
 SCANNER_HTTP_TIMEOUT_SECONDS = 15.0
@@ -146,6 +147,7 @@ def scanner_gate() -> ScannerGate:
         active_scans_enabled=current.active_scans_enabled,
         rate_limiter=target_rate_limiter(),
         user_agent=current.scanner_user_agent,
+        vuln_intel=DbVulnIntelLookup(session_factory()),
     )
 
 

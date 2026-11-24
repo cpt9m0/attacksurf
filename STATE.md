@@ -2,19 +2,19 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-23 · **Branch:** `73-web-fingerprint` · **Issue:** #73 (Fingerprint web technologies and versions on URL assets)
+**Updated:** 2026-11-24 · **Branch:** `75-web-components` · **Issue:** #75 (Flag known-vulnerable web components from fingerprints)
 
 ## Status
-Implemented and tested on branch `73-web-fingerprint`; running full verification and opening PR #73.
+Implemented and tested on branch `75-web-components`; running full verification and opening PR #75.
 
 ## Last task
-- Added `web.disclosure.version_banner` rule in `src/attacksurf/domain/rules/web.py` and registered `WEB_RULES` in `domain.rules` (#73).
-- Vendored a curated 66-technology signature subset from `enthec/webappanalyzer` (`GPL-3.0`, pinned commit `7dba7bf3e8b4f25c6a5b4b2c9f5e7a0e73e6a1bf`) in `src/attacksurf/scanners/web/fingerprints.json` with attribution in `fingerprints-NOTICE.md`, keeping passive channels only (`headers`, cookie names only, `meta`, `script_src`, `html`) and dropping unsafe/nested-quantifier regexes (#73).
-- Implemented `src/attacksurf/scanners/web/fingerprint.py` and integrated it into `web.probe` (`scanners/web/probe.py`) with zero extra HTTP requests, storing `Asset.details["technologies"]` and reporting `web.disclosure.version_banner` with `HTTP_RESPONSE` evidence (#73).
-- Added unit tests (`tests/unit/scanners/web/test_fingerprint.py`, `test_probe.py`) and DB integration assertions (`tests/integration/workers/test_web_probe.py`), and updated `docs/scanners.md`, `docs/security.md`, and `CHANGELOG.md` (#73).
+- Added `web.components.known_vulnerable` rule in `src/attacksurf/domain/rules/web.py` (#75).
+- Exposed read-only `VulnIntelLookup` (`domain.net`), `DbVulnIntelLookup` (`services.vulnintel`), `ScopeGuard(vuln_intel=...)`, `workers/runtime.py` wiring, and `ScanContext.target_details` (`scanner_jobs.py`), plus volatile EPSS/description stripping in `_digest_json` (`scan_results.py`) (#75).
+- Implemented `web.components` (`scanners/web/components.py`) with curated technology → CPE mapping, CVSS severity + CISA KEV severity bump, `Confidence.MEDIUM`, and capped CVE/KEV/EPSS evidence, and wired it into `web_active.checks`, `app.py`, and `workers/app.py` (#75).
+- Added unit tests (`tests/unit/scanners/web/test_components.py`, `test_profiles.py`) and Postgres integration tests (`tests/integration/workers/test_web_components.py`), and updated `docs/scanners.md`, `docs/security.md`, and `CHANGELOG.md` (#75).
 
 ## Next step
-Implement #75: Flag known-vulnerable web components from fingerprints (start after #73 PR is merged).
+Implement #76: Check TLS certificates and configuration of web hosts (start after #75 PR is merged).
 
 ## Open threads
 - **Proxy trust:** the proxy has no caller authentication and `worker-analysis` shares the `sandbox` network with it (`docs/security.md`; #92 must close it before prod).

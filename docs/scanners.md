@@ -11,7 +11,7 @@ in this catalog (`src/attacksurf/domain/rules/`).
 | Profile | Availability | Discovery plugins | Check plugins | Discovery cap |
 |---|---|---|---|---|
 | `dns_passive` | UI, API, CLI | `dns.discovery.ct` | `dns.resolve`, `dns.email`, `dns.takeover`, `dns.takeover.http`, `dns.dnssec`, `dns.ns`, `dns.mx`, `dns.caa`, `dns.whois`, `dns.axfr` | `1000` assets / root |
-| `web_active` | UI, API, CLI | `web.probe` | — | `1000` assets / root |
+| `web_active` | UI, API, CLI | `web.probe` | `web.components` | `1000` assets / root |
 | `dns_scheduled` | Scheduled rescans only (internal) | — | `dns.resolve`, `dns.email`, `dns.dnssec` | `1000` assets / root |
 
 > [!NOTE]
@@ -42,10 +42,11 @@ job status when active scans are disabled or the target is unverified.
 | `dns.whois` | `domain` | No | 60 s | RDAP via IANA bootstrap (4 DNS lookups, 24 h cache) | Fetches registration metadata for the domain via IANA RDAP bootstrap (`https`) to flag imminent expiry (< 30 / < 7 days) and missing transfer locks. |
 | `dns.axfr` | `domain` | **Yes** (`zone_transfer`) | 60 s | Authoritative `AXFR` (16 lookups) | Sends one zone-transfer request per nameserver when the scanned domain owns `NS` records itself; records only whether AXFR succeeded and the record count (never stores zone contents). |
 | `web.probe` | `domain`, `subdomain`, `url` | **Yes** (`TARGET`) | 60 s | `TARGET` HTTP (256 KiB GET on ports `80`/`443`, verified same-root redirects ≤ 4 hops), 16 DNS lookups | Probes `https://` then `http://` on active verified hosts, creates `url` assets and `serves` relations with capped metadata (`headers`, redacted `Set-Cookie`, trimmed title, body SHA-256), passively fingerprints `technologies` from the captured response (`scanners/web/fingerprint.py`), flags versioned `Server`/`X-Powered-By` headers (`web.disclosure.version_banner`), stops cleanly before out-of-scope redirects, and deactivates non-responding discovered `url` assets on rescan. |
+| `web.components` | `url` | No | 30 s | None (`VulnIntelLookup` read-only DB catalog) | Matches fingerprinted `Asset.details["technologies"]` with concrete versions against the local NVD/KEV/EPSS store using a curated technology → CPE mapping, emitting CVSS-scored `web.components.known_vulnerable` findings bumped on CISA KEV. |
 
 ---
 
-## Detection Rules (26)
+## Detection Rules (27)
 
 ### DNS Records (`dns.resolve`)
 
@@ -102,6 +103,12 @@ job status when active scans are disabled or the target is unverified.
 | Rule ID | Default severity | Title | References |
 |---|---|---|---|
 | `web.disclosure.version_banner` | `info` | HTTP response header discloses software version | [OWASP WSTG-INFO-02](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/02-Fingerprint_Web_Server), [RFC 9110 §10.2.4](https://www.rfc-editor.org/rfc/rfc9110#section-10.2.4) |
+
+### Web Components (`web.components`)
+
+| Rule ID | Default severity | Title | References |
+|---|---|---|---|
+| `web.components.known_vulnerable` | `medium` *(CVSS + KEV bump)* | Web component matches known vulnerabilities | [NVD](https://nvd.nist.gov/), [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog), [FIRST EPSS](https://www.first.org/epss/) |
 
 ---
 

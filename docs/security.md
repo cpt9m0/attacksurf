@@ -125,7 +125,9 @@ verifies `URL` assets only when recorded under a verified active root domain who
 contains the URL host, and response `Set-Cookie` values are always redacted to `<redacted>`.
 Technology fingerprinting (`scanners/web/fingerprint.py`, #73) inspects only the response
 already captured by `web.probe` (zero extra network requests, cookie names only, ReDoS-audited
-subset of GPL-3.0 `enthec/webappanalyzer` rules).
+subset of GPL-3.0 `enthec/webappanalyzer` rules). Known-vulnerable component matching
+(`web.components`, #75) runs passively with `ScannerGrant()` (no outbound network) against the
+local global `vuln_cves` / `vuln_cpe_ranges` catalog via `VulnIntelLookup`.
 Planned #77–#79 checks will expand `ScannerGrant` with `http_methods`,
 `http_paths`, and `soft_404_probe`. CT discovery's
 random-label wildcard probes use the same guarded DNS adapter and DNS budget; a wildcard marker
