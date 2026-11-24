@@ -168,19 +168,23 @@ def _has_valid_xfo(raw_xfo: str) -> bool:
 def _has_clickjacking_protection(
     headers: Mapping[str, str],
     policies: Sequence[Mapping[str, tuple[str, ...]]],
-) -> bool:
+    *,
+    xfo_truncated: bool = False,
+) -> bool | None:
     fa_directives = [
         [token.lower() for token in fa]
         for directives in policies
         if (fa := directives.get("frame-ancestors")) is not None
     ]
     if fa_directives:
-        # CSP3 §7.7.1: X-Frame-Options is ignored whenever frame-ancestors is set, and browsers
-        # enforce every policy so any restrictive frame-ancestors policy protects the response.
+        # CSP3 §7.7.1: X-Frame-Options is ignored whenever frame-ancestors is set, and CSP3 §4.2
+        # treats an empty source list equivalently to `'none'`.
         return any(
-            bool(tokens) and not any(token in _WILDCARD_FRAME_ANCESTORS for token in tokens)
+            not any(token in _WILDCARD_FRAME_ANCESTORS for token in tokens)
             for tokens in fa_directives
         )
+    if xfo_truncated:
+        return None
     return _has_valid_xfo(headers.get("x-frame-options", ""))
 
 
@@ -277,9 +281,12 @@ def _check_hsts(
     final_scheme: str,
     status_code: int | None,
     headers: Mapping[str, str],
-) -> bool:
+    hsts_truncated: bool = False,
+) -> bool | None:
     if final_scheme != "https":
         return False
+    if hsts_truncated:
+        return None
     hsts = headers.get("strict-transport-security", "").strip()
     relevant = _subset_headers(headers, "strict-transport-security")
     if not hsts:
@@ -329,12 +336,13 @@ def _check_csp_and_framing(
     status_code: int | None,
     headers: Mapping[str, str],
     csp_truncated: bool,
+    xfo_truncated: bool = False,
 ) -> tuple[bool | None, bool | None]:
     if csp_truncated:
         return None, None
     raw_csp = headers.get("content-security-policy", "").strip()
     policies = _parse_csp_policies(raw_csp) if raw_csp else []
-    frame_ok = _has_clickjacking_protection(headers, policies)
+    frame_ok = _has_clickjacking_protection(headers, policies, xfo_truncated=xfo_truncated)
     if not is_html:
         return bool(raw_csp), frame_ok
 
@@ -377,7 +385,7 @@ def _check_csp_and_framing(
         else:
             csp_ok = True
 
-    if not frame_ok:
+    if frame_ok is False:
         framing_headers = _subset_headers(
             headers,
             "x-frame-options",
@@ -405,7 +413,10 @@ def _check_nosniff(
     final_url: str,
     status_code: int | None,
     headers: Mapping[str, str],
-) -> bool:
+    nosniff_truncated: bool = False,
+) -> bool | None:
+    if nosniff_truncated:
+        return None
     nosniff = headers.get("x-content-type-options", "").strip().lower() == "nosniff"
     if not nosniff:
         findings.append(
@@ -534,6 +545,9 @@ class WebHeaders:
             else set()
         )
         csp_truncated = "content-security-policy" in truncated_headers
+        hsts_truncated = "strict-transport-security" in truncated_headers
+        xfo_truncated = "x-frame-options" in truncated_headers
+        nosniff_truncated = "x-content-type-options" in truncated_headers
 
         findings: list[RawFinding] = []
         hsts_ok = _check_hsts(
@@ -542,13 +556,20 @@ class WebHeaders:
             final_scheme=final_scheme,
             status_code=status_code,
             headers=headers,
+            hsts_truncated=hsts_truncated,
         )
         if stopped_out_of_scope:
             csp_ok: bool | None = None if csp_truncated else False
             frame_ok: bool | None = (
-                None if csp_truncated else _has_clickjacking_protection(headers, ())
+                None
+                if csp_truncated
+                else _has_clickjacking_protection(headers, (), xfo_truncated=xfo_truncated)
             )
-            nosniff_ok = headers.get("x-content-type-options", "").strip().lower() == "nosniff"
+            nosniff_ok: bool | None = (
+                None
+                if nosniff_truncated
+                else headers.get("x-content-type-options", "").strip().lower() == "nosniff"
+            )
         else:
             csp_ok, frame_ok = _check_csp_and_framing(
                 findings,
@@ -557,12 +578,14 @@ class WebHeaders:
                 status_code=status_code,
                 headers=headers,
                 csp_truncated=csp_truncated,
+                xfo_truncated=xfo_truncated,
             )
             nosniff_ok = _check_nosniff(
                 findings,
                 final_url=final_url,
                 status_code=status_code,
                 headers=headers,
+                nosniff_truncated=nosniff_truncated,
             )
 
         raw_truncated_cookies = web.get("cookies_truncated")

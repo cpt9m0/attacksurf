@@ -762,6 +762,57 @@ def test_web_headers_rejects_malformed_nonce_and_honors_strict_dynamic() -> None
     assert strict_out.findings == ()
 
 
+def test_web_headers_honors_truncation_for_non_csp_headers() -> None:
+    ctx, _ = _ctx(
+        web_details={
+            "final_url": "https://acme.com/",
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": {
+                "content-security-policy": "default-src 'self'",
+            },
+            "headers_truncated": [
+                "strict-transport-security",
+                "x-content-type-options",
+                "x-frame-options",
+            ],
+            "cookies": [],
+        }
+    )
+
+    out = WebHeaders().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+
+    assert out.findings == ()
+    summary = out.observations[0].details["security_headers"]
+    assert isinstance(summary, dict)
+    assert summary["hsts"] is None
+    assert summary["nosniff"] is None
+    assert summary["clickjacking_protected"] is None
+
+
+def test_web_headers_treats_empty_frame_ancestors_as_blocking() -> None:
+    ctx, _ = _ctx(
+        web_details={
+            "final_url": "https://acme.com/",
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": {
+                "strict-transport-security": "max-age=31536000",
+                "content-security-policy": "default-src 'self'; frame-ancestors",
+                "x-content-type-options": "nosniff",
+            },
+            "cookies": [],
+        }
+    )
+
+    out = WebHeaders().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+
+    assert out.findings == ()
+    summary = out.observations[0].details["security_headers"]
+    assert isinstance(summary, dict)
+    assert summary["clickjacking_protected"] is True
+
+
 def test_web_rules_catalog_includes_all_issue_77_rules_with_expected_severities() -> None:
     catalog = build_catalog(WEB_RULES)
     expected = {
