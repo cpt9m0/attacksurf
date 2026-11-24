@@ -222,3 +222,24 @@ def test_fingerprint_bootstrap_and_adversarial_near_misses_stay_linear() -> None
     for payload in adversarial_bodies:
         fingerprint_response({"Content-Type": "text/html"}, payload, "text/html")
     assert time.monotonic() - start < 0.5
+
+
+def test_fingerprint_handles_malformed_html_marked_section_without_crashing() -> None:
+    malformed = ("<title>Acme</title>" + (" " * 70_000) + "<![foo]><div>body</div>").encode()
+    techs = fingerprint_response(
+        {"Server": "nginx/1.26.2", "Content-Type": "text/html"},
+        malformed,
+        "text/html",
+    )
+    by_name = {t.name: t for t in techs}
+    assert by_name["Nginx"].version == "1.26.2"
+
+
+def test_fingerprint_sonarqube_script_src_query_delimiter() -> None:
+    hit_html = b'<script src="/js/bundles/sonar.js?v=6.7.7"></script>'
+    techs = fingerprint_response({"Content-Type": "text/html"}, hit_html, "text/html")
+    assert {t.name: t.version for t in techs}["SonarQube"] == "6.7.7"
+
+    miss_html = b'<script src="/js/bundles/sonar.jsv=6.7.7"></script>'
+    miss_techs = fingerprint_response({"Content-Type": "text/html"}, miss_html, "text/html")
+    assert "SonarQube" not in {t.name for t in miss_techs}

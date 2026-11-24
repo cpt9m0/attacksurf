@@ -436,3 +436,30 @@ def test_web_probe_keeps_priority_version_headers_and_drops_capped_findings() ->
     assert len(out.findings) == 1
     assert out.findings[0].asset == AssetRef(type=AssetType.URL, value="https://acme.example/")
     assert out.findings[0].remediation_context["headers"] == "Server, X-Powered-By"
+    ev_data = out.findings[0].evidence[0].data
+    assert ev_data == {
+        "url": "https://acme.example/",
+        "status_code": 200,
+        "headers": {"server": "nginx/1.26.2", "x-powered-by": "PHP/8.2.15"},
+    }
+
+
+def test_web_probe_survives_malformed_html_marked_section() -> None:
+    http = _StubHttp(
+        {
+            "https://acme.example/": HttpBody(
+                200,
+                b"<title>Ok</title>" + (b" " * 70_000) + b"<![foo]><html>",
+                False,
+                {"content-type": "text/html", "server": "nginx/1.26.2"},
+                final_url="https://acme.example/",
+            ),
+            "http://acme.example/": ScopeError("Unreachable."),
+        }
+    )
+
+    out = WebProbe().run(_ctx(http), AssetRef(type=AssetType.DOMAIN, value="acme.example"))
+    assert len(out.assets) == 1
+    assert out.observations[0].active is True
+    assert out.observations[0].details["web"]["title"] == "Ok"  # type: ignore[index]
+    assert [f.rule_id for f in out.findings] == ["web.disclosure.version_banner"]

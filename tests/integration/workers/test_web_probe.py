@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from attacksurf.domain.assets import AssetSource, AssetType, RelationKind
 from attacksurf.domain.events import DomainEvent
-from attacksurf.domain.findings import Severity
+from attacksurf.domain.findings import FindingStatus, Severity
 from attacksurf.domain.jobs import JobTask, PipelineQueue, TaskQueue
 from attacksurf.domain.net import DnsError, HttpBody
 from attacksurf.domain.scans import JobStatus, ScanStatus
@@ -128,7 +128,11 @@ def test_web_active_discovers_urls_for_verified_hosts_and_deactivates_missing_on
                 200,
                 b'<title>Acme Root</title><meta name="generator" content="WordPress 6.5.2">',
                 False,
-                {"content-type": "text/html", "server": "nginx/1.26.2"},
+                {
+                    "content-type": "text/html",
+                    "server": "nginx/1.26.2",
+                    "date": "Mon, 23 Nov 2026 00:00:00 GMT",
+                },
                 final_url="https://example.com/",
             ),
             "http://example.com/": _unreachable,
@@ -205,7 +209,8 @@ def test_web_active_discovers_urls_for_verified_hosts_and_deactivates_missing_on
     ).all()
     assert len(serves_edges) == 2
 
-    # Mark first scan complete so we can run a second `web_active` scan where app URL is gone.
+    # Suppress the version-banner finding; rescan with changed Date/body keeps it suppressed.
+    findings[0].status = FindingStatus.FALSE_POSITIVE
     first_scan = db_session.get_one(Scan, scan.id)
     first_scan.status = ScanStatus.COMPLETED
     db_session.commit()
@@ -215,9 +220,13 @@ def test_web_active_discovers_urls_for_verified_hosts_and_deactivates_missing_on
         {
             "https://example.com/": HttpBody(
                 200,
-                b"<title>Acme Root</title>",
+                b"<title>Acme Root Updated</title>",
                 False,
-                {"content-type": "text/html"},
+                {
+                    "content-type": "text/html",
+                    "server": "nginx/1.26.2",
+                    "date": "Tue, 24 Nov 2026 00:00:00 GMT",
+                },
                 final_url="https://example.com/",
             ),
             "http://example.com/": _unreachable,
@@ -268,6 +277,8 @@ def test_web_active_discovers_urls_for_verified_hosts_and_deactivates_missing_on
         "https://example.com/": True,
         "https://app.example.com/": False,
     }
+    persisted_finding = db_session.get_one(Finding, findings[0].id)
+    assert persisted_finding.status is FindingStatus.FALSE_POSITIVE
     assert db_session.get(Scan, scan2.id) is not None
 
 

@@ -123,8 +123,12 @@ def extract_html_title(content: bytes, content_type: str) -> str:
     if not media_type and "<title" not in text.lower():
         return ""
     parser = _TitleParser()
-    parser.feed(text)
-    parser.close()
+    try:
+        parser.feed(text)
+        parser.close()
+    except AssertionError:
+        # Python 3.12 HTMLParser raises AssertionError on malformed marked sections (<![foo]>).
+        pass
     collapsed = " ".join("".join(parser.chunks).split())
     return collapsed[:MAX_TITLE_CHARS]
 
@@ -329,6 +333,18 @@ def _fit_observation_details(
     return details
 
 
+def _version_banner_evidence(capture: _CapturedProbe) -> RawEvidence:
+    """Keep only URL, status, and disclosed version headers so volatile headers stay ignored."""
+    return RawEvidence(
+        kind=EvidenceKind.HTTP_RESPONSE,
+        data={
+            "url": capture.probe.final_url,
+            "status_code": capture.probe.status_code,
+            "headers": {k.lower(): v for k, v in capture.version_banners.items()},
+        },
+    )
+
+
 def _version_banner_finding(asset: AssetRef, capture: _CapturedProbe) -> RawFinding | None:
     if not capture.version_banners:
         return None
@@ -342,7 +358,7 @@ def _version_banner_finding(asset: AssetRef, capture: _CapturedProbe) -> RawFind
             "url": capture.probe.final_url,
             "headers": ", ".join(capture.version_banners),
         },
-        evidence=(build_http_response_evidence(capture.probe),),
+        evidence=(_version_banner_evidence(capture),),
     )
 
 

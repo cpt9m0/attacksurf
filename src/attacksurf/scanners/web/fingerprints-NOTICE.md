@@ -27,7 +27,8 @@ pinned commit:
   `Werkzeug/X.Y.Z` server banner does not assign Werkzeug's version number to Flask.
 - Audited every regular expression and rewrote or bounded backtracking-prone HTML/script regexes
   (`Bootstrap`, `Alpine.js`, `PrestaShop`, `Vue.js`, `WooCommerce`, and unbounded `<tag[^>]+` /
-  `[^<]*` tag scans) for linear-time matching on untrusted response bodies.
+  `[^<]*` tag scans) for linear-time matching on untrusted response bodies, and escaped the
+  literal query delimiter (`\?v=`) in `SonarQube`'s `script_src` signature.
 
 To update: re-fetch `src/categories.json` and `src/technologies/*.json` from
 `enthec/webappanalyzer` at a new pinned commit, re-apply the curation and transformation rules

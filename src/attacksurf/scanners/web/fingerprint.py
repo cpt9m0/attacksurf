@@ -286,8 +286,12 @@ def _extract_html_signals(
         return {}, (), ""
 
     parser = _SignalHTMLParser()
-    parser.feed(parse_text)
-    parser.close()
+    try:
+        parser.feed(parse_text)
+        parser.close()
+    except AssertionError:
+        # Python 3.12 HTMLParser raises AssertionError on malformed marked sections (<![foo]>).
+        pass
     regex_text = body[:MAX_HTML_REGEX_BYTES].decode("utf-8", errors="replace").replace("\x00", "")
     meta = {k: tuple(v) for k, v in parser.meta.items()}
     return meta, tuple(parser.script_srcs), regex_text
