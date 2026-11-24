@@ -2,7 +2,9 @@
 
 import json
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Protocol, Self
 from uuid import UUID
 
@@ -206,6 +208,8 @@ class ScanContext:
     # ADR 0022 marks wildcard zones in Asset.details; a resolver must not deactivate a zone
     # just because one random name under it has no records of its own.
     target_is_wildcard: bool = False
+    # Read-only snapshot of target `Asset.details` (e.g. `technologies` for web component checks).
+    target_details: Mapping[str, JsonValue] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True)

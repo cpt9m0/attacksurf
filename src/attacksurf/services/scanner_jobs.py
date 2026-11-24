@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import replace
+from types import MappingProxyType
 from uuid import UUID
 
 import structlog
@@ -77,6 +78,7 @@ def run_check(
         scan.profile,
         max_discovered_assets=profile.max_discovered_assets if profile else None,
         target_is_wildcard=bool((asset.details or {}).get("wildcard")),
+        target_details=MappingProxyType(dict(asset.details or {})),
     )
     session.rollback()  # release connection/transaction before untrusted or slow I/O
     try:

@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from attacksurf.domain.ids import uuid7
 from attacksurf.domain.vulnintel import (
@@ -385,3 +385,16 @@ def match_product(
         )
     )
     return tuple(results)
+
+
+class DbVulnIntelLookup:
+    """Short-lived read-only vulnerability catalog lookup for passive scanners."""
+
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+        self._session_factory = session_factory
+
+    def match_product(
+        self, vendor: str, product: str, version: str
+    ) -> tuple[ProductVulnerability, ...]:
+        with self._session_factory() as session:
+            return match_product(session, vendor, product, version)

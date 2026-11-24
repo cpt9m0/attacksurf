@@ -10,12 +10,15 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from attacksurf.domain.cache import NullCache, ScanCache
 from attacksurf.domain.sandbox import SandboxRunner, UnconfiguredSandboxRunner
 from attacksurf.domain.scope import ScopePolicyError
+
+if TYPE_CHECKING:
+    from attacksurf.domain.vulnintel import ProductVulnerability
 
 
 class DnsError(Exception):
@@ -354,6 +357,24 @@ class UnconfiguredTls:
         raise ScopePolicyError("This scanner may not perform TLS handshakes.")
 
 
+class VulnIntelLookup(Protocol):
+    def match_product(
+        self, vendor: str, product: str, version: str
+    ) -> "tuple[ProductVulnerability, ...]":
+        """Look up known vulnerabilities for `(vendor, product, version)`."""
+        ...
+
+
+class UnconfiguredVulnIntel:
+    """No local vulnerability store wired (unit tests / lightweight runners)."""
+
+    def match_product(
+        self, vendor: str, product: str, version: str
+    ) -> "tuple[ProductVulnerability, ...]":
+        del vendor, product, version
+        return ()
+
+
 class ScannerRuntime:
     """Run-scoped adapters handed to a plugin after the gate approved it."""
 
@@ -367,6 +388,7 @@ class ScannerRuntime:
         "rdap",
         "sandbox",
         "tls",
+        "vuln_intel",
         "zone_transfer",
     )
 
@@ -383,6 +405,7 @@ class ScannerRuntime:
         zone_transfer: ZoneTransfer | None = None,
         rdap: RdapLookup | None = None,
         tls: TlsInspector | None = None,
+        vuln_intel: VulnIntelLookup | None = None,
     ) -> None:
         self.dns = dns
         self.http = http
@@ -395,6 +418,7 @@ class ScannerRuntime:
         self.zone_transfer = zone_transfer or UnconfiguredZoneTransfer()
         self.rdap = rdap or UnconfiguredRdap()
         self.tls = tls or UnconfiguredTls()
+        self.vuln_intel = vuln_intel or UnconfiguredVulnIntel()
         # Registrable (organizational) domain for a hostname, from the public suffix list;
         # None when unconfigured or the name is off the list. Lets checks apply DMARC's
         # organizational-domain fallback without importing the PSL themselves.

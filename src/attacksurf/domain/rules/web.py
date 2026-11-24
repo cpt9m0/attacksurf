@@ -22,4 +22,24 @@ VERSION_BANNER = Rule(
     ),
 )
 
-WEB_RULES: tuple[Rule, ...] = (VERSION_BANNER,)
+KNOWN_VULNERABLE_COMPONENT = Rule(
+    id="web.components.known_vulnerable",
+    title="Web component matches known vulnerabilities",
+    description=(
+        "A fingerprinted web technology and version match known CVEs in the local NVD, CISA "
+        "KEV, and FIRST EPSS vulnerability catalog. Confidence is medium because Linux "
+        "distributions often backport security patches while keeping older version banners."
+    ),
+    default_severity=Severity.MEDIUM,
+    remediation=(
+        "Verify whether $product $version on $url is patched against $cve_summary, prioritising "
+        "any CISA KEV entries, and upgrade to a supported release if vulnerable."
+    ),
+    references=(
+        "https://nvd.nist.gov/",
+        "https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+        "https://www.first.org/epss/",
+    ),
+)
+
+WEB_RULES: tuple[Rule, ...] = (VERSION_BANNER, KNOWN_VULNERABLE_COMPONENT)

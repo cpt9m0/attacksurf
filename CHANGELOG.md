@@ -6,6 +6,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Known-vulnerable web component matcher (`web.components`, `scanners/web/components.py`),
+  wired into `web_active.checks`, `VulnIntelLookup` / `DbVulnIntelLookup`, and
+  `ScanContext.target_details`: maps fingerprinted URL technologies with versions to NVD CPEs,
+  queries the local NVD/KEV/EPSS store, emits `web.components.known_vulnerable` findings with
+  CVSS-derived severity raised on CISA KEV, `medium` confidence, capped CVE evidence, and stable
+  evidence digesting across daily EPSS updates (#75).
 - Passive web technology fingerprinting (`scanners/web/fingerprint.py`) over captured `web.probe`
   responses using a curated, ReDoS-audited dataset vendored from `enthec/webappanalyzer`
   (GPL-3.0; headers, Set-Cookie names only, `<meta>`, `<script src>`, HTML patterns, and

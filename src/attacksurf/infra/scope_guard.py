@@ -34,6 +34,7 @@ from attacksurf.domain.net import (
     TargetRateLimiter,
     TlsInspection,
     TlsInspector,
+    VulnIntelLookup,
     ZoneAnswers,
     ZoneTransfer,
     ZoneTransferAttempt,
@@ -101,6 +102,7 @@ class ScopeGuard(ScannerGate):
         rate_limiter: TargetRateLimiter | None = None,
         user_agent: str | None = None,
         tls: TlsConnector | None = None,
+        vuln_intel: VulnIntelLookup | None = None,
     ) -> None:
         self._dns = dns
         self._http = http
@@ -113,6 +115,7 @@ class ScopeGuard(ScannerGate):
         self._rate_limiter = rate_limiter
         self._user_agent = user_agent
         self._tls = tls
+        self._vuln_intel = vuln_intel
 
     def check(self, ctx: ScanContext, asset: AssetRef, scanner: Scanner) -> ScannerRuntime:
         """Validate and authorize one run. Raises `ScopeError`, and the job is then skipped."""
@@ -203,6 +206,7 @@ class ScopeGuard(ScannerGate):
                 else None
             ),
             tls=tls_inspector,
+            vuln_intel=self._vuln_intel,
         )
 
     def _check_target(self, asset: AssetRef, scanner: Scanner) -> None:
