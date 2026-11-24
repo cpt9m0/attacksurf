@@ -14,6 +14,7 @@ from attacksurf.infra.rate_limit import (
     ACQUIRE_LUA,
     InMemoryTargetRateLimiter,
     RedisTargetRateLimiter,
+    SystemClock,
     TargetRateLimitPolicy,
 )
 
@@ -237,3 +238,7 @@ def test_invalid_hosts_are_rejected(bad_host: str) -> None:
 def test_policy_rejects_invalid_values(kwargs: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match="must be"):
         TargetRateLimitPolicy(**kwargs)
+
+
+def test_system_clock_uses_unix_epoch_seconds() -> None:
+    assert SystemClock().now() > 1_700_000_000

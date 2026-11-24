@@ -84,7 +84,8 @@ class Clock(Protocol):
 
 class SystemClock:
     def now(self) -> float:
-        return time.monotonic()
+        # Epoch seconds: Redis keys are shared across workers and container restarts.
+        return time.time()
 
     def sleep(self, seconds: float) -> None:
         if seconds > 0:
