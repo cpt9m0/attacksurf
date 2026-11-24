@@ -171,8 +171,25 @@ class SafeHttpClient:
             try:
                 next_url = str(httpx.URL(url).join(body.headers.get("location", "")))
             except REDIRECT_ERRORS:
+                if self._stop_on_out_of_scope_redirect:
+                    return HttpBody(
+                        body.status_code,
+                        body.content,
+                        body.truncated,
+                        body.headers,
+                        final_url=url,
+                        redirect_chain=tuple(chain),
+                    )
                 raise ScopeError("Redirect target is invalid.") from None
-            if self._redirect_allowed is not None and not self._redirect_allowed(next_url):
+            try:
+                next_allowed = (
+                    True
+                    if self._redirect_allowed is None
+                    else bool(self._redirect_allowed(next_url))
+                )
+            except ScopeError:
+                next_allowed = False
+            if not next_allowed:
                 if self._stop_on_out_of_scope_redirect:
                     return HttpBody(
                         body.status_code,

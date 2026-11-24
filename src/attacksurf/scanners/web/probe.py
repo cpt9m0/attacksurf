@@ -7,6 +7,7 @@ inactive on rescan.
 """
 
 import hashlib
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -18,6 +19,7 @@ from attacksurf.domain.assets import AssetError, AssetType, RelationKind, normal
 from attacksurf.domain.findings import EvidenceKind
 from attacksurf.domain.net import DnsError, HttpBody
 from attacksurf.domain.scanners import (
+    MAX_ASSET_DETAILS_BYTES,
     AssetObservation,
     AssetRef,
     DiscoveredRelation,
@@ -217,16 +219,30 @@ def _probe_url(ctx: ScanContext, url: str) -> ProbeResult | None:
     return _to_probe_result(url, body)
 
 
-def _web_details(
-    probe: ProbeResult,
-    *,
-    https_reachable: bool | None = None,
-    http_probe: dict[str, JsonValue] | None = None,
-) -> dict[str, JsonValue]:
+_PRIORITY_HEADERS = frozenset(
+    {
+        "server",
+        "x-powered-by",
+        "content-type",
+        "location",
+        "strict-transport-security",
+        "content-security-policy",
+        "x-frame-options",
+        "x-content-type-options",
+        "referrer-policy",
+    }
+)
+
+
+def _details_bytes(details: dict[str, JsonValue]) -> int:
+    return len(json.dumps(details, ensure_ascii=False, allow_nan=False).encode())
+
+
+def _web_details(probe: ProbeResult) -> dict[str, JsonValue]:
     chain_data: list[JsonValue] = [
         {"url": hop_url, "status": hop_status} for hop_url, hop_status in probe.redirect_chain
     ]
-    data: dict[str, JsonValue] = {
+    return {
         "final_url": probe.final_url,
         "redirect_chain": chain_data,
         "redirect_stopped_out_of_scope": probe.redirect_stopped_out_of_scope,
@@ -239,11 +255,43 @@ def _web_details(
         "headers": dict(probe.headers),
         "cookies": list(probe.cookies),
     }
-    if https_reachable is not None:
-        data["https_reachable"] = https_reachable
-    if http_probe is not None:
-        data["http_probe"] = http_probe
-    return data
+
+
+def _fit_observation_details(
+    web: dict[str, JsonValue],
+    web_host: dict[str, JsonValue] | None = None,
+) -> dict[str, JsonValue]:
+    """Assemble `Asset.details` within `MAX_ASSET_DETAILS_BYTES`, trimming optional metadata."""
+    details: dict[str, JsonValue] = {"web": web}
+    if web_host is not None:
+        details["web_host"] = web_host
+    if _details_bytes(details) <= MAX_ASSET_DETAILS_BYTES:
+        return details
+
+    cookies = web.get("cookies")
+    if isinstance(cookies, list):
+        while cookies and _details_bytes(details) > MAX_ASSET_DETAILS_BYTES:
+            cookies.pop()
+
+    headers = web.get("headers")
+    if isinstance(headers, dict) and _details_bytes(details) > MAX_ASSET_DETAILS_BYTES:
+        drop_order = [k for k in headers if k not in _PRIORITY_HEADERS]
+        drop_order.extend(k for k in headers if k in _PRIORITY_HEADERS)
+        for key in reversed(drop_order):
+            if _details_bytes(details) <= MAX_ASSET_DETAILS_BYTES:
+                break
+            headers.pop(key, None)
+
+    chain = web.get("redirect_chain")
+    if isinstance(chain, list):
+        while chain and _details_bytes(details) > MAX_ASSET_DETAILS_BYTES:
+            chain.pop(0)
+
+    if _details_bytes(details) > MAX_ASSET_DETAILS_BYTES:
+        details.pop("web_host", None)
+    if _details_bytes(details) > MAX_ASSET_DETAILS_BYTES:
+        web["title"] = ""
+    return details
 
 
 @register_scanner
@@ -273,10 +321,9 @@ class WebProbe:
         res = _probe_url(ctx, asset.value)
         if res is None:
             return ScanOutput(observations=(AssetObservation(asset=asset, active=False),))
+        details = _fit_observation_details(_web_details(res))
         return ScanOutput(
-            observations=(
-                AssetObservation(asset=asset, details={"web": _web_details(res)}, active=True),
-            )
+            observations=(AssetObservation(asset=asset, details=details, active=True),)
         )
 
     def _probe_host(self, ctx: ScanContext, asset: AssetRef) -> ScanOutput:
@@ -289,7 +336,7 @@ class WebProbe:
         if https_res is None and http_res is None:
             return ScanOutput()
 
-        candidates: list[tuple[str, dict[str, JsonValue]]] = []
+        candidates: list[tuple[str, dict[str, JsonValue], dict[str, JsonValue]]] = []
         if https_res is not None:
             http_summary: dict[str, JsonValue] = (
                 {
@@ -308,19 +355,18 @@ class WebProbe:
             candidates.append(
                 (
                     https_res.final_url,
-                    _web_details(https_res, https_reachable=True, http_probe=http_summary),
+                    _web_details(https_res),
+                    {"https_reachable": True, "http_probe": http_summary},
                 )
             )
-            if (
-                http_res is not None
-                and http_res.final_url != https_res.final_url
-                and not http_res.final_url.startswith("https://")
-            ):
+            if http_res is not None and http_res.final_url != https_res.final_url:
                 candidates.append(
-                    (http_res.final_url, _web_details(http_res, https_reachable=True))
+                    (http_res.final_url, _web_details(http_res), {"https_reachable": True})
                 )
         elif http_res is not None:
-            candidates.append((http_res.final_url, _web_details(http_res, https_reachable=False)))
+            candidates.append(
+                (http_res.final_url, _web_details(http_res), {"https_reachable": False})
+            )
 
         if cap is not None:
             candidates = candidates[:cap]
@@ -329,7 +375,7 @@ class WebProbe:
         relations: list[DiscoveredRelation] = []
         observations: list[AssetObservation] = []
         seen_urls: set[str] = set()
-        for url, details in candidates:
+        for url, web, web_host in candidates:
             if url in seen_urls:
                 continue
             seen_urls.add(url)
@@ -339,7 +385,11 @@ class WebProbe:
                 DiscoveredRelation(from_asset=asset, to_asset=url_ref, kind=RelationKind.SERVES)
             )
             observations.append(
-                AssetObservation(asset=url_ref, details={"web": details}, active=True)
+                AssetObservation(
+                    asset=url_ref,
+                    details=_fit_observation_details(web, web_host),
+                    active=True,
+                )
             )
         return ScanOutput(
             assets=tuple(assets),

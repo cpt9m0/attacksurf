@@ -1,6 +1,7 @@
 """Unit tests for `web.probe` HTTP service discovery scanner (#72)."""
 
 import hashlib
+import json
 from uuid import uuid4
 
 import httpx
@@ -10,7 +11,7 @@ from attacksurf.domain.assets import AssetType, RelationKind
 from attacksurf.domain.findings import EvidenceKind
 from attacksurf.domain.jobs import TransientJobError
 from attacksurf.domain.net import DnsError, HttpBody, ScannerRuntime
-from attacksurf.domain.scanners import AssetRef, ScanContext, ScannerError
+from attacksurf.domain.scanners import MAX_ASSET_DETAILS_BYTES, AssetRef, ScanContext, ScannerError
 from attacksurf.domain.scope import ScopeError
 from attacksurf.scanners.web.probe import (
     MAX_BODY_EXCERPT_CHARS,
@@ -125,8 +126,10 @@ def test_web_probe_discovers_https_url_redacts_cookies_and_merges_http_redirect(
     assert "set-cookie" not in headers_dict
     assert web["cookies"] == ["sessionid=<redacted>; Path=/; HttpOnly; Secure"]
     assert "super-secret-value" not in repr(out)
-    assert web["https_reachable"] is True
-    assert web["http_probe"] == {
+    web_host = obs.details["web_host"]
+    assert isinstance(web_host, dict)
+    assert web_host["https_reachable"] is True
+    assert web_host["http_probe"] == {
         "reachable": True,
         "status_code": 301,
         "final_url": "https://www.acme.example/",
@@ -155,8 +158,10 @@ def test_web_probe_discovers_http_only_host() -> None:
     url_ref = AssetRef(type=AssetType.URL, value="http://legacy.acme.example/")
     assert out.assets == (url_ref,)
     web = out.observations[0].details["web"]
+    web_host = out.observations[0].details["web_host"]
     assert isinstance(web, dict)
-    assert web["https_reachable"] is False
+    assert isinstance(web_host, dict)
+    assert web_host["https_reachable"] is False
     assert web["title"] == "Intranet Portal"
 
 
@@ -234,7 +239,64 @@ def test_web_probe_marks_unreachable_url_inactive_and_refreshes_reachable_url() 
     )
     up = WebProbe().run(_ctx(up_http), url_ref)
     assert up.observations[0].active is True
+    assert "web_host" not in up.observations[0].details
     assert up.observations[0].details["web"]["title"] == "App"  # type: ignore[index]
+
+
+def test_web_probe_retains_distinct_https_destination_from_http_redirect() -> None:
+    http = _StubHttp(
+        {
+            "https://acme.example/": HttpBody(
+                200, b"<title>Apex</title>", False, {}, final_url="https://acme.example/"
+            ),
+            "http://acme.example/": HttpBody(
+                200,
+                b"<title>WWW</title>",
+                False,
+                {},
+                final_url="https://www.acme.example/",
+                redirect_chain=(("http://acme.example/", 301),),
+            ),
+        }
+    )
+
+    out = WebProbe().run(_ctx(http), AssetRef(type=AssetType.DOMAIN, value="acme.example"))
+
+    assert [a.value for a in out.assets] == [
+        "https://acme.example/",
+        "https://www.acme.example/",
+    ]
+
+
+def test_web_probe_trims_huge_metadata_to_fit_observation_byte_budget() -> None:
+    headers_list = (
+        [("server", "nginx")]
+        + [(f"x-extra-{i}", "v" * 250) for i in range(29)]
+        + [("set-cookie", f"c{i}={'s' * 200}; Path=/; HttpOnly") for i in range(20)]
+    )
+    long_hops = tuple((f"https://acme.example/{'a' * 1900}-{i}", 302) for i in range(4))
+    http = _StubHttp(
+        {
+            "https://acme.example/": HttpBody(
+                200,
+                b"<title>Big</title>",
+                False,
+                httpx.Headers(headers_list),
+                final_url="https://acme.example/final",
+                redirect_chain=long_hops,
+            ),
+            "http://acme.example/": ScopeError("Unreachable."),
+        }
+    )
+
+    out = WebProbe().run(_ctx(http), AssetRef(type=AssetType.DOMAIN, value="acme.example"))
+
+    encoded = json.dumps(out.observations[0].details, ensure_ascii=False).encode()
+    assert len(encoded) <= MAX_ASSET_DETAILS_BYTES
+    web = out.observations[0].details["web"]
+    assert isinstance(web, dict)
+    assert web["final_url"] == "https://acme.example/final"
+    assert web["headers"]["server"] == "nginx"  # type: ignore[index]
 
 
 def test_web_probe_propagates_transient_job_error() -> None:

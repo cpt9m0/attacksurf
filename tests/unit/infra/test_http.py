@@ -581,3 +581,19 @@ def test_redirects_record_final_url_chain_and_can_stop_at_out_of_scope_hop(
     assert direct.final_url == f"http://public.example:{port}/redirect"
     assert direct.redirect_chain == ()
     no_follow.close()
+
+    def _raise_internal_host(url: str) -> bool:
+        if "other.example" in url:
+            raise ScopeError("internal hostname rejected")
+        return True
+
+    raising_stop = base.with_redirect_policy(
+        resolver,
+        redirect_allowed=_raise_internal_host,
+        max_redirects=4,
+        stop_on_out_of_scope_redirect=True,
+    )
+    stopped = raising_stop.get(f"http://public.example:{port}/cross-redirect", limit=100)
+    assert stopped.status_code == 302
+    assert stopped.final_url == f"http://public.example:{port}/cross-redirect"
+    raising_stop.close()
