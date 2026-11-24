@@ -14,7 +14,7 @@ from attacksurf.domain.assets import AssetSource, AssetType
 from attacksurf.domain.events import DomainEvent
 from attacksurf.domain.findings import Severity
 from attacksurf.domain.jobs import JobTask, PipelineQueue, TaskQueue
-from attacksurf.domain.net import TlsError
+from attacksurf.domain.net import DnsError, TlsError
 from attacksurf.domain.scans import JobStatus
 from attacksurf.domain.verification import VerificationMethod, VerificationStatus
 from attacksurf.infra import public_suffix
@@ -253,6 +253,106 @@ def test_web_tls_skips_unverified_url_without_handshakes(db_session: Session) ->
     _run_tls_check(db_session, org.id, root.id, connector)
 
     assert connector.calls == []
-    tls_job = db_session.scalars(scoped(Job, org.id).where(Job.scanner == "web.tls")).one()
-    assert tls_job.status is JobStatus.SKIPPED
+    tls_jobs = db_session.scalars(scoped(Job, org.id).where(Job.scanner == "web.tls")).all()
+    assert [j.status for j in tls_jobs] == [JobStatus.SKIPPED, JobStatus.SKIPPED]
     assert db_session.scalars(scoped(Finding, org.id)).all() == []
+
+
+def _setup_verified_root_only(db_session: Session, host: str = "example.com") -> tuple[Org, Asset]:
+    org = Org(name="Acme", slug="acme")
+    db_session.add(org)
+    db_session.flush()
+    root = assets_service.add_root_domain(db_session, org.id, host, actor_id=None)
+    now = datetime.now(UTC)
+    db_session.add(
+        Verification(
+            org_id=org.id,
+            asset_id=root.id,
+            method=VerificationMethod.DNS_TXT,
+            token="verify-tok",
+            status=VerificationStatus.VERIFIED,
+            verified_at=now,
+            last_checked_at=now,
+            recheck_at=now + timedelta(hours=20),
+            expires_at=now + timedelta(hours=24),
+        )
+    )
+    db_session.commit()
+    return org, root
+
+
+def test_web_tls_checks_verified_domain_even_when_https_discovery_failed(
+    db_session: Session,
+) -> None:
+    org, root = _setup_verified_root_only(db_session)
+    connector = _FakeTlsConnector(
+        {"example.com": _der_cert(cn="example.com", san="example.com", days_offset_end=90)}
+    )
+    dns = MutableDnsZone()
+    dns.set_records("example.com", "A", ("93.184.216.34",))
+    factory = sessionmaker(bind=db_session.get_bind())
+    guard = ScopeGuard(
+        dns=dns,
+        http=FakeScopeHttp(
+            {
+                "https://example.com/": lambda _u: (_ for _ in ()).throw(
+                    DnsError("TLS verify failed")
+                ),
+                "http://example.com/": lambda _u: (_ for _ in ()).throw(DnsError("unreachable")),
+            }
+        ),
+        ownership=DbOwnershipChecker(factory),
+        classify=public_suffix.classify,
+        active_scans_enabled=True,
+        tls=connector,
+    )
+    q_disc = _Queue()
+    scans.start_scan(
+        db_session,
+        q_disc,
+        org_id=org.id,
+        root_asset_id=root.id,
+        profile="web_active",
+        registry=registry,
+        profiles=PROFILES,
+    )
+    scans.dispatch_stage(
+        db_session, q_disc, org.id, q_disc.tasks[0][2], registry=registry, profiles=PROFILES
+    )
+    db_session.commit()
+    events = _Events()
+    for task in q_disc.header:
+        run_check(
+            db_session,
+            org.id,
+            task.job_id,
+            registry=registry,
+            gate=guard,
+            events=events,
+            retry_allowed=False,
+            profiles=PROFILES,
+        )
+    assert db_session.scalars(scoped(Asset, org.id).where(Asset.type == AssetType.URL)).all() == []
+
+    q_chk = _Queue()
+    scans.dispatch_stage(
+        db_session, q_chk, org.id, q_disc.tail[0].job_id, registry=registry, profiles=PROFILES
+    )
+    db_session.commit()
+    for task in q_chk.header:
+        run_check(
+            db_session,
+            org.id,
+            task.job_id,
+            registry=registry,
+            gate=guard,
+            events=events,
+            retry_allowed=False,
+            profiles=PROFILES,
+        )
+
+    db_session.expire_all()
+    refreshed_root = db_session.get_one(Asset, root.id)
+    assert refreshed_root.details["tls"]["protocol"] == "TLSv1.3"
+    by_rule = {f.rule_id for f in db_session.scalars(scoped(Finding, org.id)).all()}
+    assert by_rule == {"web.tls.untrusted_chain", "web.tls.legacy_protocol"}

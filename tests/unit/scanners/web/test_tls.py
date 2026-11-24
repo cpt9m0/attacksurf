@@ -357,3 +357,73 @@ def test_web_tls_skips_http_or_unreachable_and_keeps_digest_stable_across_ip_and
         .findings
         == ()
     )
+
+
+@pytest.mark.parametrize(
+    ("asset_type", "value", "expected_host"),
+    [
+        (AssetType.DOMAIN, "acme.example", "acme.example"),
+        (AssetType.SUBDOMAIN, "app.acme.example", "app.acme.example"),
+    ],
+)
+def test_web_tls_inspects_verified_domain_and_subdomain_hosts_directly(
+    asset_type: AssetType, value: str, expected_host: str
+) -> None:
+    tls = _StubTls(
+        _inspection(
+            host=expected_host,
+            error_code="self_signed_certificate",
+            trusted_chain=False,
+        )
+    )
+    out = WebTls(clock=lambda: NOW).run(_ctx(tls), AssetRef(type=asset_type, value=value))
+    assert tls.calls == [(expected_host, 443, True)]
+    assert [f.rule_id for f in out.findings] == ["web.tls.untrusted_chain"]
+    assert out.observations[0].details["tls"]["host"] == expected_host  # type: ignore[index]
+
+
+def test_web_tls_retains_validity_findings_for_expired_intermediate_and_not_yet_valid() -> None:
+    valid_leaf = _cert(not_after=NOW + timedelta(days=90), is_self_signed=False)
+    expired_intermediate = _cert(
+        subject="CN=Expired Intermediate",
+        issuer="CN=Root CA",
+        not_after=NOW - timedelta(days=3),
+        is_self_signed=False,
+    )
+    chain_findings = evaluate_tls_inspection(
+        AssetRef(type=AssetType.URL, value="https://acme.example/"),
+        _inspection(
+            trusted_chain=False,
+            error_code="certificate_expired",
+            chain=(valid_leaf, expired_intermediate),
+        ),
+        now=NOW,
+    )
+    assert [f.rule_id for f in chain_findings] == ["web.tls.cert_expired"]
+
+    leaf_only_findings = evaluate_tls_inspection(
+        AssetRef(type=AssetType.URL, value="https://acme.example/"),
+        _inspection(
+            trusted_chain=False,
+            error_code="certificate_expired",
+            chain=(valid_leaf,),
+        ),
+        now=NOW,
+    )
+    assert [f.rule_id for f in leaf_only_findings] == ["web.tls.untrusted_chain"]
+
+    future_leaf = _cert(
+        not_before=NOW + timedelta(days=5),
+        not_after=NOW + timedelta(days=95),
+        is_self_signed=False,
+    )
+    future_findings = evaluate_tls_inspection(
+        AssetRef(type=AssetType.URL, value="https://acme.example/"),
+        _inspection(
+            trusted_chain=False,
+            error_code="certificate_not_yet_valid",
+            chain=(future_leaf,),
+        ),
+        now=NOW,
+    )
+    assert [f.rule_id for f in future_findings] == ["web.tls.untrusted_chain"]

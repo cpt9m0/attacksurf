@@ -256,7 +256,11 @@ def test_web_components_pipeline_flags_known_cves_and_tolerates_epss_updates(
             profiles=PROFILES,
         )
         db_session.commit()
-        assert sorted(t.task_name for t in q_chk.header) == ["active.scan", "passive.scan"]
+        assert sorted(t.task_name for t in q_chk.header) == [
+            "active.scan",
+            "active.scan",
+            "passive.scan",
+        ]
         for task in q_chk.header:
             run_check(
                 db_session,

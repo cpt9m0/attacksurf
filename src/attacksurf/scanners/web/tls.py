@@ -33,7 +33,6 @@ STRONG_EC_CURVES = frozenset({"secp256r1", "prime256v1", "secp384r1", "secp521r1
 WEAK_SIGNATURE_HASHES = frozenset({"md2", "md4", "md5", "sha1", "sha-1"})
 WEAK_SIG_SUBSTRINGS = ("sha1", "md5", "md4", "md2")
 LEGACY_PROTOCOLS = frozenset({"SSLv2", "SSLv3", "TLSv1", "TLSv1.0", "TLSv1.1"})
-EXPIRED_ONLY_CODES = frozenset({"certificate_expired", "certificate_not_yet_valid"})
 MAX_EVIDENCE_SANS = 20
 MAX_DETAILS_SANS = 10
 MAX_DETAIL_DN_CHARS = 256
@@ -156,8 +155,22 @@ def _expiry_finding(
     *,
     now: datetime,
 ) -> RawFinding | None:
-    leaf = inspection.chain[0] if inspection.chain else None
     port_str = str(inspection.port)
+    expired_certs = [cert for cert in inspection.chain if cert.not_after <= now]
+    if expired_certs:
+        return RawFinding(
+            asset=asset,
+            rule_id="web.tls.cert_expired",
+            severity=Severity.HIGH,
+            confidence=Confidence.HIGH,
+            remediation_context={
+                "host": inspection.host,
+                "port": port_str,
+                "not_after": expired_certs[0].not_after.isoformat(),
+            },
+            evidence=(evidence,),
+        )
+    leaf = inspection.chain[0] if inspection.chain else None
     if leaf is None:
         if inspection.validation.error_code == "certificate_expired":
             return RawFinding(
@@ -173,19 +186,6 @@ def _expiry_finding(
                 evidence=(evidence,),
             )
         return None
-    if leaf.not_after <= now:
-        return RawFinding(
-            asset=asset,
-            rule_id="web.tls.cert_expired",
-            severity=Severity.HIGH,
-            confidence=Confidence.HIGH,
-            remediation_context={
-                "host": inspection.host,
-                "port": port_str,
-                "not_after": leaf.not_after.isoformat(),
-            },
-            evidence=(evidence,),
-        )
     remaining = leaf.not_after - now
     if remaining <= timedelta(days=EXPIRING_SOON_DAYS):
         severity = (
@@ -210,7 +210,11 @@ def _expiry_finding(
 
 
 def _chain_trust_findings(
-    asset: AssetRef, inspection: TlsInspection, evidence: RawEvidence
+    asset: AssetRef,
+    inspection: TlsInspection,
+    evidence: RawEvidence,
+    *,
+    cert_expired_emitted: bool,
 ) -> list[RawFinding]:
     findings: list[RawFinding] = []
     port_str = str(inspection.port)
@@ -228,11 +232,12 @@ def _chain_trust_findings(
                 evidence=(evidence,),
             )
         )
-    untrusted = not inspection.validation.trusted_chain and (
-        inspection.validation.error_code not in EXPIRED_ONLY_CODES
-        or (leaf is not None and leaf.is_self_signed)
+    suppressed_by_expiry = (
+        inspection.validation.error_code == "certificate_expired"
+        and cert_expired_emitted
+        and not (leaf is not None and leaf.is_self_signed)
     )
-    if untrusted:
+    if not inspection.validation.trusted_chain and not suppressed_by_expiry:
         findings.append(
             RawFinding(
                 asset=asset,
@@ -310,9 +315,14 @@ def evaluate_tls_inspection(
     findings: list[RawFinding] = []
 
     expiry = _expiry_finding(asset, inspection, evidence, now=current)
+    cert_expired_emitted = expiry is not None and expiry.rule_id == "web.tls.cert_expired"
     if expiry is not None:
         findings.append(expiry)
-    findings.extend(_chain_trust_findings(asset, inspection, evidence))
+    findings.extend(
+        _chain_trust_findings(
+            asset, inspection, evidence, cert_expired_emitted=cert_expired_emitted
+        )
+    )
     findings.extend(_crypto_findings(asset, inspection, evidence))
 
     legacy = list(inspection.legacy_protocols_accepted)
@@ -336,12 +346,30 @@ def evaluate_tls_inspection(
     return tuple(findings)
 
 
+def _target_host_port(asset: AssetRef, allowed_ports: frozenset[int]) -> tuple[str, int] | None:
+    if asset.type in {AssetType.DOMAIN, AssetType.SUBDOMAIN}:
+        host = asset.value.strip().lower().rstrip(".")
+        return (host, DEFAULT_HTTPS_PORT) if host else None
+    if asset.type is AssetType.URL:
+        parts = urlsplit(asset.value)
+        if parts.scheme != "https" or not parts.hostname:
+            return None
+        try:
+            port = parts.port if parts.port is not None else DEFAULT_HTTPS_PORT
+        except ValueError:
+            return None
+        if port not in allowed_ports:
+            return None
+        return parts.hostname.strip().lower().rstrip("."), port
+    return None
+
+
 @register_scanner
 class WebTls:
-    """Inspect TLS certificates, chain trust, and legacy protocols on verified HTTPS URLs."""
+    """Inspect TLS certificates, chain trust, and legacy protocols on verified web hosts."""
 
     name = "web.tls"
-    asset_types = frozenset({AssetType.URL})
+    asset_types = frozenset({AssetType.DOMAIN, AssetType.SUBDOMAIN, AssetType.URL})
     queue = "active"
     requires_verification = True
     timeout_seconds = 30.0
@@ -353,16 +381,10 @@ class WebTls:
     def run(self, ctx: ScanContext, asset: AssetRef) -> ScanOutput:
         if ctx.runtime is None:
             raise ScannerError("Scanner runtime is not configured.")
-        parts = urlsplit(asset.value)
-        if parts.scheme != "https" or not parts.hostname:
+        target = _target_host_port(asset, self.grant.tls_ports)
+        if target is None:
             return ScanOutput()
-        try:
-            port = parts.port if parts.port is not None else DEFAULT_HTTPS_PORT
-        except ValueError:
-            return ScanOutput()
-        if port not in self.grant.tls_ports:
-            return ScanOutput()
-        host = parts.hostname.strip().lower().rstrip(".")
+        host, port = target
         try:
             inspection = ctx.runtime.tls.inspect(host, port, probe_legacy=True)
         except (TlsError, DnsError, ScopeError):
