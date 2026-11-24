@@ -1129,3 +1129,67 @@ def test_target_http_grant_validates_and_enforces_paths_methods_and_soft_404_pro
         url_runtime.http.head("https://acme.com/portal?tab=info")
     with pytest.raises(ScopePolicyError, match="path"):
         url_runtime.http.get("https://acme.com/portal?tab=other", limit=1024)
+
+
+def test_default_http_grant_allows_probed_same_host_final_url_for_cors() -> None:
+    scope = verify_all(make_guard(active_scans_enabled=True)[0])
+    ctx_with_redirect = ScanContext(
+        uuid4(),
+        uuid4(),
+        AssetRef(type=AssetType.URL, value="https://acme.com/old"),
+        "web_active",
+        target_details={"web": {"final_url": "https://acme.com/new?tab=2"}},
+    )
+    cors_like = scanner(
+        asset_types=frozenset({AssetType.URL}),
+        queue="active",
+        requires_verification=True,
+        grant=ScannerGrant(http=HttpPermission.TARGET, follow_redirects=False, dns_lookups=4),
+    )
+
+    runtime = scope.check(
+        ctx_with_redirect,
+        target("https://acme.com/old", AssetType.URL),
+        cors_like,
+    )
+    runtime.http.get("https://acme.com/new?tab=2", limit=1024)
+    runtime.http.get("https://acme.com/old", limit=1024)
+    with pytest.raises(ScopePolicyError, match="path"):
+        runtime.http.get("https://acme.com/new?tab=other", limit=1024)
+    with pytest.raises(ScopePolicyError, match="path"):
+        runtime.http.get("https://acme.com/unrelated", limit=1024)
+
+    custom_paths = scanner(
+        asset_types=frozenset({AssetType.URL}),
+        queue="active",
+        requires_verification=True,
+        grant=ScannerGrant(
+            http=HttpPermission.TARGET,
+            http_paths=frozenset({"/.env"}),
+            follow_redirects=False,
+            dns_lookups=4,
+        ),
+    )
+    custom_runtime = scope.check(
+        ctx_with_redirect,
+        target("https://acme.com/old", AssetType.URL),
+        custom_paths,
+    )
+    custom_runtime.http.get("https://acme.com/.env", limit=1024)
+    with pytest.raises(ScopePolicyError, match="path"):
+        custom_runtime.http.get("https://acme.com/new?tab=2", limit=1024)
+
+    cross_host_ctx = ScanContext(
+        uuid4(),
+        uuid4(),
+        AssetRef(type=AssetType.URL, value="https://acme.com/old"),
+        "web_active",
+        target_details={"web": {"final_url": "https://other.acme.com/new"}},
+    )
+    cross_host_runtime = scope.check(
+        cross_host_ctx,
+        target("https://acme.com/old", AssetType.URL),
+        cors_like,
+    )
+    with pytest.raises(ScopePolicyError, match="path"):
+        cross_host_runtime.http.get("https://acme.com/new", limit=1024)

@@ -147,7 +147,6 @@ class ScopeGuard(ScannerGate):
             if is_target_http and ctx.root_asset.type is AssetType.DOMAIN
             else None
         )
-        asset_url = urlsplit(asset.value) if asset.type is AssetType.URL else None
         http = _GuardedHttp(
             self._http,
             target=target_host if is_target_http else None,
@@ -156,8 +155,12 @@ class ScopeGuard(ScannerGate):
             allowed_ports=grant.http_ports,
             allowed_methods=grant.http_methods,
             allowed_paths=grant.http_paths,
-            target_url_path=(asset_url.path or "/") if asset_url is not None else None,
-            target_url_query=asset_url.query if asset_url is not None else "",
+            target_url_targets=_target_url_targets(
+                ctx,
+                asset,
+                target_host=target_host,
+                allowed_ports=grant.http_ports,
+            ),
             soft_404_probe=grant.soft_404_probe,
             follow_redirects=grant.follow_redirects,
             stop_on_out_of_scope_redirect=is_target_http and grant.follow_redirects,
@@ -322,6 +325,38 @@ class _GuardedSandbox:
         return self._inner.run(analyzer, artifact_id)
 
 
+def _target_url_targets(
+    ctx: ScanContext,
+    asset: AssetRef,
+    *,
+    target_host: str,
+    allowed_ports: frozenset[int],
+) -> frozenset[tuple[str, str]]:
+    if asset.type is not AssetType.URL:
+        return frozenset()
+    asset_url = urlsplit(asset.value)
+    targets: set[tuple[str, str]] = {(asset_url.path or "/", asset_url.query)}
+    web = ctx.target_details.get("web")
+    if isinstance(web, Mapping):
+        raw_final = web.get("final_url")
+        if isinstance(raw_final, str) and raw_final:
+            try:
+                parsed_final = urlsplit(raw_final)
+            except ValueError:
+                return frozenset(targets)
+            scheme = parsed_final.scheme.lower()
+            if scheme in {"http", "https"} and parsed_final.hostname == target_host:
+                final_port = (
+                    parsed_final.port
+                    if parsed_final.port is not None
+                    else (443 if scheme == "https" else 80)
+                )
+                final_path = parsed_final.path or "/"
+                if final_port in allowed_ports and not has_unsafe_http_path(final_path):
+                    targets.add((final_path, parsed_final.query))
+    return frozenset(targets)
+
+
 class _GuardedHttp:
     """Per-run HTTP allowlist. Redirects never widen it: the client asks again at each hop."""
 
@@ -335,8 +370,7 @@ class _GuardedHttp:
         allowed_ports: frozenset[int] = DEFAULT_HTTP_PORTS,
         allowed_methods: frozenset[str] = DEFAULT_HTTP_METHODS,
         allowed_paths: frozenset[str] = DEFAULT_HTTP_PATHS,
-        target_url_path: str | None = None,
-        target_url_query: str = "",
+        target_url_targets: frozenset[tuple[str, str]] = frozenset(),
         soft_404_probe: bool = False,
         follow_redirects: bool = True,
         stop_on_out_of_scope_redirect: bool = False,
@@ -352,8 +386,7 @@ class _GuardedHttp:
         self._allowed_ports = allowed_ports
         self._allowed_methods = allowed_methods
         self._allowed_paths = allowed_paths
-        self._target_url_path = target_url_path
-        self._target_url_query = target_url_query
+        self._target_url_targets = target_url_targets
         self._soft_404_probe = soft_404_probe
         self._soft_404_hosts_used: set[str] = set()
         self._follow_redirects = follow_redirects
@@ -393,11 +426,9 @@ class _GuardedHttp:
         path = parts.path or "/"
         if has_unsafe_http_path(path):
             return False
-        target_path_ok = (
-            self._target_url_path is not None
-            and "/" in self._allowed_paths
-            and path == self._target_url_path
-            and (not parts.query or parts.query == self._target_url_query)
+        target_path_ok = self._allowed_paths == DEFAULT_HTTP_PATHS and any(
+            path == target_path and (not parts.query or parts.query == target_query)
+            for target_path, target_query in self._target_url_targets
         )
         if (path in self._allowed_paths and not parts.query) or target_path_ok:
             return True
