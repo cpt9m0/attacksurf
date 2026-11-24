@@ -6,6 +6,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- WordPress exposure and passive version-matching check (`web.wordpress`,
+  `scanners/web/wordpress.py`) wired into `web_active.checks`, `app.py`, `workers/app.py`, and
+  `web.probe` passive `?ver=` asset extraction (`scanners/web/fingerprint.py`): gates strictly on
+  WordPress detection (`#73`), matches core (`/feed/` / generator) and HTML `?ver=` plugin/theme
+  versions against the local NVD store (`#74`), and checks `web.wordpress.xmlrpc_enabled`,
+  `web.wordpress.user_listing` (count-only evidence), `web.wordpress.debug_log` (structural
+  metadata only), and `web.exposure.directory_listing` (`/wp-content/uploads/`) under ADR 0033
+  `ScopeGuard` `http_paths` enforcement (#79).
 - Fixed-path exposed sensitive file, debug endpoint, API docs, admin panel, and `security.txt`
   scanner (`web.exposures`, `scanners/web/exposures.py`) wired into `web_active.checks`, `app.py`,
   and `workers/app.py`, alongside ADR 0033 `ScopeGuard` enforcement (`http_methods`, `http_paths`,

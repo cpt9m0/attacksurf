@@ -15,6 +15,7 @@ from functools import cache
 from html.parser import HTMLParser
 from importlib.resources import files
 from typing import cast
+from urllib.parse import parse_qs, urlsplit
 
 from pydantic import JsonValue
 
@@ -40,6 +41,15 @@ _VERSION_BANNER_RE = re.compile(
 )
 _TERNARY_GROUP_RE = re.compile(r"\\(\d+)\?([^:]*):([^\\]*)")
 _BACKREF_RE = re.compile(r"\\(\d+)")
+MAX_WP_PLUGINS = 30
+MAX_WP_THEMES = 10
+MAX_WP_ASSET_URLS = 300
+_WP_ASSET_PATH_RE = re.compile(
+    r"/wp-content/(plugins|themes)/([a-z0-9][a-z0-9_-]{0,63})/",
+    re.IGNORECASE,
+)
+_WP_VERSION_RE = re.compile(r"^[0-9][0-9A-Za-z._-]{0,31}$")
+_WP_GENERATOR_RE = re.compile(r"^WordPress\s+([0-9][0-9A-Za-z._-]{0,31})(?:\s|$)", re.IGNORECASE)
 
 
 class FingerprintError(ValueError):
@@ -440,3 +450,98 @@ def _compile_pattern(raw: object, *, field: str) -> PatternSpec:
     except re.error as exc:
         raise FingerprintError(f"{field} has invalid regex {regex_str!r}") from exc
     return PatternSpec(regex=compiled, version=version, confidence=confidence)
+
+
+class _WordPressPageParser(HTMLParser):
+    """Collect `<script src>`, `<link href>`, and `<meta name="generator">` from capped HTML."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.asset_urls: list[str] = []
+        self.generators: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag_name = tag.lower()
+        attr_map = {k.lower(): v for k, v in attrs if v is not None}
+        url: str | None = None
+        if tag_name == "script":
+            url = attr_map.get("src", "").strip()
+        elif tag_name == "link":
+            url = attr_map.get("href", "").strip()
+        elif tag_name == "meta" and attr_map.get("name", "").strip().lower() == "generator":
+            content = attr_map.get("content", "").strip()
+            if content and len(self.generators) < MAX_META_VALUES_PER_NAME:
+                self.generators.append(content[:MAX_HEADER_VALUE_CHARS])
+        if url and len(self.asset_urls) < MAX_WP_ASSET_URLS:
+            self.asset_urls.append(url[: MAX_HEADER_VALUE_CHARS * 2])
+
+
+def _parse_wordpress_html(content: bytes, content_type: str) -> _WordPressPageParser | None:
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    if media_type and media_type not in _HTML_CONTENT_TYPES:
+        return None
+    html = content[:MAX_HTML_PARSE_BYTES].decode("utf-8", errors="replace").replace("\x00", "")
+    if not html:
+        return None
+    parser = _WordPressPageParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except AssertionError:
+        pass
+    return parser
+
+
+def _keep_wp_asset(target: dict[str, str], slug: str, version: str, *, limit: int) -> None:
+    if slug in target:
+        if len(version.split(".")) > len(target[slug].split(".")):
+            target[slug] = version
+        return
+    if len(target) < limit:
+        target[slug] = version
+
+
+def extract_wordpress_assets(
+    content: bytes, content_type: str
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Extract WordPress plugin and theme `?ver=` versions already embedded in page HTML."""
+    parser = _parse_wordpress_html(content, content_type)
+    if parser is None:
+        return {}, {}
+    plugins: dict[str, str] = {}
+    themes: dict[str, str] = {}
+    for raw_url in parser.asset_urls:
+        try:
+            parsed = urlsplit(raw_url)
+        except ValueError:
+            continue
+        if ".." in parsed.path.split("/"):
+            continue
+        path_match = _WP_ASSET_PATH_RE.search(parsed.path)
+        if path_match is None:
+            continue
+        ver_values = parse_qs(parsed.query).get("ver")
+        if not ver_values:
+            continue
+        raw_ver = ver_values[0].strip()
+        if not _WP_VERSION_RE.fullmatch(raw_ver):
+            continue
+        kind = path_match.group(1).lower()
+        slug = path_match.group(2).lower()
+        if kind == "plugins":
+            _keep_wp_asset(plugins, slug, raw_ver, limit=MAX_WP_PLUGINS)
+        else:
+            _keep_wp_asset(themes, slug, raw_ver, limit=MAX_WP_THEMES)
+    return dict(sorted(plugins.items())), dict(sorted(themes.items()))
+
+
+def extract_wordpress_generator(content: bytes, content_type: str) -> str | None:
+    """Return WordPress core version from `<meta name="generator">`, if present in HTML."""
+    parser = _parse_wordpress_html(content, content_type)
+    if parser is None:
+        return None
+    for gen in parser.generators:
+        match = _WP_GENERATOR_RE.match(gen)
+        if match:
+            return match.group(1)
+    return None

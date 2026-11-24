@@ -11,6 +11,8 @@ from attacksurf.scanners.web.fingerprint import (
     FingerprintError,
     detect_version_banners,
     extract_cookie_names,
+    extract_wordpress_assets,
+    extract_wordpress_generator,
     fingerprint_response,
     load_fingerprints,
     parse_fingerprints,
@@ -243,3 +245,22 @@ def test_fingerprint_sonarqube_script_src_query_delimiter() -> None:
     miss_html = b'<script src="/js/bundles/sonar.jsv=6.7.7"></script>'
     miss_techs = fingerprint_response({"Content-Type": "text/html"}, miss_html, "text/html")
     assert "SonarQube" not in {t.name for t in miss_techs}
+
+
+def test_extract_wordpress_assets_and_generator_only_reads_embedded_html_tokens() -> None:
+    html = (
+        b"<html><head>"
+        b'<meta name="generator" content="WordPress 6.4.3" />'
+        b'<link rel="stylesheet" href="/wp-content/plugins/contact-form-7/styles.css?ver=5.8.0" />'
+        b'<script src="https://cdn.example.com/wp-content/themes/astra/main.js?ver=4.6"></script>'
+        b'<script src="/wp-content/themes/astra/extra.js?ver=4.6.2"></script>'
+        b'<script src="/wp-content/plugins/bad/../slug/app.js?ver=1.0"></script>'
+        b'<script src="/wp-content/plugins/valid-slug/app.js?ver=abc"></script>'
+        b"</head></html>"
+    )
+
+    plugins, themes = extract_wordpress_assets(html, "text/html; charset=utf-8")
+    assert plugins == {"contact-form-7": "5.8.0"}
+    assert themes == {"astra": "4.6.2"}
+    assert extract_wordpress_generator(html, "text/html") == "6.4.3"
+    assert extract_wordpress_assets(html, "application/json") == ({}, {})

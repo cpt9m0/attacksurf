@@ -35,6 +35,7 @@ from attacksurf.scanners.registry import register_scanner
 from attacksurf.scanners.web.fingerprint import (
     Technology,
     detect_version_banners,
+    extract_wordpress_assets,
     fingerprint_response,
 )
 
@@ -94,6 +95,7 @@ class _CapturedProbe:
     probe: ProbeResult
     technologies: tuple[Technology, ...]
     version_banners: dict[str, str]
+    wordpress_assets: dict[str, JsonValue] | None = None
 
 
 class _TitleParser(HTMLParser):
@@ -328,10 +330,18 @@ def _probe_url(ctx: ScanContext, url: str) -> _CapturedProbe | None:
     probe = _to_probe_result(url, body)
     technologies = fingerprint_response(body.headers, body.content, probe.content_type)
     version_banners = detect_version_banners(body.headers)
+    wp_assets: dict[str, JsonValue] | None = None
+    if any(tech.name.lower() == "wordpress" for tech in technologies):
+        plugins, themes = extract_wordpress_assets(body.content, probe.content_type)
+        wp_assets = {
+            "plugins": cast(dict[str, JsonValue], dict(plugins)),
+            "themes": cast(dict[str, JsonValue], dict(themes)),
+        }
     return _CapturedProbe(
         probe=probe,
         technologies=technologies,
         version_banners=version_banners,
+        wordpress_assets=wp_assets,
     )
 
 
@@ -377,12 +387,15 @@ def _fit_observation_details(
     web: dict[str, JsonValue],
     web_host: dict[str, JsonValue] | None = None,
     technologies: tuple[Technology, ...] = (),
+    wordpress_assets: dict[str, JsonValue] | None = None,
 ) -> dict[str, JsonValue]:
     """Assemble `Asset.details` within `MAX_ASSET_DETAILS_BYTES`, trimming optional metadata."""
     tech_list: list[JsonValue] = [tech.to_dict() for tech in technologies]
     details: dict[str, JsonValue] = {"web": web, "technologies": tech_list}
     if web_host is not None:
         details["web_host"] = web_host
+    if wordpress_assets is not None:
+        details["wordpress"] = wordpress_assets
     if _details_bytes(details) <= MAX_ASSET_DETAILS_BYTES:
         return details
 
@@ -402,6 +415,8 @@ def _fit_observation_details(
 
     if _details_bytes(details) > MAX_ASSET_DETAILS_BYTES:
         details.pop("web_host", None)
+    if _details_bytes(details) > MAX_ASSET_DETAILS_BYTES:
+        details.pop("wordpress", None)
     if _details_bytes(details) > MAX_ASSET_DETAILS_BYTES:
         web["title"] = ""
     while tech_list and _details_bytes(details) > MAX_ASSET_DETAILS_BYTES:
@@ -468,6 +483,7 @@ class WebProbe:
         details = _fit_observation_details(
             _web_details(capture.probe),
             technologies=capture.technologies,
+            wordpress_assets=capture.wordpress_assets,
         )
         finding = _version_banner_finding(asset, capture)
         findings = (finding,) if finding is not None else ()
@@ -533,6 +549,7 @@ class WebProbe:
                         _web_details(capture.probe),
                         web_host,
                         capture.technologies,
+                        capture.wordpress_assets,
                     ),
                     active=True,
                 )

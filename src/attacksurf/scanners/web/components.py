@@ -181,18 +181,18 @@ def _serialize_cve(vuln: ProductVulnerability) -> dict[str, JsonValue]:
     }
 
 
-def _match_component(
-    ctx: ScanContext, name: str, version: str
-) -> tuple[tuple[tuple[str, str], ...], list[ProductVulnerability]]:
+def match_cpes(
+    ctx: ScanContext, cpes: Sequence[tuple[str, str]], version: str
+) -> list[ProductVulnerability]:
+    """Match normalized `(vendor, product)` CPEs at `version` against runtime vuln intel."""
     runtime = ctx.runtime
     if runtime is None:
         raise ScannerError("Scanner runtime is not configured.")
-    cpes = lookup_cpes(name)
     by_cve: dict[str, ProductVulnerability] = {}
     for vendor, product in cpes:
         for vuln in runtime.vuln_intel.match_product(vendor, product, version):
             by_cve.setdefault(vuln.cve_id, vuln)
-    vulns = sorted(
+    return sorted(
         by_cve.values(),
         key=lambda v: (
             not v.in_kev,
@@ -201,7 +201,13 @@ def _match_component(
             v.cve_id,
         ),
     )
-    return cpes, vulns
+
+
+def _match_component(
+    ctx: ScanContext, name: str, version: str
+) -> tuple[tuple[tuple[str, str], ...], list[ProductVulnerability]]:
+    cpes = lookup_cpes(name)
+    return cpes, match_cpes(ctx, cpes, version)
 
 
 def _vuln_set_digest(vulns: Sequence[ProductVulnerability]) -> str:
@@ -219,13 +225,16 @@ def _vuln_set_digest(vulns: Sequence[ProductVulnerability]) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
-def _component_finding(
+def build_component_finding(
     asset: AssetRef,
+    *,
     name: str,
     version: str,
-    cpes: tuple[tuple[str, str], ...],
+    cpes: Sequence[tuple[str, str]],
     vulns: Sequence[ProductVulnerability],
+    location: str | None = None,
 ) -> RawFinding:
+    """Build a normalized `web.components.known_vulnerable` finding for one matched component."""
     capped = vulns[:MAX_EVIDENCE_CVES]
     top_ids = [v.cve_id for v in capped[:MAX_SUMMARY_CVES]]
     extra_count = len(vulns) - len(top_ids)
@@ -250,7 +259,7 @@ def _component_finding(
         rule_id="web.components.known_vulnerable",
         severity=severity_for_vulnerabilities(vulns),
         confidence=Confidence.MEDIUM,
-        location=name.lower(),
+        location=name.lower() if location is None else location,
         remediation_context={
             "product": name,
             "version": version,
@@ -259,6 +268,16 @@ def _component_finding(
         },
         evidence=(RawEvidence(kind=EvidenceKind.RAW, data=evidence_data),),
     )
+
+
+def _component_finding(
+    asset: AssetRef,
+    name: str,
+    version: str,
+    cpes: tuple[tuple[str, str], ...],
+    vulns: Sequence[ProductVulnerability],
+) -> RawFinding:
+    return build_component_finding(asset, name=name, version=version, cpes=cpes, vulns=vulns)
 
 
 @register_scanner

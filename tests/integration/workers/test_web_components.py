@@ -33,6 +33,7 @@ from attacksurf.scanners.web import exposures as _web_exposures  # noqa: F401
 from attacksurf.scanners.web import headers as _web_headers  # noqa: F401
 from attacksurf.scanners.web import probe as _web_probe  # noqa: F401
 from attacksurf.scanners.web import tls as _web_tls  # noqa: F401
+from attacksurf.scanners.web import wordpress as _web_wordpress  # noqa: F401
 from attacksurf.services import assets as assets_service
 from attacksurf.services import scans
 from attacksurf.services.ownership import DbOwnershipChecker
@@ -259,6 +260,7 @@ def test_web_components_pipeline_flags_known_cves_and_tolerates_epss_updates(
         )
         db_session.commit()
         assert sorted(t.task_name for t in q_chk.header) == [
+            "active.scan",
             "active.scan",
             "active.scan",
             "active.scan",
