@@ -15,7 +15,7 @@ from attacksurf.domain.net import (
     TlsInspection,
     TlsValidation,
 )
-from attacksurf.domain.scanners import AssetRef, ScanContext, ScannerError
+from attacksurf.domain.scanners import AssetRef, ScanContext, ScannerError, ScanOutput
 from attacksurf.domain.scope import ScopeError
 from attacksurf.scanners.web.tls import WebTls, evaluate_tls_inspection
 from attacksurf.services.scan_results import _evidence_digest
@@ -118,7 +118,7 @@ def _inspection(
     )
 
 
-def _ctx(tls: _StubTls | None) -> ScanContext:
+def _ctx(tls: _StubTls | None, *, target_details: dict[str, object] | None = None) -> ScanContext:
     runtime = ScannerRuntime(_StubDns(), _StubHttp(), tls=tls) if tls is not None else None  # type: ignore[arg-type]
     return ScanContext(
         org_id=uuid4(),
@@ -126,6 +126,7 @@ def _ctx(tls: _StubTls | None) -> ScanContext:
         root_asset=AssetRef(type=AssetType.DOMAIN, value="acme.example"),
         profile="web_active",
         runtime=runtime,
+        target_details=target_details or {},  # type: ignore[arg-type]
     )
 
 
@@ -303,7 +304,7 @@ def test_web_tls_flags_legacy_protocol() -> None:
     assert findings[0].remediation_context["protocols"] == "TLSv1, TLSv1.1"
 
 
-def test_web_tls_skips_http_or_unreachable_and_keeps_digest_stable_across_ip_and_days() -> None:
+def test_web_tls_skips_http_and_raises_transient_on_failed_url_or_prior_tls_inspection() -> None:
     tls = _StubTls(_inspection())
     assert WebTls(clock=lambda: NOW).run(
         _ctx(tls), AssetRef(type=AssetType.URL, value="http://acme.example/")
@@ -312,12 +313,24 @@ def test_web_tls_skips_http_or_unreachable_and_keeps_digest_stable_across_ip_and
     )
     assert tls.calls == []
 
-    err_out = WebTls(clock=lambda: NOW).run(
-        _ctx(_StubTls(TlsError("reset"))),
-        AssetRef(type=AssetType.URL, value="https://acme.example/"),
-    )
-    assert err_out.observations == ()
-    assert err_out.findings == ()
+    # HTTPS URL failures raise TransientJobError so prior findings are never auto-fixed.
+    for exc in (TlsError("reset"), ScopeError("The TLS handshake timed out.")):
+        with pytest.raises(TransientJobError, match="TLS inspection failed"):
+            WebTls(clock=lambda: NOW).run(
+                _ctx(_StubTls(exc)),
+                AssetRef(type=AssetType.URL, value="https://acme.example/"),
+            )
+
+    # First-time non-TLS domain/subdomain connection refusal returns empty without failing the scan,
+    # whereas a host with prior `tls` details raises TransientJobError to preserve findings.
+    dom_ref = AssetRef(type=AssetType.DOMAIN, value="acme.example")
+    refused_out = WebTls(clock=lambda: NOW).run(_ctx(_StubTls(TlsError("refused"))), dom_ref)
+    assert refused_out == ScanOutput()
+    with pytest.raises(TransientJobError, match="TLS inspection failed"):
+        WebTls(clock=lambda: NOW).run(
+            _ctx(_StubTls(TlsError("refused")), target_details={"tls": {"protocol": "TLSv1.3"}}),
+            dom_ref,
+        )
 
     with pytest.raises(TransientJobError, match="rate"):
         WebTls(clock=lambda: NOW).run(
@@ -347,16 +360,6 @@ def test_web_tls_skips_http_or_unreachable_and_keeps_digest_stable_across_ip_and
             ),
             AssetRef(type=AssetType.URL, value="https://acme.example/"),
         )
-    # ScopeError on handshake is also swallowed cleanly.
-    assert (
-        WebTls(clock=lambda: NOW)
-        .run(
-            _ctx(_StubTls(ScopeError("timeout"))),
-            AssetRef(type=AssetType.URL, value="https://acme.example/"),
-        )
-        .findings
-        == ()
-    )
 
 
 @pytest.mark.parametrize(

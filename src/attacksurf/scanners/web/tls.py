@@ -8,6 +8,7 @@ from pydantic import JsonValue
 
 from attacksurf.domain.assets import AssetType
 from attacksurf.domain.findings import Confidence, EvidenceKind, Severity
+from attacksurf.domain.jobs import TransientJobError
 from attacksurf.domain.net import DnsError, TlsCertificate, TlsError, TlsInspection
 from attacksurf.domain.scanners import (
     AssetObservation,
@@ -387,7 +388,14 @@ class WebTls:
         host, port = target
         try:
             inspection = ctx.runtime.tls.inspect(host, port, probe_legacy=True)
-        except (TlsError, DnsError, ScopeError):
+        except (TlsError, DnsError, ScopeError) as exc:
+            # Preserve existing findings on failure: raise a retryable error whenever TLS was
+            # expected (URL asset, prior `tls` details, DNS error, or handshake timeout) so
+            # `scan_diff._fix` never closes prior findings without a completed inspection.
+            prior_tls = bool(ctx.target_details.get("tls"))
+            timed_out = isinstance(exc, ScopeError) and "timed out" in str(exc).lower()
+            if asset.type is AssetType.URL or prior_tls or isinstance(exc, DnsError) or timed_out:
+                raise TransientJobError("TLS inspection failed.") from None
             return ScanOutput()
 
         findings = evaluate_tls_inspection(asset, inspection, now=self._clock())
