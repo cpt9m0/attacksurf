@@ -254,9 +254,8 @@ flowchart LR
   `dns_scheduled` profile (`dns.resolve`, `dns.email`, `dns.dnssec`) for recurring scans,
   with the same `MAX_DISCOVERED_ASSETS` cap as `dns_passive` because `dns.resolve` still emits
   new IP/CNAME assets; it is deliberately absent from `PROFILES`, so no UI/API route can select
-  it. Profiles cannot route to
-  the reserved `active` queue, and a unit test keeps analysis scanners out of every profile until
-  #92 (ADR 0031).
+  it. Profiles route each scanner to its declared `queue` (`passive` or `active`); a unit test
+  keeps analysis scanners out of every profile until #92 (ADR 0031).
 - **CT discovery (#15, ADR 0022):** `dns.discovery.ct` queries crt.sh's JSON endpoint and falls
   back to Cert Spotter when crt.sh fails, times out or truncates. Names are normalized, filtered
   to the root, deduplicated and capped (shallow names first). Complete results are cached per
@@ -404,13 +403,12 @@ flowchart LR
   services only, or the target after verification; plus the #19 capabilities: read-only
   authoritative SOA/DNSKEY probes, RDAP for the target's registration, and zone transfers on a
   verified zone apex), plus the run cache and offline IP intel.
-  `workers.runtime.scanner_gate()` wires it with `services.ownership.DbOwnershipChecker`, so an
-  active check runs
-  only while the target's root has a verified, unexpired TXT proof (ADR 0014). Website HTTP and
-  TLS grants follow [ADR 0033](adr/0033-website-network-grants.md) (verified hosts only,
-  `GET`/`HEAD`/`OPTIONS` methods, curated web ports, fixed path allowlists, guarded TLS
-  handshakes, per-target rate/concurrency limits, identifying `User-Agent`, and
-  `ACTIVE_SCANS_ENABLED=false` kill switch; implemented in #70–#71).
+  `workers.runtime.scanner_gate()` wires it with `services.ownership.DbOwnershipChecker`,
+  `ACTIVE_SCANS_ENABLED` (default `false`), the Redis-backed `infra.rate_limit.RedisTargetRateLimiter`,
+  and `Settings.scanner_user_agent`, so active checks run only when enabled and while the target's
+  root has a verified, unexpired TXT proof (ADR 0014,
+  [ADR 0033](adr/0033-website-network-grants.md)). Website HTTP and TLS grant extensions
+  (`http_methods`, `http_ports`, `http_paths`, `tls`, etc.) follow in #71–#79.
 - Scanners only reach the network through those adapters: `infra/http.py` pins the validated
   address (keeping `Host`/SNI), re-checks redirects against the grant, ignores env proxies and
   caps time and body size; `infra/dns.py` queries configurable public resolvers without search
@@ -531,7 +529,7 @@ flowchart LR
 | `passive` | DNS, CT logs, RDAP, public APIs | normal egress |
 | `ai` | LLM calls: connection tests, triage runs, exposure summaries (one call per job) | monthly token budget per org; never fails a scan |
 | `fetch` *(later)* | git smart-HTTP fetches | egress to allowlisted forges through ScopeGuard; no access to `sandbox-launcher`; never parses repository content (ADR 0017) |
-| `active` *(planned #70)* | website HTTP/TLS probes and active checks on verified targets | dedicated `worker-active` on isolated egress network, per-target rate/concurrency limits, gated by `ACTIVE_SCANS_ENABLED` (`false` default; ADR 0033) |
+| `active` | verified active checks (`dns.takeover.http`, `dns.axfr`, upcoming website checks) | dedicated `worker-active` on isolated `active-egress` network, per-`(org, host)` Redis rate/concurrency limits, identifying `User-Agent`, gated by `ACTIVE_SCANS_ENABLED` (`false` default; #70, ADR 0033) |
 | `analysis` *(dev only until #92)* | code/binary analysis (`sandbox_proxy/`, `sandbox_launcher/`, the `sandbox_tools/` archive extractor and binary format detector, and the worker-side client `infra/sandbox.py` are implemented; the dev `worker-analysis` consumes the queue but no `analysis.*` task is registered until #87/#101, so it drops what it receives; no analyzer image exists, `sandbox-images.lock` is empty; prod runs none of it) | worker never parses artifacts; `sandbox-launcher` runs each job in a fresh gVisor container: no network, no credentials, read-only input, CPU/memory/pids/time/disk limits (ADR 0016) |
 
 - `infra/queue.py`: `create_celery(settings)` (Redis broker + result backend from `REDIS_URL`,
@@ -680,7 +678,8 @@ Single VPS: Cloudflare Tunnel → non-root Caddy (`uid 10001`) → Gunicorn (tun
 with `read_only: true`, `cap_drop: [ALL]`, `no-new-privileges:true`, PID/CPU/memory limits, and
 bounded `json-file` log rotation; `postgres`, `redis`, `caddy`, and `migrate` sit on an
 `internal: true` network with zero outbound internet access. Celery `worker-passive` (`-Q passive -c 2`),
-`worker-ai` (`-Q ai -c 2`, Settings connection tests), and `beat` run in production. Both workers
+`worker-active` (`-Q active -c 2` on `internal` + `active-egress`, separate from `egress`),
+`worker-ai` (`-Q ai -c 2`, Settings connection tests), and `beat` run in production. Workers
 use targeted `inspect ping` healthchecks with the Redis password substituted from the mounted
 secret. Nightly `pg_dump` backups upload off-box via `rclone` (with optional `age` encryption and
 `restore.sh --verify-only` drills), and optional env-gated Sentry (`SENTRY_DSN`) scrubs secrets
@@ -689,7 +688,8 @@ and PII before reporting unexpected errors.
 The `Dockerfile` has two targets: `dev` (dev deps, Flask debug server, source bind-mounted by
 `compose.yaml` for hot reload) and `prod` (no dev deps, gunicorn, non-root uid 10001). Base and
 service images are pinned by digest and updated by Dependabot. The dev `compose.yaml` runs `web`,
-`postgres`, `redis`, the Celery workers `worker-passive` (`-Q passive -c 4`) and `worker-ai`
+`postgres`, `redis`, the Celery workers `worker-passive` (`-Q passive -c 4`), `worker-active`
+(`-Q active -c 2`, `default` + `active-egress`), and `worker-ai`
 (`-Q ai -c 2`) with `inspect ping` healthchecks, and `beat` (broker-connection healthcheck;
 schedules: ownership re-verification hourly, artifact purge every 10 minutes, due scan
 schedules every minute). Encrypted

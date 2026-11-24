@@ -17,8 +17,8 @@ from attacksurf.domain.jobs import JobTask
 # Every queue a task may be routed to. Sending works for both lists, so a job can wait in a
 # reserved queue until its worker exists. The split is checked by tests only: tasks and beat
 # entries may be registered only on a consumed queue (`QUEUES`, read by a compose worker).
-QUEUES = ("passive", "ai", "analysis")
-RESERVED_QUEUES = ("active",)  # nobody reads these yet; sending is allowed, registering is not
+QUEUES = ("passive", "active", "ai", "analysis")
+RESERVED_QUEUES: tuple[str, ...] = ()
 
 
 def queue_for(task_name: str) -> str:

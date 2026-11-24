@@ -71,4 +71,4 @@ def test_only_the_asset_itself_is_attempted() -> None:
 def test_the_plugin_is_an_active_check_with_a_zone_transfer_grant() -> None:
     assert DnsZoneTransfer.requires_verification is True
     assert DnsZoneTransfer.grant.zone_transfer is True
-    assert DnsZoneTransfer.queue == "passive"  # the active queue is reserved until #70
+    assert DnsZoneTransfer.queue == "active"

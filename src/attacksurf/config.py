@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+import importlib.metadata
 import ipaddress
 import secrets
 from functools import lru_cache
@@ -25,6 +26,7 @@ SANDBOX_MAX_WALL_TIME_SECONDS = 840
 APP_ENCRYPTION_KEY_BYTES = 32
 # ADR 0017's extraction cap: a larger artifact could never be analysed.
 ARTIFACT_MAX_BYTES_CEILING = 512 * 1024**2
+DEFAULT_SCANNER_CONTACT_URL = "https://github.com/cpt9m0/attacksurf"
 
 
 def _decode_app_key(value: str, *, setting: str = "APP_ENCRYPTION_KEY") -> bytes:
@@ -41,6 +43,31 @@ def _decode_app_key(value: str, *, setting: str = "APP_ENCRYPTION_KEY") -> bytes
 def _parse_old_app_keys(raw: str) -> tuple[bytes, ...]:
     parts = [part.strip() for part in raw.split(",") if part.strip()]
     return tuple(_decode_app_key(part, setting="APP_ENCRYPTION_OLD_KEYS") for part in parts)
+
+
+def _validate_http_url(value: str | None, *, setting: str) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    message = f"{setting} must be an http:// or https:// URL with a host"
+    try:
+        parts = urlsplit(cleaned)
+        parts.port  # noqa: B018 - raises ValueError on an invalid port
+    except ValueError:
+        raise ValueError(message) from None
+    valid = (
+        parts.scheme in ("http", "https")
+        and bool(parts.hostname)
+        and parts.username is None
+        and parts.password is None
+        and not parts.query
+        and not parts.fragment
+    )
+    if not valid:
+        raise ValueError(message)
+    return cleaned.rstrip("/")
 
 
 def _normalize_allowed_host(raw: str) -> str:
@@ -147,6 +174,13 @@ class Settings(BaseSettings):
     # Optional base URL for links in notification emails (e.g. https://attacksurf.example).
     app_base_url: str | None = None
 
+    # Active scans (#70, ADR 0033): disabled by default until explicitly enabled by the operator.
+    active_scans_enabled: bool = False
+    active_target_rate_limit_rps: float = Field(default=2.0, gt=0.0, le=10.0)
+    active_target_rate_limit_burst: int = Field(default=5, ge=1, le=20)
+    active_target_max_concurrency: int = Field(default=2, ge=1, le=5)
+    scanner_contact_url: str | None = None
+
     # Optional error tracking (#29). SENTRY_DSN unset keeps Sentry disabled.
     sentry_dsn: SecretStr | None = None
     sentry_environment: str | None = None
@@ -220,28 +254,12 @@ class Settings(BaseSettings):
     @field_validator("app_base_url")
     @classmethod
     def _validate_app_base_url(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        cleaned = value.strip()
-        if not cleaned:
-            return None
-        message = "APP_BASE_URL must be an http:// or https:// URL with a host"
-        try:
-            parts = urlsplit(cleaned)
-            parts.port  # noqa: B018 - raises ValueError on an invalid port
-        except ValueError:
-            raise ValueError(message) from None
-        valid = (
-            parts.scheme in ("http", "https")
-            and bool(parts.hostname)
-            and parts.username is None
-            and parts.password is None
-            and not parts.query
-            and not parts.fragment
-        )
-        if not valid:
-            raise ValueError(message)
-        return cleaned.rstrip("/")
+        return _validate_http_url(value, setting="APP_BASE_URL")
+
+    @field_validator("scanner_contact_url")
+    @classmethod
+    def _validate_scanner_contact_url(cls, value: str | None) -> str | None:
+        return _validate_http_url(value, setting="SCANNER_CONTACT_URL")
 
     @field_validator("app_encryption_key")
     @classmethod
@@ -354,6 +372,16 @@ class Settings(BaseSettings):
     @property
     def is_prod(self) -> bool:
         return self.env == "prod"
+
+    @property
+    def scanner_user_agent(self) -> str:
+        """Identifying User-Agent for target HTTP requests (ADR 0033)."""
+        try:
+            version = importlib.metadata.version("attacksurf")
+        except importlib.metadata.PackageNotFoundError:
+            version = "0.1.0"
+        contact = self.scanner_contact_url or self.app_base_url or DEFAULT_SCANNER_CONTACT_URL
+        return f"attacksurf/{version} (+{contact})"
 
 
 class _SandboxServiceSettings(BaseSettings):

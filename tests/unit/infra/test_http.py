@@ -4,15 +4,18 @@ import gzip
 import hashlib
 import ssl
 import threading
+import time
 import zlib
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import ClassVar
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpcore
 import pytest
 
+from attacksurf.domain.jobs import TransientJobError
 from attacksurf.domain.net import DnsError
 from attacksurf.domain.scope import AddressError, ScopeError
 from attacksurf.infra.http import (
@@ -22,6 +25,8 @@ from attacksurf.infra.http import (
     _target,
     connection_address,
 )
+from attacksurf.infra.rate_limit import InMemoryTargetRateLimiter, TargetRateLimitPolicy
+from tests.unit.infra.test_rate_limit import FakeClock
 
 
 class StaticResolver:
@@ -36,29 +41,29 @@ class StaticResolver:
 
 class Handler(BaseHTTPRequestHandler):
     hits: ClassVar[list[tuple[str, str | None]]] = []
+    user_agents: ClassVar[list[str | None]] = []
 
     def do_GET(self) -> None:
         type(self).hits.append((self.path, self.headers.get("Host")))
+        type(self).user_agents.append(self.headers.get("User-Agent"))
         if self.path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/landed")
             self.end_headers()
-            return
-        if self.path == "/loop":
+        elif self.path == "/loop":
             self.send_response(301)
             self.send_header("Location", "/loop")
             self.end_headers()
-            return
-        if self.path == "/big":
+        elif self.path == "/big":
             self.send_response(200)
             self.send_header("Content-Length", "100000")
             self.end_headers()
             self.wfile.write(b"x" * 100000)
-            return
-        if self.path == "/slow":
+        elif self.path == "/slow":
             threading.Event().wait(2)
-            return
-        if self.path == "/bomb":
+        elif self.path == "/drip":
+            self._serve_drip()
+        elif self.path == "/bomb":
             # ~8 MiB of zeros behind ~8 KiB of gzip: the classic decompression bomb.
             packed = gzip.compress(b"\x00" * (8 * 1024 * 1024))
             self.send_response(200)
@@ -66,21 +71,31 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Encoding", "gzip")
             self.end_headers()
             self.wfile.write(packed)
-            return
-        if self.path == "/gzipped":
+        elif self.path == "/gzipped":
             packed = gzip.compress(b"decoded body")
             self.send_response(200)
             self.send_header("Content-Length", str(len(packed)))
             self.send_header("Content-Encoding", "gzip")
             self.end_headers()
             self.wfile.write(packed)
-            return
-        body = f"path={self.path}".encode()
+        else:
+            body = f"path={self.path}".encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Encoding", "identity")
+            self.end_headers()
+            self.wfile.write(body)
+
+    def _serve_drip(self) -> None:
         self.send_response(200)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Content-Encoding", "identity")
         self.end_headers()
-        self.wfile.write(body)
+        for _ in range(10):
+            try:
+                self.wfile.write(b"x")
+                self.wfile.flush()
+            except OSError:
+                return
+            time.sleep(0.05)
 
     def log_message(self, format: str, *args: object) -> None:
         pass
@@ -102,6 +117,7 @@ def server_url() -> Iterator[str]:
 @pytest.fixture(autouse=True)
 def _clear_hits() -> None:
     Handler.hits.clear()
+    Handler.user_agents.clear()
 
 
 def client_for(server_url: str, **kwargs: object) -> tuple[SafeHttpClient, StaticResolver]:
@@ -376,3 +392,101 @@ def test_socket_errors_become_scope_errors(monkeypatch: pytest.MonkeyPatch) -> N
     client = SafeHttpClient(StaticResolver("93.184.216.34"))
     with pytest.raises(ScopeError, match="request failed"):
         client.get("http://example.com/", limit=10)
+
+
+def test_user_agent_is_sent_on_requests_and_inherited_across_redirect_policy(
+    server_url: str,
+) -> None:
+    port = server_url.rsplit(":", 1)[1]
+    base, resolver = client_for(server_url, user_agent="attacksurf/0.1.0 (+https://example.org)")
+    scoped = base.with_redirect_policy(
+        resolver,
+        redirect_allowed=lambda url: True,
+        max_redirects=2,
+    )
+    body = scoped.get(f"http://public.example:{port}/redirect", limit=100)
+    scoped.close()
+
+    assert body.content == b"path=/landed"
+    assert Handler.user_agents == [
+        "attacksurf/0.1.0 (+https://example.org)",
+        "attacksurf/0.1.0 (+https://example.org)",
+    ]
+
+
+def test_rate_limiter_throttles_requests_and_redirect_hops(server_url: str) -> None:
+    port = server_url.rsplit(":", 1)[1]
+    clock = FakeClock()
+    limiter = InMemoryTargetRateLimiter(
+        TargetRateLimitPolicy(rps=2.0, burst=1, max_concurrency=2, max_wait_seconds=1.0),
+        clock=clock,
+    )
+    org_id = uuid4()
+    base, resolver = client_for(server_url)
+    scoped = base.with_redirect_policy(
+        resolver,
+        redirect_allowed=lambda url: True,
+        max_redirects=2,
+        rate_limiter=limiter,
+        rate_limit_org_id=org_id,
+    )
+
+    body = scoped.get(f"http://public.example:{port}/redirect", limit=100)
+    scoped.close()
+
+    assert body.content == b"path=/landed"
+    # First hop consumes the burst token; second redirect hop waits 0.5 s at 2.0 rps.
+    assert len(clock.sleeps) == 1
+    assert clock.sleeps[0] == pytest.approx(0.5)
+
+
+def test_rate_limiter_transient_error_propagates_without_hitting_socket(server_url: str) -> None:
+    port = server_url.rsplit(":", 1)[1]
+    clock = FakeClock()
+    limiter = InMemoryTargetRateLimiter(
+        TargetRateLimitPolicy(rps=1.0, burst=1, max_concurrency=2, max_wait_seconds=0.0),
+        clock=clock,
+    )
+    org_id = uuid4()
+    base, resolver = client_for(server_url)
+    scoped = base.with_redirect_policy(
+        resolver,
+        redirect_allowed=lambda url: True,
+        max_redirects=2,
+        rate_limiter=limiter,
+        rate_limit_org_id=org_id,
+    )
+
+    scoped.get(f"http://public.example:{port}/ok", limit=100)
+    hits_before = len(Handler.hits)
+    with pytest.raises(TransientJobError, match="rate limit"):
+        scoped.get(f"http://public.example:{port}/ok", limit=100)
+    scoped.close()
+
+    assert len(Handler.hits) == hits_before
+
+
+def test_slow_drip_response_hits_total_request_deadline_and_releases_lease(
+    server_url: str,
+) -> None:
+    port = server_url.rsplit(":", 1)[1]
+    limiter = InMemoryTargetRateLimiter(
+        TargetRateLimitPolicy(rps=10.0, burst=10, max_concurrency=1, max_wait_seconds=0.0)
+    )
+    org_id = uuid4()
+    base, resolver = client_for(server_url, timeout_seconds=0.2, max_request_seconds=0.12)
+    scoped = base.with_redirect_policy(
+        resolver,
+        redirect_allowed=lambda url: True,
+        max_redirects=1,
+        rate_limiter=limiter,
+        rate_limit_org_id=org_id,
+    )
+
+    with pytest.raises(ScopeError, match="timed out"):
+        scoped.get(f"http://public.example:{port}/drip", limit=100)
+
+    # The concurrency lease was released when the deadline tripped, so the next request succeeds.
+    body = scoped.get(f"http://public.example:{port}/ok", limit=100)
+    scoped.close()
+    assert body.content == b"path=/ok"

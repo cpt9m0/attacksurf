@@ -2,17 +2,18 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-23 · **Branch:** `69-website-network-grants-adr` · **Issue:** #69 (ADR: network grants for website checks)
+**Updated:** 2026-11-23 · **Branch:** `70-active-queue-rate-limits` · **Issue:** #70 (Open the active queue with egress isolation and per-target rate limits)
 
 ## Status
-Done on branch `69-website-network-grants-adr`; running verification and opening PR for #69.
+Done on branch `70-active-queue-rate-limits`; PR open for review.
 
 ## Last task
-- Added [ADR 0033](docs/adr/0033-website-network-grants.md) specifying website network grants (`tls`, `tls_ports`, `http_methods`, `http_ports`, `http_paths`, `soft_404_probe`, `follow_redirects`), verified-only target rules, `active` queue isolation, `ACTIVE_SCANS_ENABLED=false` kill switch, per-target Redis rate/concurrency limits, identifying `User-Agent`, `ssl` import ban, and the hard "never" list (#69).
-- Updated `docs/security.md`, `docs/architecture.md`, and `CHANGELOG.md` (`[Unreleased]`).
+- Opened the `active` queue (`infra/queue.py`, `workers/tasks/pipeline.py` `active.scan`), moved `dns.takeover.http` and `dns.axfr` to `active`, and enforced active-queue routing in `ScannerRegistry` (#70).
+- Added `worker-active` on isolated `active-egress` networks in `compose.yaml` and `compose.prod.yaml`.
+- Added `ACTIVE_SCANS_ENABLED` (default `false`), `ACTIVE_TARGET_RATE_LIMIT_*`, `SCANNER_CONTACT_URL` / `scanner_user_agent` (`config.py`, `.env.example`), `RedisTargetRateLimiter` / `InMemoryTargetRateLimiter` (`infra/rate_limit.py`), and enforcement in `SafeHttpClient` and `ScopeGuard`.
 
 ## Next step
-Implement #70: Open the active queue with egress isolation and per-target rate limits (start after #69 PR is merged).
+Implement #71: Add a guarded TLS handshake adapter for scanners (start after #70 PR is merged).
 
 ## Open threads
 - **Proxy trust:** the proxy has no caller authentication and `worker-analysis` shares the `sandbox` network with it (`docs/security.md`; #92 must close it before prod).
@@ -25,4 +26,4 @@ Implement #70: Open the active queue with egress isolation and per-target rate l
 ## Notes for the next agent
 - Production plugins are registered in `src/attacksurf/app.py` and `src/attacksurf/workers/app.py`.
 - DB tests need `TEST_DATABASE_URL`; the dev stack exposes PostgreSQL on `127.0.0.1:5432` with `attacksurf_test`.
-- `tests/unit/scanners/test_docs_sync.py` checks every relative link in `docs/security.md`, `docs/architecture.md`, and other top-level docs.
+- `ScopeGuard` now defaults `active_scans_enabled=False`; tests exercising active checks with `ScopeGuard` directly must pass `active_scans_enabled=True`.

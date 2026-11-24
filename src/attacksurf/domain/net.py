@@ -6,10 +6,12 @@ target) and uses its own namespace and bounds.
 """
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
+from uuid import UUID
 
 from attacksurf.domain.cache import NullCache, ScanCache
 from attacksurf.domain.sandbox import SandboxRunner, UnconfiguredSandboxRunner
@@ -248,11 +250,33 @@ class SafeHttpClient(Protocol):
         ...
 
 
+class TargetRateLimiter(Protocol):
+    """Per-(org, target host) rate limit and concurrency gate for active checks (ADR 0033)."""
+
+    def acquire(self, org_id: UUID, host: str) -> AbstractContextManager[None]:
+        """Acquire a rate token and hold a concurrency lease for `host`."""
+        ...
+
+
+class NoOpTargetRateLimiter:
+    """Default when no target limiter is configured (unit tests, passive services)."""
+
+    def acquire(self, org_id: UUID, host: str) -> AbstractContextManager[None]:
+        return nullcontext()
+
+
 class ScopeHttp(SafeHttpClient, Protocol):
     """A safe client that can hand out a run-scoped copy with this run's redirect policy."""
 
     def with_redirect_policy(
-        self, resolver: DnsResolver, *, redirect_allowed: Callable[[str], bool], max_redirects: int
+        self,
+        resolver: DnsResolver,
+        *,
+        redirect_allowed: Callable[[str], bool],
+        max_redirects: int,
+        rate_limiter: TargetRateLimiter | None = None,
+        rate_limit_org_id: UUID | None = None,
+        user_agent: str | None = None,
     ) -> SafeHttpClient: ...
 
 

@@ -327,6 +327,7 @@ def _configure_e2e_runtime(
             http=http,
             ownership=DbOwnershipChecker(session_factory),
             cache=FakeCache(),
+            active_scans_enabled=True,
         ),
     )
     monkeypatch.setattr(triage_service, "build_provider", lambda _cfg: _DynamicTriageProvider())

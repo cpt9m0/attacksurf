@@ -5,8 +5,10 @@ No real sockets are opened: `ScopeGuard`, `AuthoritativeTxtLookup`, `Authoritati
 """
 
 from collections.abc import Callable, Iterator, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
+from uuid import UUID
 
 import dns.exception
 import dns.flags
@@ -220,8 +222,19 @@ class FakeScopeHttp:
         *,
         redirect_allowed: Callable[[str], bool],
         max_redirects: int,
+        rate_limiter: object = None,
+        rate_limit_org_id: UUID | None = None,
+        user_agent: str | None = None,
     ) -> "_BoundFakeHttp":
-        return _BoundFakeHttp(self, resolver, redirect_allowed, max_redirects)
+        return _BoundFakeHttp(
+            self,
+            resolver,
+            redirect_allowed,
+            max_redirects,
+            rate_limiter=rate_limiter,
+            rate_limit_org_id=rate_limit_org_id,
+            user_agent=user_agent,
+        )
 
     def _dispatch(self, url: str, *, limit: int) -> HttpBody:
         self.requests.append(url)
@@ -246,11 +259,18 @@ class _BoundFakeHttp:
         resolver: object,
         redirect_allowed: Callable[[str], bool],
         max_redirects: int,
+        *,
+        rate_limiter: object = None,
+        rate_limit_org_id: UUID | None = None,
+        user_agent: str | None = None,
     ) -> None:
         self._inner = inner
         self._resolver = resolver
         self._allowed = redirect_allowed
         self._max_redirects = max_redirects
+        self._rate_limiter = rate_limiter
+        self._rate_limit_org_id = rate_limit_org_id
+        self._user_agent = user_agent
 
     def get(self, url: str, *, limit: int) -> HttpBody:
         if not self._allowed(url):
@@ -258,7 +278,15 @@ class _BoundFakeHttp:
         host = urlsplit(url).hostname
         if host and hasattr(self._resolver, "resolve_name"):
             self._resolver.resolve_name(host)  # type: ignore[attr-defined]
-        return self._inner._dispatch(url, limit=limit)
+        limiter_ctx = (
+            self._rate_limiter.acquire(self._rate_limit_org_id, host)  # type: ignore[attr-defined]
+            if self._rate_limiter is not None
+            and self._rate_limit_org_id is not None
+            and host is not None
+            else nullcontext()
+        )
+        with limiter_ctx:
+            return self._inner._dispatch(url, limit=limit)
 
     def close(self) -> None:
         pass

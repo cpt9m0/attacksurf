@@ -41,6 +41,12 @@ x-app: &app
     SMTP_USER: ${SMTP_USER:-}
     SMTP_PASSWORD: ${SMTP_PASSWORD:-}
     APP_BASE_URL: ${APP_BASE_URL:-http://127.0.0.1:5000}
+    # Active scans (#70, ADR 0033): disabled by default until explicitly enabled.
+    ACTIVE_SCANS_ENABLED: ${ACTIVE_SCANS_ENABLED:-false}
+    ACTIVE_TARGET_RATE_LIMIT_RPS: ${ACTIVE_TARGET_RATE_LIMIT_RPS:-}
+    ACTIVE_TARGET_RATE_LIMIT_BURST: ${ACTIVE_TARGET_RATE_LIMIT_BURST:-}
+    ACTIVE_TARGET_MAX_CONCURRENCY: ${ACTIVE_TARGET_MAX_CONCURRENCY:-}
+    SCANNER_CONTACT_URL: ${SCANNER_CONTACT_URL:-}
   volumes:
     - ./src:/app/src  # hot reload
     # Encrypted artifacts (ADR 0028). On the anchor, not per service: a merge replaces lists.
@@ -134,6 +140,16 @@ services:
     healthcheck:
       <<: *worker-health
       test: ["CMD-SHELL", "celery -A attacksurf.workers.app inspect ping -d ai@$$HOSTNAME --timeout 5"]
+  # Verified active checks (#70, ADR 0033): isolated egress network, never on `sandbox`.
+  worker-active:
+    <<: *worker
+    networks: [default, active-egress]
+    command:
+      ["celery", "-A", "attacksurf.workers.app", "worker", "-Q", "active", "-c", "2",
+       "-n", "active@%h", "--loglevel", "INFO"]
+    healthcheck:
+      <<: *worker-health
+      test: ["CMD-SHELL", "celery -A attacksurf.workers.app inspect ping -d active@$$HOSTNAME --timeout 5"]
   # Opt-in (`sandbox` profile). Consumes `analysis` (ADR 0031) and is the only app service that
   # knows the launcher. Until #87/#101 register the analysis tasks, Celery drops the upload jobs
   # it receives and their rows stay `queued`.
@@ -215,6 +231,8 @@ services:
       retries: 5
 
 networks:
+  # Isolated egress network for verified active checks (#70).
+  active-egress:
   # No route to the internet or the host. Postgres and Redis are not on it.
   sandbox:
     internal: true

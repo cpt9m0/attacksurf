@@ -58,6 +58,15 @@ def _dispatch(org_id: str, job_id: str) -> None:
 
 @app.task(bind=True, base=PipelineTask, name="passive.scan", mark_completed=False)
 def scan(self: PipelineTask, *, org_id: str, job_id: str) -> None:
+    _run_scan(self, org_id=org_id, job_id=job_id)
+
+
+@app.task(bind=True, base=PipelineTask, name="active.scan", mark_completed=False)
+def active_scan(self: PipelineTask, *, org_id: str, job_id: str) -> None:
+    _run_scan(self, org_id=org_id, job_id=job_id)
+
+
+def _run_scan(task: PipelineTask, *, org_id: str, job_id: str) -> None:
     with runtime.session_factory()() as session:
         run_check(
             session,
@@ -67,7 +76,7 @@ def scan(self: PipelineTask, *, org_id: str, job_id: str) -> None:
             gate=runtime.scanner_gate(),
             events=dispatcher,
             catalog=RULES,
-            retry_allowed=self.request.retries < (self.max_retries or 0),
+            retry_allowed=task.request.retries < (task.max_retries or 0),
             profiles=WORKER_PROFILES,
         )
 

@@ -36,10 +36,10 @@ def test_task_name_prefix_is_the_queue(task_name: str, queue: str) -> None:
     assert queue_for(task_name) == queue
 
 
-def test_analysis_is_consumed_and_only_active_checks_stay_reserved() -> None:
-    # ADR 0031: the analysis queue opens before any analyzer exists; active checks stay closed.
+def test_active_and_analysis_queues_are_consumed_and_nothing_stays_reserved() -> None:
+    assert "active" in QUEUES
     assert "analysis" in QUEUES
-    assert RESERVED_QUEUES == ("active",)
+    assert RESERVED_QUEUES == ()
 
 
 @pytest.mark.parametrize(
@@ -79,6 +79,8 @@ def test_every_registered_task_routes_to_a_known_queue() -> None:
     names = [name for name in worker_app.tasks if not name.startswith("celery.")]
 
     assert "passive.ping" in names
+    assert "active.scan" in names
+    assert worker_app.amqp.router.route({}, "active.scan")["queue"].name == "active"
     for name in names:
         assert worker_app.amqp.router.route({}, name)["queue"].name in QUEUES
 

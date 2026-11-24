@@ -21,9 +21,11 @@ in this catalog (`src/attacksurf/domain/rules/`).
 
 ## Registered Scanners
 
-All MVP scanners run on the `passive` worker queue. Plugins marked **Verified only** require an
-unexpired DNS TXT ownership proof (`_attacksurf-verify.<root>`); `ScopeGuard` skips them with a
-`skipped` job status when the target is unverified.
+Passive scanners run on the `passive` queue (`worker-passive`); verified active checks
+(`dns.takeover.http`, `dns.axfr`, and upcoming website checks) run on the `active` queue
+(`worker-active`, isolated egress) and require `ACTIVE_SCANS_ENABLED=true` plus an unexpired
+DNS TXT ownership proof (`_attacksurf-verify.<root>`). `ScopeGuard` skips them with a `skipped`
+job status when active scans are disabled or the target is unverified.
 
 | Scanner | Target types | Ownership required | Timeout | Network / capability grant | What it does |
 |---|---|---|---|---|---|

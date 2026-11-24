@@ -308,6 +308,9 @@ def test_restore_live_preserves_image_stages_clean_db_and_migrates(tmp_path: Pat
     assert "UPDATE scans" in calls
     assert "Cancelled by database restore." in calls
     assert "WEB_IMAGE=attacksurf-web:deadbeef1234 docker compose" in calls
+    stop_line = next(
+        line for line in calls.splitlines() if " compose " in line and " stop " in line
+    )
     migrate_line = next(line for line in calls.splitlines() if "run --rm -T migrate" in line)
     reconcile_line = next(
         line for line in calls.splitlines() if "Cancelled by database restore." in line
@@ -315,7 +318,14 @@ def test_restore_live_preserves_image_stages_clean_db_and_migrates(tmp_path: Pat
     up_line = next(
         line for line in calls.splitlines() if "up -d --wait --wait-timeout 300 --no-build" in line
     )
-    assert calls.index(migrate_line) < calls.index(reconcile_line) < calls.index(up_line)
+    assert "worker-active" in stop_line
+    assert "worker-active" in up_line
+    assert (
+        calls.index(stop_line)
+        < calls.index(migrate_line)
+        < calls.index(reconcile_line)
+        < calls.index(up_line)
+    )
     assert migrate_line.startswith("WEB_IMAGE=attacksurf-web:deadbeef1234 ")
     assert up_line.startswith("WEB_IMAGE=attacksurf-web:deadbeef1234 ")
 
