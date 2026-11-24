@@ -500,3 +500,48 @@ def test_web_probe_preserves_long_csp_and_tracks_truncation() -> None:
     assert https_web["headers"]["content-security-policy"] == long_csp  # type: ignore[index]
     assert https_web["headers_truncated"] == []
     assert http_web["headers_truncated"] == ["content-security-policy", "x-custom"]
+
+
+def test_web_probe_preserves_security_cookie_flags_and_tracks_cookie_truncation() -> None:
+    long_name = "sessionid_" + ("a" * 50)
+    long_cookie = (
+        f"{long_name}=secret; Domain={'s' * 64}; Path=/{'p' * 63}; Partitioned; "
+        f"Expires=Wed, 21 Oct 2030 07:28:00 GMT; Secure; HttpOnly; SameSite=Strict"
+    )
+    assert len(redact_set_cookie(long_cookie)) <= 256
+    assert len(long_cookie) > 256
+    overflow_cookie = (
+        f"auth_session={'x' * 20}; Expires={'W' * 64}; Max-Age={'9' * 64}; "
+        f"SameSite={'s' * 64}; HttpOnly; Secure"
+    )
+    http = _StubHttp(
+        {
+            "https://acme.example/": HttpBody(
+                200,
+                b"<html></html>",
+                False,
+                httpx.Headers(
+                    [
+                        ("content-type", "text/html"),
+                        ("set-cookie", long_cookie),
+                        ("set-cookie", overflow_cookie),
+                    ]
+                ),
+                final_url="https://acme.example/",
+            ),
+            "http://acme.example/": ScopeError("Unreachable."),
+        }
+    )
+
+    out = WebProbe().run(_ctx(http), AssetRef(type=AssetType.DOMAIN, value="acme.example"))
+    web = out.observations[0].details["web"]
+    assert isinstance(web, dict)
+    cookies = web["cookies"]
+    assert isinstance(cookies, list)
+    first_cookie = cookies[0]
+    assert isinstance(first_cookie, str)
+    assert len(first_cookie) <= 256
+    assert "Secure" in first_cookie
+    assert "HttpOnly" in first_cookie
+    assert "SameSite=Strict" in first_cookie
+    assert web["cookies_truncated"] == ["auth_session"]

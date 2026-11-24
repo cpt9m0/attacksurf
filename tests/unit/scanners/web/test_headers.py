@@ -19,6 +19,7 @@ from attacksurf.scanners.web.headers import (
     WebCors,
     WebHeaders,
 )
+from attacksurf.scanners.web.probe import redact_set_cookie
 from tests.scanner_fixtures import StubDns
 
 
@@ -672,6 +673,25 @@ def test_web_headers_ignores_malformed_cookie_max_age() -> None:
     out = WebHeaders().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
 
     assert [f.rule_id for f in out.findings] == ["web.cookies.insecure_flags"]
+
+
+def test_web_headers_accepts_long_hardened_cookie_and_skips_truncated_cookies() -> None:
+    long_name = "sessionid_" + ("a" * 50)
+    long_cookie = (
+        f"{long_name}=secret; Domain={'s' * 64}; Path=/{'p' * 63}; Partitioned; "
+        f"Expires=Wed, 21 Oct 2030 07:28:00 GMT; Secure; HttpOnly; SameSite=Strict"
+    )
+    assert len(long_cookie) > 256
+    details = _hardened_web_details()
+    details["cookies"] = [
+        redact_set_cookie(long_cookie),
+        "auth_session=<redacted>; Expires=...",
+    ]
+    details["cookies_truncated"] = ["auth_session"]
+    ctx, _ = _ctx(web_details=details)
+
+    out = WebHeaders().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+    assert out.findings == ()
 
 
 @pytest.mark.parametrize(

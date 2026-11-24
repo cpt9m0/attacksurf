@@ -427,13 +427,16 @@ def _check_cookies(
     final_url: str,
     status_code: int | None,
     raw_cookies: object,
+    truncated_cookies: set[str] | frozenset[str] = frozenset(),
 ) -> None:
     if not isinstance(raw_cookies, list):
         return
     insecure = [
         item
         for entry in raw_cookies
-        if isinstance(entry, str) and (item := _inspect_cookie(entry)) is not None
+        if isinstance(entry, str)
+        and (item := _inspect_cookie(entry)) is not None
+        and str(item["name"]).lower() not in truncated_cookies
     ][:MAX_EVIDENCE_COOKIES]
     if not insecure:
         return
@@ -559,11 +562,18 @@ class WebHeaders:
                 headers=headers,
             )
 
+        raw_truncated_cookies = web.get("cookies_truncated")
+        truncated_cookies = (
+            {item.lower() for item in raw_truncated_cookies if isinstance(item, str)}
+            if isinstance(raw_truncated_cookies, list)
+            else set()
+        )
         _check_cookies(
             findings,
             final_url=final_url,
             status_code=status_code,
             raw_cookies=web.get("cookies"),
+            truncated_cookies=truncated_cookies,
         )
         redirects_to_https = _check_http_redirect(
             findings,
