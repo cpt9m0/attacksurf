@@ -6,6 +6,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- HTTP security headers, cookie flags, HTTPS redirect, and CORS credential reflection checks
+  (`web.headers`, `web.cors`, `scanners/web/headers.py`) wired into `web_active.checks`, `app.py`,
+  and `workers/app.py`, plus `SafeHttpClient.get(..., headers=...)` forwarding through
+  `ScopeGuard`: checks `hsts_missing`, `hsts_weak` (`< 180` days), `csp_missing`, `csp_unsafe`
+  (`unsafe-inline` without nonce/hash or `unsafe-eval`), `clickjacking`, `nosniff_missing`,
+  `web.cookies.insecure_flags`, `web.https.no_redirect`, and `web.cors.wildcard_credentials` with
+  relevant-header evidence only and `Asset.details["security_headers"]` summary (#77).
 - Guarded TLS certificate and protocol configuration check (`web.tls`, `scanners/web/tls.py`)
   wired into `web_active.checks`, `app.py`, and `workers/app.py`: inspects verified `https://`
   URLs over `ctx.runtime.tls`, records capped `Asset.details["tls"]`, and checks all 7 TLS rules

@@ -4,7 +4,7 @@ No real sockets are opened: `ScopeGuard`, `AuthoritativeTxtLookup`, `Authoritati
 `RdapClient` execute their real logic over `MutableDnsZone` and `FakeScopeHttp`.
 """
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
@@ -209,9 +209,10 @@ class FakeScopeHttp:
         self.routes = routes or {}
         self.resolver = resolver
         self.requests: list[str] = []
+        self.header_requests: list[tuple[str, Mapping[str, str] | None]] = []
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
-        return self._dispatch(url, limit=limit)
+    def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
+        return self._dispatch(url, limit=limit, headers=headers)
 
     def close(self) -> None:
         pass
@@ -238,8 +239,15 @@ class FakeScopeHttp:
             user_agent=user_agent,
         )
 
-    def _dispatch(self, url: str, *, limit: int) -> HttpBody:
+    def _dispatch(
+        self,
+        url: str,
+        *,
+        limit: int,
+        headers: Mapping[str, str] | None = None,
+    ) -> HttpBody:
         self.requests.append(url)
+        self.header_requests.append((url, dict(headers) if headers is not None else None))
         handler = self.routes.get(url)
         if handler is None:
             return HttpBody(status_code=404, content=b"Not Found")
@@ -276,7 +284,7 @@ class _BoundFakeHttp:
         self._rate_limit_org_id = rate_limit_org_id
         self._user_agent = user_agent
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
         if not self._allowed(url):
             raise ScopeError("The target is out of scope.")
         host = urlsplit(url).hostname
@@ -290,7 +298,7 @@ class _BoundFakeHttp:
             else nullcontext()
         )
         with limiter_ctx:
-            body = self._inner._dispatch(url, limit=limit)
+            body = self._inner._dispatch(url, limit=limit, headers=headers)
             return HttpBody(
                 body.status_code,
                 body.content,

@@ -25,6 +25,7 @@ from attacksurf.infra.tls import RawTlsHandshake
 from attacksurf.scanners.profiles import PROFILES
 from attacksurf.scanners.registry import registry
 from attacksurf.scanners.web import components as _web_components  # noqa: F401
+from attacksurf.scanners.web import headers as _web_headers  # noqa: F401
 from attacksurf.scanners.web import probe as _web_probe  # noqa: F401
 from attacksurf.scanners.web import tls as _web_tls  # noqa: F401
 from attacksurf.services import assets as assets_service
@@ -195,7 +196,11 @@ def _run_tls_check(
         profiles=PROFILES,
     )
     db_session.commit()
-    tls_jobs = [t for t in checks_queue.header if t.task_name == "active.scan"]
+    tls_job_ids = {
+        job.id
+        for job in db_session.scalars(scoped(Job, org_id).where(Job.scanner == "web.tls")).all()
+    }
+    tls_jobs = [t for t in checks_queue.header if t.job_id in tls_job_ids]
     events = _Events()
     for task in tls_jobs:
         run_check(

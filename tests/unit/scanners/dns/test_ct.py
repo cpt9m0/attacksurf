@@ -30,7 +30,7 @@ class FakeHttp:
         self.responses = list(responses)
         self.calls: list[str] = []
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         self.calls.append(url)
         response = self.responses.pop(0)
         if isinstance(response, Exception):

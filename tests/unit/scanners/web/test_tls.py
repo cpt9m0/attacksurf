@@ -35,7 +35,7 @@ class _StubDns:
 
 
 class _StubHttp:
-    def get(self, url: str, *, limit: int) -> object:
+    def get(self, url: str, *, limit: int, headers: object | None = None) -> object:
         raise AssertionError("web.tls must not make HTTP requests")
 
     def close(self) -> None:

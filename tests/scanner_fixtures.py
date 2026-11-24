@@ -67,7 +67,7 @@ class StubHttp:
     def __init__(self, redirect_allowed: bool = False) -> None:
         self.redirect_allowed = redirect_allowed
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         return HttpBody(status_code=200, content=b"[]")
 
     def close(self) -> None:

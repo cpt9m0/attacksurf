@@ -40,7 +40,7 @@ class _StubHttp:
         self._responses = responses
         self.calls: list[tuple[str, int]] = []
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         self.calls.append((url, limit))
         outcome = self._responses.get(url)
         if outcome is None:

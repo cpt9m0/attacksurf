@@ -71,7 +71,7 @@ class FakeHttp:
         self.body = body if body is not None else HttpBody(200, b"welcome")
         self.calls: list[tuple[str, int]] = []
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         self.calls.append((url, limit))
         if isinstance(self.body, Exception):
             raise self.body
