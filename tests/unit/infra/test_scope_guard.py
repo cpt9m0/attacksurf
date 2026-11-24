@@ -85,10 +85,12 @@ class StubHttp:
         *,
         redirect_allowed: object,
         max_redirects: int,
+        stop_on_out_of_scope_redirect: bool = False,
         rate_limiter: object = None,
         rate_limit_org_id: object = None,
         user_agent: str | None = None,
     ) -> "_RunHttp":
+        del stop_on_out_of_scope_redirect, rate_limiter, rate_limit_org_id, user_agent
         self.policies.append((resolver, redirect_allowed, max_redirects))
         return _RunHttp(self, redirect_allowed)
 
@@ -325,9 +327,11 @@ def test_scanner_must_support_the_asset_type() -> None:
 
 
 def test_non_network_asset_types_are_rejected() -> None:
-    url_scanner = scanner(asset_types=frozenset({AssetType.URL}))
+    repo_scanner = scanner(asset_types=frozenset({AssetType.REPO}))
     with pytest.raises(ScopeError, match="network"):
-        make_guard()[0].check(context(), target("https://acme.com/", AssetType.URL), url_scanner)
+        make_guard()[0].check(
+            context(), target("github.com/acme/app", AssetType.REPO), repo_scanner
+        )
 
 
 def test_services_grant_is_planned_without_network_io() -> None:
@@ -520,6 +524,7 @@ class RecordingSafeHttp(SafeHttpClient):
         *,
         redirect_allowed: object,
         max_redirects: int,
+        stop_on_out_of_scope_redirect: bool = False,
         rate_limiter: object = None,
         rate_limit_org_id: object = None,
         user_agent: str | None = None,
@@ -528,6 +533,7 @@ class RecordingSafeHttp(SafeHttpClient):
             resolver,
             redirect_allowed=redirect_allowed,  # type: ignore[arg-type]
             max_redirects=max_redirects,
+            stop_on_out_of_scope_redirect=stop_on_out_of_scope_redirect,
             timeout_seconds=self._timeout,
             tls=self._tls,
             rate_limiter=rate_limiter,
@@ -962,3 +968,49 @@ def test_tls_guard_restricts_host_port_and_private_ips_and_pins_valid_target() -
     with pytest.raises(ScopeError, match="private"):
         runtime.tls.inspect("acme.com")
     assert len(connector.calls) == 1
+
+
+def test_target_http_grant_validates_ports_urls_and_verified_root_redirects() -> None:
+    with pytest.raises(ValueError, match="http_ports"):
+        ScannerGrant(http=HttpPermission.NONE, http_ports=frozenset({443}))
+    with pytest.raises(ValueError, match="allowed web ports"):
+        ScannerGrant(http=HttpPermission.TARGET, http_ports=frozenset({22}))
+
+    scope, http = make_guard(active_scans_enabled=True)
+    verify_all(scope)
+    web_scanner = scanner(
+        asset_types=frozenset({AssetType.DOMAIN, AssetType.SUBDOMAIN, AssetType.URL}),
+        queue="active",
+        requires_verification=True,
+        grant=ScannerGrant(
+            http=HttpPermission.TARGET,
+            http_ports=frozenset({80, 443}),
+            follow_redirects=True,
+            dns_lookups=4,
+        ),
+    )
+
+    runtime = scope.check(context(), target("acme.com"), web_scanner)
+    assert http.policies[0][2] == 4
+    hook = http.policies[0][1]
+    assert callable(hook)
+    assert hook("https://acme.com/") is True
+    assert hook("https://www.acme.com/login") is True
+    assert hook("http://acme.com:80/") is True
+    assert hook("https://acme.com:8443/") is False
+    assert hook("https://attacker.example.net/") is False
+    del runtime
+
+    url_runtime = scope.check(context(), target("https://acme.com/app", AssetType.URL), web_scanner)
+    assert url_runtime is not None
+    with pytest.raises(ScopeError, match="allowed web ports"):
+        scope.check(context(), target("https://acme.com:8443/", AssetType.URL), web_scanner)
+
+    no_redir = scanner(
+        asset_types=frozenset({AssetType.DOMAIN}),
+        queue="active",
+        requires_verification=True,
+        grant=ScannerGrant(http=HttpPermission.TARGET, follow_redirects=False, dns_lookups=2),
+    )
+    scope.check(context(), target("acme.com"), no_redir)
+    assert http.policies[-1][2] == 0

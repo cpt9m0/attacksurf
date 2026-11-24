@@ -15,6 +15,7 @@ from attacksurf.scanners.dns import takeover_http as _takeover_http  # noqa: F40
 from attacksurf.scanners.dns import whois as _whois  # noqa: F401
 from attacksurf.scanners.profiles import MAX_DISCOVERED_ASSETS, PROFILES, WORKER_PROFILES
 from attacksurf.scanners.registry import registry
+from attacksurf.scanners.web import probe as _web_probe  # noqa: F401
 
 
 def test_dns_passive_profile_is_valid_and_selects_the_ct_discovery_scanner() -> None:
@@ -39,6 +40,19 @@ def test_dns_passive_profile_is_valid_and_selects_the_ct_discovery_scanner() -> 
     scanner = registry.get(profile.discover[0])
     assert scanner.queue == "passive"
     assert not scanner.requires_verification
+
+
+def test_web_active_profile_is_valid_and_selects_active_web_probe() -> None:
+    profile = PROFILES["web_active"]
+
+    registry.validate(profile)
+
+    assert profile.discover == ("web.probe",)
+    assert profile.checks == ()
+    assert profile.max_discovered_assets == MAX_DISCOVERED_ASSETS
+    scanner = registry.get(profile.discover[0])
+    assert scanner.queue == "active"
+    assert scanner.requires_verification is True
 
 
 def test_scheduled_profile_is_dns_only_and_not_public() -> None:

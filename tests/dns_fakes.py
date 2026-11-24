@@ -222,6 +222,7 @@ class FakeScopeHttp:
         *,
         redirect_allowed: Callable[[str], bool],
         max_redirects: int,
+        stop_on_out_of_scope_redirect: bool = False,
         rate_limiter: object = None,
         rate_limit_org_id: UUID | None = None,
         user_agent: str | None = None,
@@ -231,6 +232,7 @@ class FakeScopeHttp:
             resolver,
             redirect_allowed,
             max_redirects,
+            stop_on_out_of_scope_redirect=stop_on_out_of_scope_redirect,
             rate_limiter=rate_limiter,
             rate_limit_org_id=rate_limit_org_id,
             user_agent=user_agent,
@@ -260,6 +262,7 @@ class _BoundFakeHttp:
         redirect_allowed: Callable[[str], bool],
         max_redirects: int,
         *,
+        stop_on_out_of_scope_redirect: bool = False,
         rate_limiter: object = None,
         rate_limit_org_id: UUID | None = None,
         user_agent: str | None = None,
@@ -268,6 +271,7 @@ class _BoundFakeHttp:
         self._resolver = resolver
         self._allowed = redirect_allowed
         self._max_redirects = max_redirects
+        self._stop_on_out_of_scope_redirect = stop_on_out_of_scope_redirect
         self._rate_limiter = rate_limiter
         self._rate_limit_org_id = rate_limit_org_id
         self._user_agent = user_agent
@@ -286,7 +290,15 @@ class _BoundFakeHttp:
             else nullcontext()
         )
         with limiter_ctx:
-            return self._inner._dispatch(url, limit=limit)
+            body = self._inner._dispatch(url, limit=limit)
+            return HttpBody(
+                body.status_code,
+                body.content,
+                body.truncated,
+                body.headers,
+                final_url=body.final_url or url,
+                redirect_chain=body.redirect_chain,
+            )
 
     def close(self) -> None:
         pass

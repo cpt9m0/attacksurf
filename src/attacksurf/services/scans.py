@@ -253,9 +253,7 @@ def dispatch_stage(
         scoped(Asset, org_id)
         .where(
             Asset.is_active.is_(True),
-            (Asset.id == scan.root_asset_id)
-            if discovery
-            else ((Asset.id == scan.root_asset_id) | (Asset.parent_id == scan.root_asset_id)),
+            (Asset.id == scan.root_asset_id) | (Asset.parent_id == scan.root_asset_id),
         )
         .order_by(Asset.id)
     ).all()

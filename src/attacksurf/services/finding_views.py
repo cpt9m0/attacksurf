@@ -531,7 +531,14 @@ def _evidence_row(evidence: Evidence) -> EvidenceRow:
             fields.append(EvidenceField("URL", url))
         if status_code:
             fields.append(EvidenceField("Status", status_code))
-        body = _text(data.get("body_snippet"), MAX_EVIDENCE_TEXT)
+        raw_headers = data.get("headers")
+        header_lines = (
+            [f"{k}: {_text(v, MAX_FIELD_TEXT)}" for k, v in raw_headers.items()]
+            if isinstance(raw_headers, dict)
+            else []
+        )
+        snippet = _text(data.get("body_snippet"), MAX_EVIDENCE_TEXT)
+        body = "\n".join([*header_lines, "", snippet]).strip() if header_lines else snippet
         title = "HTTP response"
     else:
         fields = []

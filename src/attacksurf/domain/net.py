@@ -222,7 +222,14 @@ class UnconfiguredRdap:
 class HttpBody:
     """A response as a scanner sees it: the body was capped by the client while reading."""
 
-    __slots__ = ("content", "headers", "status_code", "truncated")
+    __slots__ = (
+        "content",
+        "final_url",
+        "headers",
+        "redirect_chain",
+        "status_code",
+        "truncated",
+    )
 
     def __init__(
         self,
@@ -230,11 +237,16 @@ class HttpBody:
         content: bytes,
         truncated: bool = False,
         headers: Mapping[str, str] | None = None,
+        *,
+        final_url: str = "",
+        redirect_chain: tuple[tuple[str, int], ...] = (),
     ) -> None:
         self.status_code = status_code
         self.content = content
         self.truncated = truncated
         self.headers = headers or {}
+        self.final_url = final_url
+        self.redirect_chain = redirect_chain
 
     def __repr__(self) -> str:
         return f"HttpBody(status_code={self.status_code}, bytes={len(self.content)})"
@@ -274,6 +286,7 @@ class ScopeHttp(SafeHttpClient, Protocol):
         *,
         redirect_allowed: Callable[[str], bool],
         max_redirects: int,
+        stop_on_out_of_scope_redirect: bool = False,
         rate_limiter: TargetRateLimiter | None = None,
         rate_limit_org_id: UUID | None = None,
         user_agent: str | None = None,

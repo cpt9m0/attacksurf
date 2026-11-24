@@ -96,6 +96,7 @@ class SafeHttpClient:
         *,
         redirect_allowed: Callable[[str], bool] | None = None,
         max_redirects: int = MAX_REDIRECTS,
+        stop_on_out_of_scope_redirect: bool = False,
         timeout_seconds: float = 5.0,
         max_request_seconds: float = DEFAULT_MAX_REQUEST_SECONDS,
         max_body_bytes: int = MAX_BODY_BYTES,
@@ -109,6 +110,7 @@ class SafeHttpClient:
         # is consulted before the first request as well as at every redirect.
         self._redirect_allowed = redirect_allowed
         self._max_redirects = min(max_redirects, MAX_REDIRECTS)
+        self._stop_on_out_of_scope_redirect = stop_on_out_of_scope_redirect
         self._timeout = timeout_seconds
         self._max_request_seconds = max_request_seconds
         self._max_body_bytes = max(1, max_body_bytes)
@@ -126,6 +128,7 @@ class SafeHttpClient:
         *,
         redirect_allowed: Callable[[str], bool],
         max_redirects: int,
+        stop_on_out_of_scope_redirect: bool = False,
         rate_limiter: TargetRateLimiter | None = None,
         rate_limit_org_id: UUID | None = None,
         user_agent: str | None = None,
@@ -135,6 +138,7 @@ class SafeHttpClient:
             resolver,
             redirect_allowed=redirect_allowed,
             max_redirects=max_redirects,
+            stop_on_out_of_scope_redirect=stop_on_out_of_scope_redirect,
             timeout_seconds=self._timeout,
             max_request_seconds=self._max_request_seconds,
             max_body_bytes=self._max_body_bytes,
@@ -150,18 +154,36 @@ class SafeHttpClient:
         """GET `url`; an installed policy hook is consulted before this request, not just hops."""
         cap = max(1, min(limit, self._max_body_bytes))
         hop_headers = _merge_request_headers(headers, user_agent=None)
+        chain: list[tuple[str, int]] = []
+        if self._redirect_allowed is not None and not self._redirect_allowed(url):
+            raise ScopeError("The target is out of scope.")
         for _hop in range(self._max_redirects + 1):
-            # The hook is the gate's allowlist: checking it before every hop, including the
-            # first, means a run-scoped client can never reach a host the guard refuses.
-            if self._redirect_allowed is not None and not self._redirect_allowed(url):
-                raise ScopeError("The target is out of scope.")
             body = self._request(url, limit=cap, headers=hop_headers)
-            if body.status_code not in REDIRECT_CODES:
-                return body
+            if body.status_code not in REDIRECT_CODES or self._max_redirects == 0:
+                return HttpBody(
+                    body.status_code,
+                    body.content,
+                    body.truncated,
+                    body.headers,
+                    final_url=url,
+                    redirect_chain=tuple(chain),
+                )
             try:
                 next_url = str(httpx.URL(url).join(body.headers.get("location", "")))
             except REDIRECT_ERRORS:
                 raise ScopeError("Redirect target is invalid.") from None
+            if self._redirect_allowed is not None and not self._redirect_allowed(next_url):
+                if self._stop_on_out_of_scope_redirect:
+                    return HttpBody(
+                        body.status_code,
+                        body.content,
+                        body.truncated,
+                        body.headers,
+                        final_url=url,
+                        redirect_chain=tuple(chain),
+                    )
+                raise ScopeError("The target is out of scope.")
+            chain.append((url, body.status_code))
             if _url_origin(next_url) != _url_origin(url):
                 hop_headers = {
                     k: v for k, v in hop_headers.items() if k.lower() not in _SENSITIVE_HEADER_NAMES

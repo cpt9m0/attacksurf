@@ -205,3 +205,14 @@ def test_list_scans_filters_and_rejects_bad_params(alice: FlaskClient, root_id: 
     assert alice.get("/api/v1/scans", query_string={"root": str(uuid4())}).get_json()["total"] == 0
     assert alice.get("/api/v1/scans", query_string={"status": "queued"}).get_json()["total"] == 1
     assert alice.get("/api/v1/scans", query_string={"status": "completed"}).get_json()["total"] == 0
+
+
+def test_api_starts_web_active_scan(alice: FlaskClient, root_id: UUID) -> None:
+    response = _post(
+        alice,
+        "/api/v1/scans",
+        {"root_asset_id": str(root_id), "profile": "web_active"},
+    )
+
+    assert response.status_code == 201
+    assert response.get_json()["scan"]["profile"] == "web_active"

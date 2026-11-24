@@ -4,9 +4,12 @@
 worker-side use case that performs one DNS lookup and records the outcome.
 """
 
+import ipaddress
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 from uuid import UUID
 
+import idna
 import structlog
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -51,8 +54,10 @@ class DbOwnershipChecker:
             return False
 
     def _is_verified(self, session: Session, org_id: UUID, asset: AssetRef) -> bool:
+        if asset.type is AssetType.URL:
+            return self._is_url_verified(session, org_id, asset.value)
         if asset.type not in INHERITING_TYPES:
-            # A DNS TXT proof says nothing about owning an address, URL or repository: those
+            # A DNS TXT proof says nothing about owning an address or repository: those
             # need their own method. Without it, active checks on them stay denied.
             return False
         asset_id, root_id, is_active = session.execute(
@@ -66,9 +71,35 @@ class DbOwnershipChecker:
         # `parent_id` is provenance (what a scan found it under), not ownership: it is only
         # trusted for `subdomain`, where the root does control the name in its zone.
         proof_of = root_id if asset.type is AssetType.SUBDOMAIN and root_id else asset_id
+        return self._has_valid_proof(session, org_id, proof_of)
+
+    def _is_url_verified(self, session: Session, org_id: UUID, url: str) -> bool:
+        host = _verified_url_host(url)
+        if host is None:
+            return False
+        row = session.execute(
+            scoped(Asset, org_id)
+            .where(Asset.type == AssetType.URL, Asset.value == url)
+            .with_only_columns(Asset.parent_id, Asset.is_active)
+        ).one_or_none()
+        if row is None or not row[1] or row[0] is None:
+            return False
+        parent = session.execute(
+            scoped(Asset, org_id)
+            .where(Asset.id == row[0], Asset.type == AssetType.DOMAIN, Asset.is_active.is_(True))
+            .with_only_columns(Asset.id, Asset.value)
+        ).one_or_none()
+        if parent is None:
+            return False
+        root_id, root_host = parent
+        if host != root_host and not host.endswith(f".{root_host}"):
+            return False
+        return self._has_valid_proof(session, org_id, root_id)
+
+    def _has_valid_proof(self, session: Session, org_id: UUID, root_id: UUID) -> bool:
         row = session.execute(
             scoped(Verification, org_id)
-            .where(Verification.asset_id == proof_of)
+            .where(Verification.asset_id == root_id)
             .with_only_columns(Verification.status, Verification.expires_at)
         ).one_or_none()
         if row is None:
@@ -76,6 +107,21 @@ class DbOwnershipChecker:
         status, expires_at = row
         # The same rule the UI shows, so a badge never claims more than the gate allows.
         return ownership_state(status, expires_at, datetime.now(UTC)) is OwnershipState.VERIFIED
+
+
+def _verified_url_host(url: str) -> str | None:
+    raw_host = urlsplit(url).hostname
+    if not raw_host:
+        return None
+    try:
+        ipaddress.ip_address(raw_host)
+        return None
+    except ValueError:
+        pass
+    try:
+        return idna.encode(raw_host.removesuffix("."), uts46=True).decode("ascii").lower()
+    except idna.IDNAError:
+        return None
 
 
 class VerificationNotFound(LookupError):

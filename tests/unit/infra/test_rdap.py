@@ -64,10 +64,12 @@ class StubHttp:
         *,
         redirect_allowed: Any,
         max_redirects: int,
+        stop_on_out_of_scope_redirect: bool = False,
         rate_limiter: object = None,
         rate_limit_org_id: object = None,
         user_agent: str | None = None,
     ) -> "RunHttp":
+        del stop_on_out_of_scope_redirect, rate_limiter, rate_limit_org_id, user_agent
         self.policies.append(redirect_allowed)
         return RunHttp(self, redirect_allowed)
 

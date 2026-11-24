@@ -6,6 +6,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- `web.probe` HTTP service discovery scanner (`scanners/web/probe.py`) and `web_active` profile
+  (selectable in UI/API): probes `https://` then `http://` on active verified domains/subdomains
+  and refreshes `url` assets, creates `url` assets + `serves` edges with capped `Asset.details["web"]`
+  metadata and `<redacted>` `Set-Cookie` values, adds `http_ports`/`follow_redirects` grants plus
+  verified-root URL ownership and out-of-scope redirect halting in `ScopeGuard`/`SafeHttpClient`,
+  and adds `build_http_response_evidence` (`EvidenceKind.HTTP_RESPONSE`) (#72).
 - Global vulnerability intelligence store (`vuln_cves`, `vuln_cpe_ranges`, `vuln_sync_state`,
   migration `0015`), pure CPE 2.3 and version-range matching (`domain.vulnintel`,
   `services.vulnintel.match_product`), daily `passive.vulnintel_sync` Celery Beat task fetching NVD

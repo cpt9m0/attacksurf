@@ -39,7 +39,15 @@ from attacksurf.domain.net import (
     ZoneTransferAttempt,
 )
 from attacksurf.domain.sandbox import SandboxResult, SandboxRunner, UnconfiguredSandboxRunner
-from attacksurf.domain.scanners import AssetRef, ScanContext, Scanner, ScannerGate, ScannerGrant
+from attacksurf.domain.scanners import (
+    ALLOWED_WEB_PORTS,
+    DEFAULT_HTTP_PORTS,
+    AssetRef,
+    ScanContext,
+    Scanner,
+    ScannerGate,
+    ScannerGrant,
+)
 from attacksurf.domain.scope import (
     HttpPermission,
     PublicSuffix,
@@ -124,12 +132,22 @@ class ScopeGuard(ScannerGate):
         if is_active and not self._ownership.is_verified(ctx.org_id, asset):
             raise ScopeError("Active checks need a verified asset.")
         self._check_services(grant)
+        target_host = self._target_host(asset)
         guarded_dns = _GuardedDns(self._dns, max_lookups=grant.dns_lookups)
         is_target_http = grant.http is HttpPermission.TARGET
+        verified_root = (
+            ctx.root_asset.value
+            if is_target_http and ctx.root_asset.type is AssetType.DOMAIN
+            else None
+        )
         http = _GuardedHttp(
             self._http,
-            target=asset.value if is_target_http else None,
+            target=target_host if is_target_http else None,
+            verified_root=verified_root,
             services=grant.http_hosts,
+            allowed_ports=grant.http_ports,
+            follow_redirects=grant.follow_redirects,
+            stop_on_out_of_scope_redirect=is_target_http and grant.follow_redirects,
             check_host=self._check_host,
             rate_limiter=self._rate_limiter if is_target_http else None,
             rate_limit_org_id=ctx.org_id if is_target_http else None,
@@ -151,7 +169,7 @@ class ScopeGuard(ScannerGate):
                     rate_limiter=self._rate_limiter,
                     rate_limit_org_id=ctx.org_id,
                 ),
-                target_host=asset.value,
+                target_host=target_host,
                 allowed_ports=grant.tls_ports,
                 check_host=self._check_host,
             )
@@ -194,8 +212,27 @@ class ScopeGuard(ScannerGate):
             self._check_host(asset.value)
         elif asset.type is AssetType.IP:
             check_address(asset.value)
+        elif asset.type is AssetType.URL:
+            host = self._check_host(request_host(asset.value))
+            parts = urlsplit(asset.value)
+            port = (
+                parts.port if parts.port is not None else (443 if parts.scheme == "https" else 80)
+            )
+            allowed = (
+                scanner.grant.http_ports
+                if scanner.grant.http is HttpPermission.TARGET
+                else ALLOWED_WEB_PORTS
+            )
+            if port not in allowed:
+                raise ScopeError("The URL port is outside the scanner's allowed web ports.")
+            del host
         else:
             raise ScopeError("This asset type can't be scanned over the network.")
+
+    def _target_host(self, asset: AssetRef) -> str:
+        if asset.type is AssetType.URL:
+            return self._check_host(request_host(asset.value))
+        return asset.value
 
     def _check_host(self, host: str) -> str:
         return check_public_hostname(host, self._classify(host))
@@ -279,7 +316,11 @@ class _GuardedHttp:
         inner: ScopeHttp,
         *,
         target: str | None,
+        verified_root: str | None = None,
         services: frozenset[str],
+        allowed_ports: frozenset[int] = DEFAULT_HTTP_PORTS,
+        follow_redirects: bool = True,
+        stop_on_out_of_scope_redirect: bool = False,
         check_host: Callable[[str], str],
         rate_limiter: TargetRateLimiter | None = None,
         rate_limit_org_id: UUID | None = None,
@@ -287,7 +328,11 @@ class _GuardedHttp:
     ) -> None:
         self._inner = inner
         self._target = target
+        self._verified_root = verified_root
         self._services = services
+        self._allowed_ports = allowed_ports
+        self._follow_redirects = follow_redirects
+        self._stop_on_out_of_scope_redirect = stop_on_out_of_scope_redirect
         self._check_host = check_host
         self._rate_limiter = rate_limiter
         self._rate_limit_org_id = rate_limit_org_id
@@ -301,7 +346,17 @@ class _GuardedHttp:
         if self._target is None and not self._services:
             return False  # a DNS-only grant never reaches the network over HTTP
         host = self._check_host(request_host(url))
-        return hostname_allowed(host, self._services) or host == self._target
+        if self._services and hostname_allowed(host, self._services):
+            return True
+        if self._target is None:
+            return False
+        parts = urlsplit(url)
+        port = parts.port if parts.port is not None else (443 if parts.scheme == "https" else 80)
+        host_ok = host == self._target or (
+            self._verified_root is not None
+            and (host == self._verified_root or host.endswith(f".{self._verified_root}"))
+        )
+        return port in self._allowed_ports and host_ok
 
     def get(self, url: str, *, limit: int) -> HttpBody:
         self.require_allowed(url)
@@ -320,7 +375,8 @@ class _GuardedHttp:
         return self._inner.with_redirect_policy(
             resolver,
             redirect_allowed=self.host_allowed,
-            max_redirects=MAX_REDIRECTS,
+            max_redirects=MAX_REDIRECTS if self._follow_redirects else 0,
+            stop_on_out_of_scope_redirect=self._stop_on_out_of_scope_redirect,
             rate_limiter=self._rate_limiter,
             rate_limit_org_id=self._rate_limit_org_id,
             user_agent=self._user_agent,
