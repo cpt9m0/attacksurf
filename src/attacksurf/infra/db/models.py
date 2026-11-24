@@ -1,6 +1,6 @@
 """ORM models. Alembic autogenerate sees every model imported here."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
@@ -9,6 +9,8 @@ from uuid import UUID
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    Date,
+    DateTime,
     Enum,
     ForeignKey,
     ForeignKeyConstraint,
@@ -501,3 +503,81 @@ class NotificationDelivery(TenantScoped, Base):
     scan_id: Mapped[UUID] = mapped_column(index=True)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     sent_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class VulnCve(Timestamps, Base):
+    """Global CVE reference catalog synced from NVD, CISA KEV, and FIRST EPSS (#74).
+
+    Explicitly NOT tenant-scoped (exception to the `org_id` rule, ADR 0006): holds public
+    vulnerability reference metadata shared read-only across all organizations and never
+    contains tenant data.
+    """
+
+    __tablename__ = "vuln_cves"
+    __table_args__ = (
+        CheckConstraint(
+            "cvss_v3_score IS NULL OR (cvss_v3_score >= 0 AND cvss_v3_score <= 10)",
+            name="cvss_v3_range",
+        ),
+        CheckConstraint(
+            "cvss_v4_score IS NULL OR (cvss_v4_score >= 0 AND cvss_v4_score <= 10)",
+            name="cvss_v4_range",
+        ),
+        CheckConstraint(
+            "epss_score IS NULL OR (epss_score >= 0 AND epss_score <= 1)",
+            name="epss_score_range",
+        ),
+        CheckConstraint(
+            "epss_percentile IS NULL OR (epss_percentile >= 0 AND epss_percentile <= 1)",
+            name="epss_percentile_range",
+        ),
+    )
+
+    cve_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    description: Mapped[str] = mapped_column(Text, default="", server_default="")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_modified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    cvss_v3_score: Mapped[float | None]
+    cvss_v3_vector: Mapped[str | None] = mapped_column(String(128))
+    cvss_v4_score: Mapped[float | None]
+    cvss_v4_vector: Mapped[str | None] = mapped_column(String(160))
+    in_kev: Mapped[bool] = mapped_column(default=False, server_default=text("false"), index=True)
+    kev_date_added: Mapped[date | None] = mapped_column(Date)
+    epss_score: Mapped[float | None]
+    epss_percentile: Mapped[float | None]
+
+
+class VulnCpeRange(UUIDPrimaryKey, Base):
+    """Global affected-product CPE version range linked to a `VulnCve` (#74).
+
+    Explicitly NOT tenant-scoped (read-only global reference data).
+    """
+
+    __tablename__ = "vuln_cpe_ranges"
+    __table_args__ = (Index("ix_vuln_cpe_ranges_vendor_product", "vendor", "product"),)
+
+    cve_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("vuln_cves.cve_id", ondelete="CASCADE"), index=True
+    )
+    vendor: Mapped[str] = mapped_column(String(128))
+    product: Mapped[str] = mapped_column(String(128))
+    exact_version: Mapped[str | None] = mapped_column(String(128))
+    version_start_including: Mapped[str | None] = mapped_column(String(128))
+    version_start_excluding: Mapped[str | None] = mapped_column(String(128))
+    version_end_including: Mapped[str | None] = mapped_column(String(128))
+    version_end_excluding: Mapped[str | None] = mapped_column(String(128))
+
+
+class VulnSyncState(Timestamps, Base):
+    """Per-feed sync cursors for NVD, CISA KEV, and FIRST EPSS (#74).
+
+    Explicitly NOT tenant-scoped (instance-wide background sync state).
+    """
+
+    __tablename__ = "vuln_sync_state"
+
+    source: Mapped[str] = mapped_column(String(32), primary_key=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cursor_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cursor_tag: Mapped[str | None] = mapped_column(String(128))
+    records_processed: Mapped[int] = mapped_column(default=0, server_default=text("0"))

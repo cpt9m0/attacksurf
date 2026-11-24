@@ -1,6 +1,6 @@
 """ScopeGuard: target validation, ownership gating and the per-run network allowlists."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from uuid import uuid4
 
 import pytest
@@ -537,7 +537,10 @@ class RecordingSafeHttp(SafeHttpClient):
         clone.sent = self.sent
         return clone
 
-    def _request(self, url: str, *, limit: int) -> HttpBody:
+    def _request(
+        self, url: str, *, limit: int, headers: Mapping[str, str] | None = None
+    ) -> HttpBody:
+        del headers
         self.sent.append((url, limit))
         return HttpBody(200, b"[]")
 

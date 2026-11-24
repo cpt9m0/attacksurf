@@ -25,6 +25,7 @@ from attacksurf.infra.rate_limit import RedisTargetRateLimiter, TargetRateLimitP
 from attacksurf.infra.sandbox import LauncherSandboxRunner
 from attacksurf.infra.scope_guard import ScopeGuard
 from attacksurf.infra.storage import LocalArtifactStore
+from attacksurf.infra.vulnintel import build_vulnintel_http_client
 from attacksurf.services.ownership import DbOwnershipChecker
 
 # crt.sh regularly takes several seconds; the client's 5 s default is too tight for it.
@@ -168,3 +169,8 @@ def email_sender() -> EmailSender | None:
 def http_client() -> SafeHttpClient:
     """Base client: refuses every redirect on its own; runs get an allowlisted copy."""
     return SafeHttpClient(dns_resolver(), timeout_seconds=SCANNER_HTTP_TIMEOUT_SECONDS)
+
+
+def vulnintel_http_client() -> SafeHttpClient:
+    """Run-scoped client allowlisted only to NVD, CISA KEV, and FIRST EPSS HTTPS endpoints."""
+    return build_vulnintel_http_client(dns_resolver(), user_agent=settings().scanner_user_agent)

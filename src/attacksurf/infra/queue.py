@@ -90,6 +90,11 @@ def celery_config(settings: Settings) -> dict[str, Any]:
                 "schedule": crontab(),
                 "options": {"expires": 60},
             },
+            # Daily vulnerability intelligence sync (#74: NVD, CISA KEV, FIRST EPSS).
+            "sync-vuln-intel": {
+                "task": "passive.vulnintel_sync",
+                "schedule": crontab(hour=3, minute=25),
+            },
         },
     }
 

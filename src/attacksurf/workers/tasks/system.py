@@ -6,7 +6,7 @@ import structlog
 
 from attacksurf.infra.queue import CeleryTaskQueue
 from attacksurf.scanners.registry import registry
-from attacksurf.services import artifacts, scan_schedules
+from attacksurf.services import artifacts, scan_schedules, vulnintel
 from attacksurf.workers import runtime
 from attacksurf.workers.app import app
 from attacksurf.workers.base import TrackedTask
@@ -54,3 +54,29 @@ def enqueue_due_scans() -> None:
         raise RuntimeError("Scan schedule tick failed.") from None
     if count:
         log.info("scheduled scans queued", count=count)
+
+
+@app.task(name="passive.vulnintel_sync")
+def vulnintel_sync() -> None:
+    """Daily beat entry point: sync NVD, CISA KEV, and FIRST EPSS reference stores (#74)."""
+    api_key = runtime.settings().nvd_api_key
+    client = runtime.vulnintel_http_client()
+    try:
+        with runtime.session_factory()() as session:
+            summary = vulnintel.sync_vuln_intel(
+                session,
+                client,
+                nvd_api_key=api_key.get_secret_value() if api_key is not None else None,
+            )
+    except Exception as exc:
+        log.error("vulnintel sync failed", error=type(exc).__name__)
+        raise RuntimeError("Vulnerability intelligence sync failed.") from None
+    finally:
+        client.close()
+    log.info(
+        "vulnintel sync finished",
+        cves=summary.nvd_cves_upserted,
+        ranges=summary.nvd_ranges_upserted,
+        kev=summary.kev_updated,
+        epss=summary.epss_updated,
+    )

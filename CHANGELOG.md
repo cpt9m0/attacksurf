@@ -6,6 +6,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Global vulnerability intelligence store (`vuln_cves`, `vuln_cpe_ranges`, `vuln_sync_state`,
+  migration `0015`), pure CPE 2.3 and version-range matching (`domain.vulnintel`,
+  `services.vulnintel.match_product`), daily `passive.vulnintel_sync` Celery Beat task fetching NVD
+  CVE 2.0, CISA KEV, and FIRST EPSS over `VULNINTEL_GRANT` (optional `NVD_API_KEY`), custom headers /
+  `max_body_bytes` / cross-origin secret-header stripping in `SafeHttpClient`, and NVD/KEV/EPSS
+  attribution (#74).
 - Guarded TLS handshake adapter (`infra/tls.py`, `ctx.runtime.tls.inspect`) with IP pinning, SNI,
   web-port allowlists (`ScannerGrant.tls`/`tls_ports`), bounded chain parsing, non-raising cert
   validation reporting, best-effort TLS 1.0/1.1 probing, and `ssl` scanner import ban (#71, ADR 0033).

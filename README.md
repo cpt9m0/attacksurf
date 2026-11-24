@@ -192,6 +192,12 @@ Found a vulnerability in attacksurf itself? Please report it privately: [SECURIT
 [GNU AGPL v3.0](LICENSE). Free to use, modify, and self-host. If you run a modified version as a
 network service, you must share your changes under the same license.
 
+### Data attribution
+
+Vulnerability intelligence uses data from the CISA Known Exploited Vulnerabilities (KEV) catalog,
+FIRST EPSS, and the National Vulnerability Database (NVD). This product uses data from the NVD API
+but is not endorsed or certified by the NVD.
+
 ---
 
 <div align="center">

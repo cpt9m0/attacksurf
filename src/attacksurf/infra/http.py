@@ -10,7 +10,7 @@ import ipaddress
 import ssl
 import time
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from typing import Any, Protocol
 from urllib.parse import SplitResult, urlsplit
@@ -31,6 +31,10 @@ MAX_BODY_BYTES = 1024 * 1024
 # TargetRateLimitPolicy.lease_ttl_seconds (60 s) so slow-drip responses cannot outlive leases.
 DEFAULT_MAX_REQUEST_SECONDS = 25.0
 REDIRECT_ERRORS = (httpx.InvalidURL, ValueError, ScopeError)
+_FORBIDDEN_HEADER_NAMES = frozenset({"host", "content-length", "transfer-encoding", "connection"})
+_SENSITIVE_HEADER_NAMES = frozenset(
+    {"authorization", "proxy-authorization", "apikey", "x-api-key", "cookie"}
+)
 
 
 def bounded_limit(limit: int) -> int:
@@ -94,6 +98,7 @@ class SafeHttpClient:
         max_redirects: int = MAX_REDIRECTS,
         timeout_seconds: float = 5.0,
         max_request_seconds: float = DEFAULT_MAX_REQUEST_SECONDS,
+        max_body_bytes: int = MAX_BODY_BYTES,
         tls: ssl.SSLContext | None = None,
         rate_limiter: TargetRateLimiter | None = None,
         rate_limit_org_id: UUID | None = None,
@@ -106,6 +111,7 @@ class SafeHttpClient:
         self._max_redirects = min(max_redirects, MAX_REDIRECTS)
         self._timeout = timeout_seconds
         self._max_request_seconds = max_request_seconds
+        self._max_body_bytes = max(1, max_body_bytes)
         self._tls = tls or ssl.create_default_context()
         self._rate_limiter = rate_limiter
         self._rate_limit_org_id = rate_limit_org_id
@@ -131,6 +137,7 @@ class SafeHttpClient:
             max_redirects=max_redirects,
             timeout_seconds=self._timeout,
             max_request_seconds=self._max_request_seconds,
+            max_body_bytes=self._max_body_bytes,
             tls=self._tls,
             rate_limiter=rate_limiter if rate_limiter is not None else self._rate_limiter,
             rate_limit_org_id=(
@@ -139,21 +146,27 @@ class SafeHttpClient:
             user_agent=user_agent if user_agent is not None else self._user_agent,
         )
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
         """GET `url`; an installed policy hook is consulted before this request, not just hops."""
-        cap = bounded_limit(limit)
+        cap = max(1, min(limit, self._max_body_bytes))
+        hop_headers = _merge_request_headers(headers, user_agent=None)
         for _hop in range(self._max_redirects + 1):
             # The hook is the gate's allowlist: checking it before every hop, including the
             # first, means a run-scoped client can never reach a host the guard refuses.
             if self._redirect_allowed is not None and not self._redirect_allowed(url):
                 raise ScopeError("The target is out of scope.")
-            body = self._request(url, limit=cap)
+            body = self._request(url, limit=cap, headers=hop_headers)
             if body.status_code not in REDIRECT_CODES:
                 return body
             try:
-                url = str(httpx.URL(url).join(body.headers.get("location", "")))
+                next_url = str(httpx.URL(url).join(body.headers.get("location", "")))
             except REDIRECT_ERRORS:
                 raise ScopeError("Redirect target is invalid.") from None
+            if _url_origin(next_url) != _url_origin(url):
+                hop_headers = {
+                    k: v for k, v in hop_headers.items() if k.lower() not in _SENSITIVE_HEADER_NAMES
+                }
+            url = next_url
         raise ScopeError("Too many redirects.")
 
     def close(self) -> None:
@@ -167,7 +180,9 @@ class SafeHttpClient:
         if pool is not None:
             pool.close()
 
-    def _request(self, url: str, *, limit: int) -> HttpBody:
+    def _request(
+        self, url: str, *, limit: int, headers: Mapping[str, str] | None = None
+    ) -> HttpBody:
         if self._closed:
             raise ScopeError("The client was closed.")
         try:
@@ -184,8 +199,8 @@ class SafeHttpClient:
             raise ScopeError("The URL has no host.")
         address = connection_address(self._resolver.resolve_name(host))
         pool = self._pool_for(host, address)
-        headers = {"User-Agent": self._user_agent} if self._user_agent else None
-        request = httpx.Request("GET", url, headers=headers)
+        req_headers = _merge_request_headers(headers, user_agent=self._user_agent)
+        request = httpx.Request("GET", url, headers=req_headers or None)
         per_io_timeout = min(self._timeout, self._max_request_seconds)
         core_request = httpcore.Request(
             method="GET",
@@ -215,7 +230,7 @@ class SafeHttpClient:
                     # A plain body is read up to `limit`; an encoded one may need more wire bytes
                     # than its decoded size, but never unlimited (decompression expands).
                     wire_cap = (
-                        min(limit * MAX_EXPANSION, MAX_ENCODED_BYTES)
+                        min(limit * MAX_EXPANSION, self._max_body_bytes * 2)
                         if _is_encoded(encoding)
                         else limit
                     )
@@ -260,6 +275,36 @@ class SafeHttpClient:
         )
         self._pinned_to = (host, address)
         return self._pool
+
+
+def _merge_request_headers(
+    headers: Mapping[str, str] | None, *, user_agent: str | None
+) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    if headers:
+        for name, value in headers.items():
+            if name.lower() in _FORBIDDEN_HEADER_NAMES:
+                continue
+            merged[name] = value
+    if user_agent and not any(k.lower() == "user-agent" for k in merged):
+        merged["User-Agent"] = user_agent
+    return merged
+
+
+def _url_origin(url: str) -> tuple[str, str, int | None] | None:
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    if not parts.hostname:
+        return None
+    default_port = 443 if parts.scheme == "https" else 80 if parts.scheme == "http" else None
+    return (
+        parts.scheme.lower(),
+        parts.hostname.lower(),
+        port if port is not None else default_port,
+    )
 
 
 def _encoded_host(host: str) -> bytes:

@@ -863,3 +863,18 @@ def test_scanner_contact_url_rejects_invalid_values(bad_url: str) -> None:
 def test_active_rate_limit_settings_reject_out_of_range(field: str, value: float | int) -> None:
     with pytest.raises(ValidationError):
         make_settings(**{field: value})
+
+
+def test_nvd_api_key_defaults_none_and_reads_secret_from_env(
+    clean_env: pytest.MonkeyPatch,
+) -> None:
+    assert make_settings().nvd_api_key is None
+    assert make_settings(nvd_api_key=SecretStr("   ")).nvd_api_key is None
+
+    sample = "placeholder"
+    clean_env.setenv("NVD_API_KEY", f" {sample} ")
+    settings = settings_from_env()
+
+    assert isinstance(settings.nvd_api_key, SecretStr)
+    assert settings.nvd_api_key.get_secret_value() == sample
+    assert sample not in repr(settings)

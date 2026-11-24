@@ -100,7 +100,9 @@ sync" rule below is satisfied**. Do not claim done without running them.
    poll with HTMX.
 4. **Every tenant-owned row has `org_id`** (model inherits `TenantScoped`), and every query is
    scoped by it via `infra/db/tenancy` (`scoped()`, `get_scoped()`). No cross-org reads, ever.
-   Each new endpoint gets a tenant-isolation test.
+   Each new endpoint gets a tenant-isolation test. (`vuln_cves`, `vuln_cpe_ranges`, and
+   `vuln_sync_state` are global read-only reference tables — explicit exception alongside
+   `orgs`/`users`.)
 5. **Scanners are plugins** (`@register_scanner`) that return normalized pydantic output. They
    never write to the DB directly; the pipeline persists. Contracts: `domain/scanners.py`;
    references use `(type, value)`, not row IDs. Scanner tasks persist data + completed job

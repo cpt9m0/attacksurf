@@ -161,6 +161,16 @@ def test_beat_dispatches_recurring_scans_every_minute() -> None:
     assert entry["schedule"].hour == set(range(24))
 
 
+def test_beat_schedules_daily_vulnintel_sync() -> None:
+    app = create_celery(make_settings(redis_url=SecretStr("redis://redis.test:6379/2")))
+
+    entry = app.conf.beat_schedule["sync-vuln-intel"]
+
+    assert entry["task"] == "passive.vulnintel_sync"
+    assert entry["schedule"].hour == {3}
+    assert entry["schedule"].minute == {25}
+
+
 def test_every_beat_entry_names_a_registered_task_on_a_consumed_queue() -> None:
     worker_app.loader.import_default_modules()
 
