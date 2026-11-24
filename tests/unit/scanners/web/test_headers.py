@@ -813,6 +813,59 @@ def test_web_headers_treats_empty_frame_ancestors_as_blocking() -> None:
     assert summary["clickjacking_protected"] is True
 
 
+@pytest.mark.parametrize(
+    ("frame_ancestors", "expected_rules"),
+    [
+        ("https://*", ["web.headers.clickjacking"]),
+        ("https://*:*", ["web.headers.clickjacking"]),
+        ("https://*.acme.com", []),
+    ],
+)
+def test_web_headers_evaluates_wildcard_hosts_in_frame_ancestors(
+    frame_ancestors: str, expected_rules: list[str]
+) -> None:
+    ctx, _ = _ctx(
+        web_details={
+            "final_url": "https://acme.com/",
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": {
+                "strict-transport-security": "max-age=31536000",
+                "content-security-policy": f"default-src 'self'; frame-ancestors {frame_ancestors}",
+                "x-content-type-options": "nosniff",
+            },
+            "cookies": [],
+        }
+    )
+
+    out = WebHeaders().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+
+    assert [f.rule_id for f in out.findings] == expected_rules
+
+
+def test_web_headers_accepts_combined_duplicate_nosniff_headers() -> None:
+    ctx, _ = _ctx(
+        web_details={
+            "final_url": "https://acme.com/",
+            "status_code": 200,
+            "content_type": "text/html",
+            "headers": {
+                "strict-transport-security": "max-age=31536000",
+                "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
+                "x-content-type-options": "nosniff, nosniff",
+            },
+            "cookies": [],
+        }
+    )
+
+    out = WebHeaders().run(ctx, AssetRef(type=AssetType.URL, value="https://acme.com/"))
+
+    assert out.findings == ()
+    summary = out.observations[0].details["security_headers"]
+    assert isinstance(summary, dict)
+    assert summary["nosniff"] is True
+
+
 def test_web_rules_catalog_includes_all_issue_77_rules_with_expected_severities() -> None:
     catalog = build_catalog(WEB_RULES)
     expected = {

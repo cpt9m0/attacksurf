@@ -41,9 +41,9 @@ MAX_EVIDENCE_COOKIES = 10
 MAX_VALUE_CHARS = 512
 MAX_CSP_VALUE_CHARS = 4096
 _QUOTED_MIN_LEN = 2
-_WILDCARD_FRAME_ANCESTORS = frozenset({"*", "http:", "https:"})
 
 _COOKIE_MAX_AGE_RE = re.compile(r"^-?[0-9]+$")
+_SCHEME_SOURCE_RE = re.compile(r"^[a-z][a-z0-9+.-]*:$")
 _NONCE_OR_HASH_RE = re.compile(
     r"^'(?:nonce|sha(?:256|384|512))-[A-Za-z0-9+/_-]+={0,2}'$",
     re.IGNORECASE,
@@ -165,6 +165,16 @@ def _has_valid_xfo(raw_xfo: str) -> bool:
     return bool(tokens) and all(token in VALID_XFO_VALUES for token in tokens)
 
 
+def _is_wildcard_frame_ancestor(token: str) -> bool:
+    cleaned = token.strip().lower()
+    if cleaned == "*" or _SCHEME_SOURCE_RE.fullmatch(cleaned) is not None:
+        return True
+    rest = cleaned.split("://", 1)[1] if "://" in cleaned else cleaned
+    authority = rest.split("/", 1)[0]
+    host = authority.split(":", 1)[0]
+    return host == "*"
+
+
 def _has_clickjacking_protection(
     headers: Mapping[str, str],
     policies: Sequence[Mapping[str, tuple[str, ...]]],
@@ -180,7 +190,7 @@ def _has_clickjacking_protection(
         # CSP3 §7.7.1: X-Frame-Options is ignored whenever frame-ancestors is set, and CSP3 §4.2
         # treats an empty source list equivalently to `'none'`.
         return any(
-            not any(token in _WILDCARD_FRAME_ANCESTORS for token in tokens)
+            not any(_is_wildcard_frame_ancestor(token) for token in tokens)
             for tokens in fa_directives
         )
     if xfo_truncated:
@@ -407,6 +417,11 @@ def _check_csp_and_framing(
     return csp_ok, frame_ok
 
 
+def _has_nosniff(raw_xcto: str) -> bool:
+    # Fetch §4.5: clients split combined X-Content-Type-Options values and check the first entry.
+    return bool(raw_xcto) and raw_xcto.split(",", 1)[0].strip().lower() == "nosniff"
+
+
 def _check_nosniff(
     findings: list[RawFinding],
     *,
@@ -417,7 +432,7 @@ def _check_nosniff(
 ) -> bool | None:
     if nosniff_truncated:
         return None
-    nosniff = headers.get("x-content-type-options", "").strip().lower() == "nosniff"
+    nosniff = _has_nosniff(headers.get("x-content-type-options", ""))
     if not nosniff:
         findings.append(
             RawFinding(
@@ -568,7 +583,7 @@ class WebHeaders:
             nosniff_ok: bool | None = (
                 None
                 if nosniff_truncated
-                else headers.get("x-content-type-options", "").strip().lower() == "nosniff"
+                else _has_nosniff(headers.get("x-content-type-options", ""))
             )
         else:
             csp_ok, frame_ok = _check_csp_and_framing(
