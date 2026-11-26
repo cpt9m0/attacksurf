@@ -34,8 +34,10 @@ future analyzer image would have to remember it, and nothing at the gate could c
   tool with `/tmp` hard-coded fails with a read-only error until it is configured otherwise; the
   fix is to configure the tool, not to reopen `/tmp`.
 - The launcher and the proxy must be upgraded together: each refuses the other's old shape.
-- This lock covers `/tmp` only. Docker also sets up kernel mounts under `/dev` (`/dev/shm` among
-  them), which may be writable. The runtime tests must list every writable directory and check
-  that none allows exec.
+- This lock covers `/tmp` only, so `/scratch` is not literally the only writable path. The
+  runtime tests (`tests/integration/sandbox/`) search the whole filesystem from inside the
+  sandbox. Under `runc`, two kernel mounts that Docker adds are also writable, `/dev/shm` and
+  `/dev/mqueue`; neither allows exec. The tests fail on any other writable directory, or on one
+  that runs files. What `runsc` shows is still to be seen.
 - That `runsc` honours the read-only mount is to be proven by the CI job that runs the sandbox
   under `runsc`.

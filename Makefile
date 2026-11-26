@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose
 
-.PHONY: help up down logs ps build shell test test-worker eval check audit screenshots migrate revision deploy sandbox-images
+.PHONY: help up down logs ps build shell test test-worker eval check audit screenshots migrate revision deploy sandbox-images sandbox-test
 
 help: ## Show available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -53,6 +53,10 @@ screenshots: ## Capture light/dark desktop & mobile UI screenshots into screensh
 
 sandbox-images: ## Build the sandbox fixture image(s) and print their IDs (needs Docker)
 	./scripts/build-sandbox-images.sh
+
+# Without gVisor: SANDBOX_ALLOW_RUNC=true make sandbox-test
+sandbox-test: ## Run the sandbox runtime tests with real containers (needs Docker)
+	RUN_SANDBOX_TESTS=1 uv run pytest tests/integration/sandbox -m sandbox_runtime --no-cov
 
 migrate: ## Apply database migrations (alembic upgrade head)
 	$(COMPOSE) run --rm web alembic upgrade head

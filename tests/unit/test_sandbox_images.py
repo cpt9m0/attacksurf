@@ -6,6 +6,7 @@ outside the test directory and no connection is attempted.
 """
 
 import ast
+import errno
 import importlib.util
 import json
 import os
@@ -44,6 +45,9 @@ PROBE_KEYS = {
     "docker_socket_present",
     "env_names",
     "kernel_release",
+    "network_error",
+    "writable_dirs",
+    "walk_truncated",
 }
 FROM_LINE = re.compile(r"^FROM\s+(\S+)", re.MULTILINE)
 
@@ -78,6 +82,8 @@ def probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     monkeypatch.setattr(module, "SCRATCH_DIR", str(tmp_path / "scratch"))
     monkeypatch.setattr(module, "ROOT_PROBE_PATH", str(tmp_path / "root" / ".attacksurf-probe"))
     monkeypatch.setattr(module, "DOCKER_SOCKET", str(tmp_path / "docker.sock"))
+    # Without this the probe would walk, and try to write all over, the host's filesystem.
+    monkeypatch.setattr(module, "WALK_ROOT", str(tmp_path))
     monkeypatch.setattr(module.socket, "create_connection", _refuse)
     monkeypatch.setattr(module.socket, "getaddrinfo", _refuse)
     return module
@@ -135,10 +141,108 @@ def test_fixture_probe_reports_every_key(probe: ModuleType) -> None:
     assert set(facts) == PROBE_KEYS
     assert json.loads(json.dumps(facts)) == facts
     assert facts["network_connect_allowed"] is False
+    assert facts["network_error"] == "OSError"
+    assert facts["walk_truncated"] is False
     assert facts["dns_resolve_allowed"] is False
     assert facts["input_files"] == 1
     assert facts["docker_socket_present"] is False
     assert facts["uid"] == os.getuid()
+
+
+def test_fixture_probe_names_the_connect_error(
+    probe: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreachable(*_args: object, **_kwargs: object) -> None:
+        raise OSError(errno.ENETUNREACH, "Network is unreachable")
+
+    monkeypatch.setattr(probe.socket, "create_connection", unreachable)
+
+    facts = probe.probe()
+
+    assert facts["network_connect_allowed"] is False
+    assert facts["network_error"] == "ENETUNREACH"
+
+
+def test_fixture_probe_reports_a_connect_that_worked(
+    probe: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Connection:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(probe.socket, "create_connection", lambda *_a, **_kw: Connection())
+
+    facts = probe.probe()
+
+    assert facts["network_connect_allowed"] is True
+    assert facts["network_error"] is None
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file modes")
+def test_fixture_probe_lists_only_writable_directories_and_whether_they_run_files(
+    probe: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    walk = tmp_path / "walk"
+    (walk / "open").mkdir(parents=True)
+    (walk / "locked" / "nested-open").mkdir(parents=True)
+    (tmp_path / "outside").mkdir()
+    (walk / "link").symlink_to(tmp_path / "outside", target_is_directory=True)
+    (walk / "locked").chmod(0o555)
+    monkeypatch.setattr(probe, "WALK_ROOT", str(walk))
+    try:
+        facts = probe.probe()
+    finally:
+        (walk / "locked").chmod(0o755)
+
+    # `locked` is closed, but what is inside it is still searched; the link is not followed.
+    assert set(facts["writable_dirs"]) == {
+        str(walk),
+        str(walk / "open"),
+        str(walk / "locked" / "nested-open"),
+    }
+    assert facts["writable_dirs"][str(walk / "open")] is True
+    assert list(walk.rglob(".attacksurf-probe")) == []
+
+
+def test_fixture_probe_does_not_walk_the_skipped_directories(
+    probe: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "walk" / "proc" / "inner").mkdir(parents=True)
+    monkeypatch.setattr(probe, "WALK_ROOT", str(tmp_path / "walk"))
+    monkeypatch.setattr(probe, "SKIPPED_DIRS", (str(tmp_path / "walk" / "proc"),))
+
+    facts = probe.probe()
+
+    assert set(facts["writable_dirs"]) == {str(tmp_path / "walk")}
+
+
+def test_fixture_probe_says_when_the_walk_was_cut_short(
+    probe: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(probe, "MAX_WALKED_DIRS", 1)
+
+    facts = probe.probe()
+
+    assert facts["walk_truncated"] is True
+
+
+def test_fixture_probe_removes_its_script_when_it_cannot_run_it(
+    probe: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse_mode(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError("not permitted")
+
+    monkeypatch.setattr(probe.os, "chmod", refuse_mode)
+
+    facts = probe.probe()
+
+    assert facts["scratch_exec_allowed"] is False
+    assert list((tmp_path / "scratch").iterdir()) == []
+
+
+def test_fixture_probe_tests_the_root_where_only_a_read_only_root_can_block_it() -> None:
+    # `/etc` is closed to the sandbox user anyway, and `/tmp` is its own mount (ADR 0034).
+    assert load_probe().ROOT_PROBE_PATH == "/var/tmp/.attacksurf-probe"  # noqa: S108
 
 
 def test_build_script_builds_each_image_and_prints_its_id(tmp_path: Path) -> None:
