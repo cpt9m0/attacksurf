@@ -5,19 +5,20 @@
 **Updated:** 2026-11-26 · **Branch:** `84-sandbox-ci` · **Issue:** #84 (Analysis sandbox runner and analysis worker)
 
 ## Status
-Implemented and documented; every check on draft PR #207 passed at `12b2426` (check the run for the docs commit). Decisions on #84's wording, PR review and merge remain.
+Implemented and documented in draft PR #207, with `main` (through #202) merged in. CI must pass on the merge, then PR review and merge remain.
 
 ## Last task
 - Added the fixture analyzer image and dev/CI-only fixtures, the runtime tests, the `runsc` CI job, the image build workflow and the compose isolation tests; `/tmp` is read-only (ADR 0034).
 - Documented them in `docs/development.md`, `docs/security.md`, `CHANGELOG.md` and `AGENTS.md`.
-- CI on `12b2426`: `sandbox (runsc)` had 14 passed and 1 skipped (the prod-refusal test, which passed in its own step before `runsc` was installed); the compose tests ran in all three `test` jobs.
+- CI passed at `12b2426`, before the merge: `sandbox (runsc)` had 14 passed and 1 skipped (the prod-refusal test, which passed in its own step before `runsc` was installed).
+- #84's gaps are decided: prod compose moves to #92, the sandbox stays opt-in (`--profile sandbox`), and the worker's staging mount follows ADR 0028.
+- On `main`: #78 (`web.exposures`) merged as #202.
 
 ## Next step
-Decide how to handle #84's unmet wording (below), check PR #207's description (include `Closes #84` only if the issue should close), then take the PR out of draft.
+Confirm CI is green on PR #207 and that #84, #92 and the PR description reflect the decisions above, then review the PR (`pre-pr-check` self-review), take it out of draft and merge.
 
 ## Open threads
-- PR #207 description: #84 says `worker-analysis` has no artifact mount, but ADR 0028 gives it a writable staging mount (correct the issue's wording). Compose isolation is checked for dev only.
-- #84 also asks for the sandbox services in prod compose and for `make up` to start them healthy. Neither is true: prod has none (left to #92) and dev needs `--profile sandbox`. Record this on the issue before it closes.
+- Web epic #66: #79 (WordPress exposures) is next, then #80 to #82.
 - Compose guard gap: the all-services socket check misses a `/run` or `/var/run` mount.
 - **Proxy trust:** the proxy has no caller authentication and `worker-analysis` shares its network (`docs/security.md`; #92 must close it before prod).
 - **Dropped dev jobs:** no `analysis.*` task is registered, so `worker-analysis` drops those messages and job rows stay `queued`. #87 and #101 are closed; comments and docs saying they will register tasks are stale (`compose.yaml`, `docs/architecture.md`).
@@ -28,6 +29,6 @@ Decide how to handle #84's unmet wording (below), check PR #207's description (i
 - From AI summary (#26): prioritize assets in the 200-asset summary input, live eval results, and Claude list prices in `ai/pricing.py`.
 
 ## Notes for the next agent
-- After #84 merges, the sandbox work continues with #92 (check its other dependencies first).
+- The sandbox work continues with #92 after #84 (check its other dependencies first).
 - The 1k scale test exceeds 90 s on the two-core dev machine: use `SCALE_BUDGET_SECONDS` (`docs/development.md`).
 - DB tests need `TEST_DATABASE_URL`; `.github/scripts/pytest-hook.sh` resolves it.

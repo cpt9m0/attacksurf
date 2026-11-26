@@ -4,7 +4,7 @@ No real sockets are opened: `ScopeGuard`, `AuthoritativeTxtLookup`, `Authoritati
 `RdapClient` execute their real logic over `MutableDnsZone` and `FakeScopeHttp`.
 """
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
@@ -27,7 +27,7 @@ from attacksurf.domain.net import (
     DnsStatus,
     HttpBody,
 )
-from attacksurf.domain.scope import ScopeError
+from attacksurf.domain.scope import ScopeError, ScopePolicyError
 from attacksurf.infra import authoritative_dns
 
 
@@ -209,9 +209,14 @@ class FakeScopeHttp:
         self.routes = routes or {}
         self.resolver = resolver
         self.requests: list[str] = []
+        self.header_requests: list[tuple[str, Mapping[str, str] | None]] = []
+        self.method_requests: list[tuple[str, str]] = []
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
-        return self._dispatch(url, limit=limit)
+    def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
+        return self._dispatch(url, limit=limit, headers=headers, method="GET")
+
+    def head(self, url: str, *, headers: Mapping[str, str] | None = None) -> HttpBody:
+        return self._dispatch(url, limit=0, headers=headers, method="HEAD")
 
     def close(self) -> None:
         pass
@@ -221,6 +226,7 @@ class FakeScopeHttp:
         resolver: object,
         *,
         redirect_allowed: Callable[[str], bool],
+        request_allowed: Callable[[str, str], bool] | None = None,
         max_redirects: int,
         stop_on_out_of_scope_redirect: bool = False,
         rate_limiter: object = None,
@@ -232,18 +238,37 @@ class FakeScopeHttp:
             resolver,
             redirect_allowed,
             max_redirects,
+            request_allowed=request_allowed,
             stop_on_out_of_scope_redirect=stop_on_out_of_scope_redirect,
             rate_limiter=rate_limiter,
             rate_limit_org_id=rate_limit_org_id,
             user_agent=user_agent,
         )
 
-    def _dispatch(self, url: str, *, limit: int) -> HttpBody:
+    def _dispatch(
+        self,
+        url: str,
+        *,
+        limit: int,
+        headers: Mapping[str, str] | None = None,
+        method: str = "GET",
+    ) -> HttpBody:
         self.requests.append(url)
+        self.header_requests.append((url, dict(headers) if headers is not None else None))
+        self.method_requests.append((method, url))
         handler = self.routes.get(url)
         if handler is None:
-            return HttpBody(status_code=404, content=b"Not Found")
+            return HttpBody(status_code=404, content=b"" if method == "HEAD" else b"Not Found")
         body = handler(url) if callable(handler) else handler
+        if method == "HEAD":
+            return HttpBody(
+                status_code=body.status_code,
+                content=b"",
+                truncated=False,
+                headers=body.headers,
+                final_url=body.final_url,
+                redirect_chain=body.redirect_chain,
+            )
         if len(body.content) > limit:
             return HttpBody(
                 status_code=body.status_code,
@@ -262,6 +287,7 @@ class _BoundFakeHttp:
         redirect_allowed: Callable[[str], bool],
         max_redirects: int,
         *,
+        request_allowed: Callable[[str, str], bool] | None = None,
         stop_on_out_of_scope_redirect: bool = False,
         rate_limiter: object = None,
         rate_limit_org_id: UUID | None = None,
@@ -270,15 +296,31 @@ class _BoundFakeHttp:
         self._inner = inner
         self._resolver = resolver
         self._allowed = redirect_allowed
+        self._request_allowed = request_allowed
         self._max_redirects = max_redirects
         self._stop_on_out_of_scope_redirect = stop_on_out_of_scope_redirect
         self._rate_limiter = rate_limiter
         self._rate_limit_org_id = rate_limit_org_id
         self._user_agent = user_agent
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
+        return self._perform("GET", url, limit=limit, headers=headers)
+
+    def head(self, url: str, *, headers: Mapping[str, str] | None = None) -> HttpBody:
+        return self._perform("HEAD", url, limit=0, headers=headers)
+
+    def _perform(
+        self,
+        method: str,
+        url: str,
+        *,
+        limit: int,
+        headers: Mapping[str, str] | None = None,
+    ) -> HttpBody:
         if not self._allowed(url):
             raise ScopeError("The target is out of scope.")
+        if self._request_allowed is not None and not self._request_allowed(method, url):
+            raise ScopePolicyError("The request method or path is outside the scanner grant.")
         host = urlsplit(url).hostname
         if host and hasattr(self._resolver, "resolve_name"):
             self._resolver.resolve_name(host)  # type: ignore[attr-defined]
@@ -290,7 +332,7 @@ class _BoundFakeHttp:
             else nullcontext()
         )
         with limiter_ctx:
-            body = self._inner._dispatch(url, limit=limit)
+            body = self._inner._dispatch(url, limit=limit, headers=headers, method=method)
             return HttpBody(
                 body.status_code,
                 body.content,

@@ -65,7 +65,10 @@ class FakeDns:
 
 
 class FakeHttp:
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def head(self, url: str, *, headers: object | None = None) -> HttpBody:
+        raise AssertionError("dns.takeover is DNS-only and must not use HTTP")
+
+    def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         raise AssertionError("dns.takeover is DNS-only and must not use HTTP")
 
     def close(self) -> None:

@@ -127,6 +127,23 @@ _ANALYZER_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 ALLOWED_WEB_PORTS = frozenset({80, 443, 8000, 8080, 8443, 8888})
 DEFAULT_HTTP_PORTS = frozenset({80, 443})
 DEFAULT_TLS_PORTS = frozenset({443})
+ALLOWED_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+DEFAULT_HTTP_METHODS = frozenset({"GET"})
+DEFAULT_HTTP_PATHS = frozenset({"/"})
+MAX_HTTP_PATHS = 50
+MAX_HTTP_PATH_LENGTH = 128
+SOFT_404_PATH_RE = re.compile(r"^/attacksurf-not-found-[0-9a-f]{16,32}$")
+_CTRL_CHAR_MAX = 0x20
+_DEL_CHAR = 0x7F
+
+
+def has_unsafe_http_path(path: str) -> bool:
+    """Reject backslashes, control chars, or `.`/`..` segments in a scanner HTTP request path."""
+    return (
+        "\\" in path
+        or any(ord(ch) < _CTRL_CHAR_MAX or ord(ch) == _DEL_CHAR for ch in path)
+        or any(segment in {".", ".."} for segment in path.split("/"))
+    )
 
 
 @dataclass(frozen=True)
@@ -136,6 +153,9 @@ class ScannerGrant:
     http: HttpPermission = HttpPermission.NONE
     http_hosts: frozenset[str] = frozenset()  # public data services the scanner may query
     http_ports: frozenset[int] = DEFAULT_HTTP_PORTS
+    http_methods: frozenset[str] = DEFAULT_HTTP_METHODS
+    http_paths: frozenset[str] = DEFAULT_HTTP_PATHS
+    soft_404_probe: bool = False
     follow_redirects: bool = True
     dns_lookups: int = 0  # cap on resolver calls per run
     sandbox_analyzers: frozenset[str] = frozenset()  # analyzers the plugin may run (ADR 0016)
@@ -161,6 +181,12 @@ class ScannerGrant:
             field="http_ports",
             purpose="target http",
         )
+        _validate_target_http_grant(
+            enabled=self.http is HttpPermission.TARGET,
+            methods=self.http_methods,
+            paths=self.http_paths,
+            soft_404_probe=self.soft_404_probe,
+        )
         _validate_port_grant(
             enabled=self.tls,
             ports=self.tls_ports,
@@ -176,6 +202,37 @@ class ScannerGrant:
         for analyzer in self.sandbox_analyzers:
             if not _ANALYZER_NAME.fullmatch(analyzer):
                 raise ValueError("invalid analyzer name")
+
+
+def _validate_target_http_grant(
+    *,
+    enabled: bool,
+    methods: frozenset[str],
+    paths: frozenset[str],
+    soft_404_probe: bool,
+) -> None:
+    if not enabled:
+        if methods != DEFAULT_HTTP_METHODS:
+            raise ValueError("http_methods is only meaningful for target http")
+        if paths != DEFAULT_HTTP_PATHS:
+            raise ValueError("http_paths is only meaningful for target http")
+        if soft_404_probe:
+            raise ValueError("soft_404_probe is only meaningful for target http")
+        return
+    if not methods or not methods <= ALLOWED_HTTP_METHODS:
+        raise ValueError("http_methods must be a non-empty subset of GET, HEAD, OPTIONS")
+    if not paths or len(paths) > MAX_HTTP_PATHS:
+        raise ValueError(f"http_paths must contain 1 to {MAX_HTTP_PATHS} paths")
+    for path in paths:
+        if (
+            not path.startswith("/")
+            or len(path) > MAX_HTTP_PATH_LENGTH
+            or "?" in path
+            or "#" in path
+            or "//" in path
+            or has_unsafe_http_path(path)
+        ):
+            raise ValueError(f"invalid http_paths entry: {path!r}")
 
 
 def _validate_port_grant(

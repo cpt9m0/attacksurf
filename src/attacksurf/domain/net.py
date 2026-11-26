@@ -256,8 +256,12 @@ class HttpBody:
 
 
 class SafeHttpClient(Protocol):
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
         """GET `url` if the scanner's contract allows the host; redirects are re-validated."""
+        ...
+
+    def head(self, url: str, *, headers: Mapping[str, str] | None = None) -> HttpBody:
+        """HEAD `url` if the scanner's contract allows the method, host, and path."""
         ...
 
     def close(self) -> None:
@@ -288,6 +292,7 @@ class ScopeHttp(SafeHttpClient, Protocol):
         resolver: DnsResolver,
         *,
         redirect_allowed: Callable[[str], bool],
+        request_allowed: Callable[[str, str], bool] | None = None,
         max_redirects: int,
         stop_on_out_of_scope_redirect: bool = False,
         rate_limiter: TargetRateLimiter | None = None,

@@ -45,7 +45,10 @@ class FakeHttp:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def head(self, url: str, *, headers: object | None = None) -> HttpBody:
+        raise AssertionError("ct discovery uses GET only")
+
+    def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         self.calls.append(url)
         content = (FIXTURES / "crt_sh_example.json").read_bytes()
         return HttpBody(status_code=200, content=content)

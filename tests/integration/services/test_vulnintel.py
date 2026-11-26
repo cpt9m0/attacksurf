@@ -25,6 +25,9 @@ class FakeVulnIntelClient:
         }
         self.epss_payload: dict[str, object] = {"data": []}
 
+    def head(self, url: str, *, headers: object | None = None) -> HttpBody:
+        raise AssertionError("vulnintel sync uses GET only")
+
     def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
         self.calls.append((url, dict(headers) if headers else None))
         if url.startswith(NVD_API_URL):

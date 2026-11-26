@@ -32,6 +32,9 @@ class _StubVulnClient:
         self._responses = list(responses)
         self.requests: list[tuple[str, dict[str, str] | None]] = []
 
+    def head(self, url: str, *, headers: object | None = None) -> HttpBody:
+        raise AssertionError("vulnintel sync uses GET only")
+
     def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         hdrs = dict(headers) if isinstance(headers, dict) else None
         self.requests.append((url, hdrs))

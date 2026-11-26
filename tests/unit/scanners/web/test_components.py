@@ -32,7 +32,10 @@ class _StubDns:
 
 
 class _StubHttp:
-    def get(self, url: str, *, limit: int) -> object:
+    def head(self, url: str, *, headers: object | None = None) -> object:
+        raise AssertionError("web.components must never issue HTTP requests")
+
+    def get(self, url: str, *, limit: int, headers: object | None = None) -> object:
         raise AssertionError("web.components must never issue HTTP requests")
 
     def close(self) -> None:

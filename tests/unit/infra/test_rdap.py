@@ -52,7 +52,10 @@ class StubHttp:
         self.requests: list[str] = []
         self.policies: list[Any] = []
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def head(self, url: str, *, headers: object | None = None) -> HttpBody:
+        raise AssertionError("the adapter must request through with_redirect_policy")
+
+    def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         raise AssertionError("the adapter must request through with_redirect_policy")
 
     def close(self) -> None:
@@ -63,13 +66,20 @@ class StubHttp:
         resolver: object,
         *,
         redirect_allowed: Any,
+        request_allowed: object = None,
         max_redirects: int,
         stop_on_out_of_scope_redirect: bool = False,
         rate_limiter: object = None,
         rate_limit_org_id: object = None,
         user_agent: str | None = None,
     ) -> "RunHttp":
-        del stop_on_out_of_scope_redirect, rate_limiter, rate_limit_org_id, user_agent
+        del (
+            request_allowed,
+            stop_on_out_of_scope_redirect,
+            rate_limiter,
+            rate_limit_org_id,
+            user_agent,
+        )
         self.policies.append(redirect_allowed)
         return RunHttp(self, redirect_allowed)
 
@@ -81,7 +91,10 @@ class RunHttp:
         self._inner = inner
         self._allowed = allowed
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def head(self, url: str, *, headers: object | None = None) -> HttpBody:
+        raise AssertionError("RDAP uses GET only")
+
+    def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         if not self._allowed(url):
             raise ScopeError("The target is out of scope.")
         self._inner.requests.append(url)

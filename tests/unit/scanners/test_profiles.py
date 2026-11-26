@@ -16,6 +16,8 @@ from attacksurf.scanners.dns import whois as _whois  # noqa: F401
 from attacksurf.scanners.profiles import MAX_DISCOVERED_ASSETS, PROFILES, WORKER_PROFILES
 from attacksurf.scanners.registry import registry
 from attacksurf.scanners.web import components as _web_components  # noqa: F401
+from attacksurf.scanners.web import exposures as _web_exposures  # noqa: F401
+from attacksurf.scanners.web import headers as _web_headers  # noqa: F401
 from attacksurf.scanners.web import probe as _web_probe  # noqa: F401
 from attacksurf.scanners.web import tls as _web_tls  # noqa: F401
 
@@ -50,7 +52,13 @@ def test_web_active_profile_is_valid_and_selects_active_web_probe() -> None:
     registry.validate(profile)
 
     assert profile.discover == ("web.probe",)
-    assert profile.checks == ("web.components", "web.tls")
+    assert profile.checks == (
+        "web.components",
+        "web.tls",
+        "web.headers",
+        "web.cors",
+        "web.exposures",
+    )
     assert profile.max_discovered_assets == MAX_DISCOVERED_ASSETS
     scanner = registry.get(profile.discover[0])
     assert scanner.queue == "active"
@@ -62,6 +70,20 @@ def test_web_active_profile_is_valid_and_selects_active_web_probe() -> None:
     assert tls_scanner.queue == "active"
     assert tls_scanner.requires_verification is True
     assert tls_scanner.grant.tls is True
+    headers_scanner = registry.get("web.headers")
+    assert headers_scanner.queue == "passive"
+    assert headers_scanner.grant.http is HttpPermission.NONE
+    cors_scanner = registry.get("web.cors")
+    assert cors_scanner.queue == "active"
+    assert cors_scanner.requires_verification is True
+    assert cors_scanner.grant.http is HttpPermission.TARGET
+    exp_scanner = registry.get("web.exposures")
+    assert exp_scanner.queue == "active"
+    assert exp_scanner.requires_verification is True
+    assert exp_scanner.grant.http is HttpPermission.TARGET
+    assert exp_scanner.grant.http_methods == frozenset({"GET", "HEAD"})
+    assert exp_scanner.grant.soft_404_probe is True
+    assert exp_scanner.grant.follow_redirects is False
 
 
 def test_scheduled_profile_is_dns_only_and_not_public() -> None:

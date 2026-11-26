@@ -11,6 +11,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
   with real containers (`make sandbox-test`), a CI job that installs gVisor to run them, an image
   build workflow, and tests of sandbox service isolation in the dev `compose.yaml`. `/tmp` in the
   sandbox is now mounted read-only, so `runsc` can't add a writable one (ADR 0034).
+- Fixed-path exposed sensitive file, debug endpoint, API docs, admin panel, and `security.txt`
+  scanner (`web.exposures`, `scanners/web/exposures.py`) wired into `web_active.checks`, `app.py`,
+  and `workers/app.py`, alongside ADR 0033 `ScopeGuard` enforcement (`http_methods`, `http_paths`,
+  single-shot `soft_404_probe`) and `SafeHttpClient.head`: detects `web.exposure.git_repo`,
+  `env_file`, `backup_archive`, `debug_endpoint`, `api_docs`, `admin_panel`, and
+  `web.security.security_txt_missing` using soft-404 calibration, per-path content validators,
+  `HEAD`-only probes for archives and `/actuator/heapdump`, and key-name-only `.env` evidence
+  (#78).
+- HTTP security headers, cookie flags, HTTPS redirect, and CORS credential reflection checks
+  (`web.headers`, `web.cors`, `scanners/web/headers.py`) wired into `web_active.checks`, `app.py`,
+  and `workers/app.py`, plus `SafeHttpClient.get(..., headers=...)` forwarding through
+  `ScopeGuard`: checks `hsts_missing`, `hsts_weak` (`< 180` days), `csp_missing`, `csp_unsafe`
+  (`unsafe-inline` without nonce/hash or `unsafe-eval`), `clickjacking`, `nosniff_missing`,
+  `web.cookies.insecure_flags`, `web.https.no_redirect`, and `web.cors.wildcard_credentials` with
+  relevant-header evidence only and `Asset.details["security_headers"]` summary (#77).
 - Guarded TLS certificate and protocol configuration check (`web.tls`, `scanners/web/tls.py`)
   wired into `web_active.checks`, `app.py`, and `workers/app.py`: inspects verified `https://`
   URLs over `ctx.runtime.tls`, records capped `Asset.details["tls"]`, and checks all 7 TLS rules

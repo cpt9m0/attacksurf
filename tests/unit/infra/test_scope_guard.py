@@ -71,12 +71,19 @@ class StubDns:
 class StubHttp:
     def __init__(self) -> None:
         self.requests: list[tuple[str, int]] = []
+        self.headers_seen: list[dict[str, str] | None] = []
         self.policies: list[tuple[object, object, int]] = []
         self.response = HttpBody(200, b"[]")
         self.closed = False
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def head(self, url: str, *, headers: Mapping[str, str] | None = None) -> HttpBody:
+        self.requests.append((url, 0))
+        self.headers_seen.append(dict(headers) if headers is not None else None)
+        return self.response
+
+    def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
         self.requests.append((url, limit))
+        self.headers_seen.append(dict(headers) if headers is not None else None)
         return self.response
 
     def with_redirect_policy(
@@ -84,6 +91,7 @@ class StubHttp:
         resolver: object,
         *,
         redirect_allowed: object,
+        request_allowed: object = None,
         max_redirects: int,
         stop_on_out_of_scope_redirect: bool = False,
         rate_limiter: object = None,
@@ -92,7 +100,7 @@ class StubHttp:
     ) -> "_RunHttp":
         del stop_on_out_of_scope_redirect, rate_limiter, rate_limit_org_id, user_agent
         self.policies.append((resolver, redirect_allowed, max_redirects))
-        return _RunHttp(self, redirect_allowed)
+        return _RunHttp(self, redirect_allowed, request_allowed)
 
     def close(self) -> None:
         self.closed = True
@@ -105,16 +113,39 @@ class _RunHttp(StubHttp):
     `test_run_client_enforces_the_allowlist_before_the_first_request`).
     """
 
-    def __init__(self, inner: StubHttp, redirect_allowed: object) -> None:
+    def __init__(
+        self,
+        inner: StubHttp,
+        redirect_allowed: object,
+        request_allowed: object = None,
+    ) -> None:
         super().__init__()
         self._inner = inner
         self._allowed = redirect_allowed
+        self._request_allowed = request_allowed
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def head(self, url: str, *, headers: Mapping[str, str] | None = None) -> HttpBody:
         assert callable(self._allowed)
         if not self._allowed(url):
             raise ScopeError("The target is out of scope.")
+        if self._request_allowed is not None:
+            assert callable(self._request_allowed)
+            if not self._request_allowed("HEAD", url):
+                raise ScopePolicyError("The request method or path is outside the scanner grant.")
+        self._inner.requests.append((url, 0))
+        self._inner.headers_seen.append(dict(headers) if headers is not None else None)
+        return self._inner.response
+
+    def get(self, url: str, *, limit: int, headers: Mapping[str, str] | None = None) -> HttpBody:
+        assert callable(self._allowed)
+        if not self._allowed(url):
+            raise ScopeError("The target is out of scope.")
+        if self._request_allowed is not None:
+            assert callable(self._request_allowed)
+            if not self._request_allowed("GET", url):
+                raise ScopePolicyError("The request method or path is outside the scanner grant.")
         self._inner.requests.append((url, limit))
+        self._inner.headers_seen.append(dict(headers) if headers is not None else None)
         return self._inner.response
 
 
@@ -444,7 +475,7 @@ def test_target_grant_allows_only_the_scanned_host() -> None:
         requires_verification=True, grant=ScannerGrant(http=HttpPermission.TARGET, dns_lookups=1)
     )
     runtime = scope.check(context(), target(), active)
-    runtime.http.get("https://acme.com/robots.txt", limit=10)
+    runtime.http.get("https://acme.com/", limit=10)
     with pytest.raises(ScopeError):
         runtime.http.get("https://other.example.com/", limit=10)
 
@@ -523,6 +554,7 @@ class RecordingSafeHttp(SafeHttpClient):
         resolver: object,
         *,
         redirect_allowed: object,
+        request_allowed: object = None,
         max_redirects: int,
         stop_on_out_of_scope_redirect: bool = False,
         rate_limiter: object = None,
@@ -532,6 +564,7 @@ class RecordingSafeHttp(SafeHttpClient):
         clone = RecordingSafeHttp(
             resolver,
             redirect_allowed=redirect_allowed,  # type: ignore[arg-type]
+            request_allowed=request_allowed,  # type: ignore[arg-type]
             max_redirects=max_redirects,
             stop_on_out_of_scope_redirect=stop_on_out_of_scope_redirect,
             timeout_seconds=self._timeout,
@@ -544,9 +577,14 @@ class RecordingSafeHttp(SafeHttpClient):
         return clone
 
     def _request(
-        self, url: str, *, limit: int, headers: Mapping[str, str] | None = None
+        self,
+        url: str,
+        *,
+        limit: int,
+        headers: Mapping[str, str] | None = None,
+        method: str = "GET",
     ) -> HttpBody:
-        del headers
+        del headers, method
         self.sent.append((url, limit))
         return HttpBody(200, b"[]")
 
@@ -1014,3 +1052,144 @@ def test_target_http_grant_validates_ports_urls_and_verified_root_redirects() ->
     )
     scope.check(context(), target("acme.com"), no_redir)
     assert http.policies[-1][2] == 0
+
+
+def test_target_http_forwards_custom_headers_through_scope_guard() -> None:
+    scope, http = make_guard(active_scans_enabled=True)
+    verify_all(scope)
+    cors_scanner = scanner(
+        asset_types=frozenset({AssetType.URL}),
+        queue="active",
+        requires_verification=True,
+        grant=ScannerGrant(http=HttpPermission.TARGET, dns_lookups=4),
+    )
+
+    runtime = scope.check(context(), target("https://acme.com/", AssetType.URL), cors_scanner)
+    runtime.http.get(
+        "https://acme.com/", limit=1024, headers={"Origin": "https://cors-probe.invalid"}
+    )
+    assert http.headers_seen[-1] == {"Origin": "https://cors-probe.invalid"}
+
+
+def test_target_http_grant_validates_and_enforces_paths_methods_and_soft_404_probe() -> None:
+    with pytest.raises(ValueError, match="http_methods"):
+        ScannerGrant(http=HttpPermission.TARGET, http_methods=frozenset({"POST"}))
+    with pytest.raises(ValueError, match="http_paths"):
+        ScannerGrant(http=HttpPermission.TARGET, http_paths=frozenset({"/.git/../HEAD"}))
+    with pytest.raises(ValueError, match="http_paths"):
+        ScannerGrant(http=HttpPermission.NONE, http_paths=frozenset({"/.env"}))
+    with pytest.raises(ValueError, match="soft_404_probe"):
+        ScannerGrant(http=HttpPermission.NONE, soft_404_probe=True)
+
+    scope, _http = make_guard(active_scans_enabled=True)
+    verify_all(scope)
+    exposure_scanner = scanner(
+        asset_types=frozenset({AssetType.URL}),
+        queue="active",
+        requires_verification=True,
+        grant=ScannerGrant(
+            http=HttpPermission.TARGET,
+            http_methods=frozenset({"GET", "HEAD"}),
+            http_paths=frozenset({"/.env", "/backup.zip"}),
+            soft_404_probe=True,
+            follow_redirects=False,
+            dns_lookups=4,
+        ),
+    )
+
+    runtime = scope.check(
+        context(),
+        target("https://acme.com/app", AssetType.URL),
+        exposure_scanner,
+    )
+    runtime.http.get("https://acme.com/attacksurf-not-found-0123456789abcdef", limit=1024)
+    # Only one soft-404 sentinel probe is permitted per host per run.
+    with pytest.raises(ScopePolicyError, match="path"):
+        runtime.http.get("https://acme.com/attacksurf-not-found-fedcba9876543210", limit=1024)
+    runtime.http.get("https://acme.com/.env", limit=1024)
+    runtime.http.head("https://acme.com/backup.zip")
+    with pytest.raises(ScopePolicyError, match="path"):
+        runtime.http.get("https://acme.com/other", limit=1024)
+    with pytest.raises(ScopePolicyError, match="path"):
+        runtime.http.get("https://acme.com/.env?raw=1", limit=1024)
+
+    get_only = scanner(
+        asset_types=frozenset({AssetType.URL}),
+        queue="active",
+        requires_verification=True,
+        grant=ScannerGrant(http=HttpPermission.TARGET, dns_lookups=2),
+    )
+    url_runtime = scope.check(
+        context(),
+        target("https://acme.com/portal?tab=info", AssetType.URL),
+        get_only,
+    )
+    url_runtime.http.get("https://acme.com/portal?tab=info", limit=1024)
+    with pytest.raises(ScopePolicyError, match="method"):
+        url_runtime.http.head("https://acme.com/portal?tab=info")
+    with pytest.raises(ScopePolicyError, match="path"):
+        url_runtime.http.get("https://acme.com/portal?tab=other", limit=1024)
+
+
+def test_default_http_grant_allows_probed_same_host_final_url_for_cors() -> None:
+    scope = verify_all(make_guard(active_scans_enabled=True)[0])
+    ctx_with_redirect = ScanContext(
+        uuid4(),
+        uuid4(),
+        AssetRef(type=AssetType.URL, value="https://acme.com/old"),
+        "web_active",
+        target_details={"web": {"final_url": "https://acme.com/new?tab=2"}},
+    )
+    cors_like = scanner(
+        asset_types=frozenset({AssetType.URL}),
+        queue="active",
+        requires_verification=True,
+        grant=ScannerGrant(http=HttpPermission.TARGET, follow_redirects=False, dns_lookups=4),
+    )
+
+    runtime = scope.check(
+        ctx_with_redirect,
+        target("https://acme.com/old", AssetType.URL),
+        cors_like,
+    )
+    runtime.http.get("https://acme.com/new?tab=2", limit=1024)
+    runtime.http.get("https://acme.com/old", limit=1024)
+    with pytest.raises(ScopePolicyError, match="path"):
+        runtime.http.get("https://acme.com/new?tab=other", limit=1024)
+    with pytest.raises(ScopePolicyError, match="path"):
+        runtime.http.get("https://acme.com/unrelated", limit=1024)
+
+    custom_paths = scanner(
+        asset_types=frozenset({AssetType.URL}),
+        queue="active",
+        requires_verification=True,
+        grant=ScannerGrant(
+            http=HttpPermission.TARGET,
+            http_paths=frozenset({"/.env"}),
+            follow_redirects=False,
+            dns_lookups=4,
+        ),
+    )
+    custom_runtime = scope.check(
+        ctx_with_redirect,
+        target("https://acme.com/old", AssetType.URL),
+        custom_paths,
+    )
+    custom_runtime.http.get("https://acme.com/.env", limit=1024)
+    with pytest.raises(ScopePolicyError, match="path"):
+        custom_runtime.http.get("https://acme.com/new?tab=2", limit=1024)
+
+    cross_host_ctx = ScanContext(
+        uuid4(),
+        uuid4(),
+        AssetRef(type=AssetType.URL, value="https://acme.com/old"),
+        "web_active",
+        target_details={"web": {"final_url": "https://other.acme.com/new"}},
+    )
+    cross_host_runtime = scope.check(
+        cross_host_ctx,
+        target("https://acme.com/old", AssetType.URL),
+        cors_like,
+    )
+    with pytest.raises(ScopePolicyError, match="path"):
+        cross_host_runtime.http.get("https://acme.com/new", limit=1024)

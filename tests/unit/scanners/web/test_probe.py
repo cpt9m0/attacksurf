@@ -40,7 +40,10 @@ class _StubHttp:
         self._responses = responses
         self.calls: list[tuple[str, int]] = []
 
-    def get(self, url: str, *, limit: int) -> HttpBody:
+    def head(self, url: str, *, headers: object | None = None) -> HttpBody:
+        raise AssertionError("web.probe must not call HEAD")
+
+    def get(self, url: str, *, limit: int, headers: object | None = None) -> HttpBody:
         self.calls.append((url, limit))
         outcome = self._responses.get(url)
         if outcome is None:
@@ -463,3 +466,113 @@ def test_web_probe_survives_malformed_html_marked_section() -> None:
     assert out.observations[0].active is True
     assert out.observations[0].details["web"]["title"] == "Ok"  # type: ignore[index]
     assert [f.rule_id for f in out.findings] == ["web.disclosure.version_banner"]
+
+
+def test_web_probe_preserves_long_csp_and_tracks_truncation() -> None:
+    long_csp = "default-src 'self' " + " ".join(f"https://cdn{i}.example.com" for i in range(25))
+    assert len(long_csp) > 256
+    oversized_csp = long_csp + " " + ("https://extra.example.com " * 200)
+    http = _StubHttp(
+        {
+            "https://acme.example/": HttpBody(
+                200,
+                b"<html></html>",
+                False,
+                {"content-type": "text/html", "content-security-policy": long_csp},
+                final_url="https://acme.example/",
+            ),
+            "http://acme.example/": HttpBody(
+                200,
+                b"<html></html>",
+                False,
+                {
+                    "content-type": "text/html",
+                    "content-security-policy": oversized_csp,
+                    "x-custom": "a" * 300,
+                },
+                final_url="http://acme.example/",
+            ),
+        }
+    )
+
+    out = WebProbe().run(_ctx(http), AssetRef(type=AssetType.DOMAIN, value="acme.example"))
+    https_web = out.observations[0].details["web"]
+    http_web = out.observations[1].details["web"]
+    assert isinstance(https_web, dict)
+    assert isinstance(http_web, dict)
+    assert https_web["headers"]["content-security-policy"] == long_csp  # type: ignore[index]
+    assert https_web["headers_truncated"] == []
+    assert http_web["headers_truncated"] == ["content-security-policy", "x-custom"]
+
+
+def test_web_probe_preserves_security_cookie_flags_and_tracks_cookie_truncation() -> None:
+    long_name = "sessionid_" + ("a" * 50)
+    long_cookie = (
+        f"{long_name}=secret; Domain={'s' * 64}; Path=/{'p' * 63}; Partitioned; "
+        f"Expires=Wed, 21 Oct 2030 07:28:00 GMT; Secure; HttpOnly; SameSite=Strict"
+    )
+    assert len(redact_set_cookie(long_cookie)) <= 256
+    assert len(long_cookie) > 256
+    overflow_cookie = (
+        f"auth_session={'x' * 20}; Expires={'W' * 64}; Max-Age={'9' * 64}; "
+        f"SameSite={'s' * 64}; HttpOnly; Secure"
+    )
+    http = _StubHttp(
+        {
+            "https://acme.example/": HttpBody(
+                200,
+                b"<html></html>",
+                False,
+                httpx.Headers(
+                    [
+                        ("content-type", "text/html"),
+                        ("set-cookie", long_cookie),
+                        ("set-cookie", overflow_cookie),
+                    ]
+                ),
+                final_url="https://acme.example/",
+            ),
+            "http://acme.example/": ScopeError("Unreachable."),
+        }
+    )
+
+    out = WebProbe().run(_ctx(http), AssetRef(type=AssetType.DOMAIN, value="acme.example"))
+    web = out.observations[0].details["web"]
+    assert isinstance(web, dict)
+    cookies = web["cookies"]
+    assert isinstance(cookies, list)
+    first_cookie = cookies[0]
+    assert isinstance(first_cookie, str)
+    assert len(first_cookie) <= 256
+    assert "Secure" in first_cookie
+    assert "HttpOnly" in first_cookie
+    assert "SameSite=Strict" in first_cookie
+    assert web["cookies_truncated"] == ["auth_session"]
+
+
+def test_web_probe_preserves_first_hsts_header_field() -> None:
+    http = _StubHttp(
+        {
+            "https://acme.example/": HttpBody(
+                200,
+                b"<html></html>",
+                False,
+                httpx.Headers(
+                    [
+                        ("content-type", "text/html"),
+                        ("strict-transport-security", "max-age=31536000; includeSubDomains"),
+                        ("strict-transport-security", "max-age=60"),
+                    ]
+                ),
+                final_url="https://acme.example/",
+            ),
+            "http://acme.example/": ScopeError("Unreachable."),
+        }
+    )
+
+    out = WebProbe().run(_ctx(http), AssetRef(type=AssetType.DOMAIN, value="acme.example"))
+    web = out.observations[0].details["web"]
+    assert isinstance(web, dict)
+    headers = web["headers"]
+    assert isinstance(headers, dict)
+    assert headers["strict-transport-security"] == "max-age=31536000; includeSubDomains"
