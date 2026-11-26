@@ -78,7 +78,7 @@ Each commit leaves ruff, pyright, lint-imports and pytest green, and tests come 
 | 3a | `fix(security): keep /tmp read-only in the sandbox` | `sandbox_launcher/container.py`, `sandbox_proxy/policy.py`, ADR 0034, ADR 0016 (pointer), `docs/security.md` |
 | 3b | `test(infra): run the sandbox end to end under a real runtime` | `sandbox/images/fixture/probe.py`, `pyproject.toml` (marker), `Makefile` |
 | 4 | `ci(security): build sandbox images and run runsc tests` | `.github/workflows/sandbox-images.yml`, `.github/workflows/ci.yml`, `scripts/install-runsc.sh`, `pyproject.toml` |
-| 5 | `test(infra): guard sandbox service isolation in compose` | tests only (compose config + lock guards) |
+| 5 | `test(infra): guard sandbox service isolation in compose` | tests only (compose config; the lock guards already came with commit 2) |
 | 6 | `docs(infra): record the sandbox CI and close issue 84` | `docs/development.md`, `docs/security.md`, `CHANGELOG.md`, `AGENTS.md` (commands), `STATE.md`; footer `Closes #84` |
 
 ### 1. Fixture image
