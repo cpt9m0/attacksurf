@@ -137,7 +137,8 @@ artifacts can't be stored or read), `ARTIFACT_MAX_BYTES`, `ARTIFACT_ORG_QUOTA_BY
 `ARTIFACT_RETENTION_HOURS` (0 = delete once analysis completes) and `ARTIFACT_STORE_ROOT`
 (ciphertext; must not overlap `SANDBOX_ARTIFACT_ROOT`). Archive upload on the Assets page
 (#87) and binary upload (#101) need `APP_ENCRYPTION_KEY`; without it the forms show "not
-configured". Their scans stay queued: nothing consumes the `analysis` queue until #84.
+configured". Their scans stay queued: no `analysis.*` task is registered yet (only the opt-in
+`worker-analysis` consumes the queue, and it drops what it receives).
 
 Auth settings: `ALLOW_SIGNUP` (default `true`; when `false` only the first user can sign up),
 `SESSION_LIFETIME_HOURS` (default 12), `PROXY_COUNT` (trusted proxy hops in front of the app).
@@ -232,16 +233,44 @@ make down                                        # stops everything, profile ser
 - **Staging folder:** `SANDBOX_ARTIFACT_ROOT` (default `/tmp/attacksurf-sandbox`) is mounted at
   the same path on the host and in the containers, because Docker resolves the analyzer's bind
   source on the host.
-- **Empty catalog:** no analyzer images exist until PR 5, so a `POST /runs` for any analyzer is a
-  404.
+- **Empty catalog:** no real analyzer ships yet, so a `POST /runs` is a 404 unless the fixtures
+  are on and listed in the images lock.
+- **Fixture analyzers:** `SANDBOX_FIXTURE_ANALYZERS=true` (default `false`, refused when
+  `ENV=prod`) adds `fixture-ok`, `fixture-probe`, `fixture-sleep` and `fixture-flood`. Each runs
+  only if the lock at `SANDBOX_IMAGES_LOCK` maps its name to an image. Never add them to the
+  committed `sandbox-images.lock`.
 - **Launcher URL:** Compose sets `SANDBOX_LAUNCHER_URL` on `worker-analysis` only. The other
   workers keep it unset and refuse every sandbox request.
-- **Dropped jobs:** until the analysis tasks are registered (#87/#101), `worker-analysis`
+- **Dropped jobs:** until the analysis tasks are registered, `worker-analysis`
   discards the upload jobs it receives. Their rows stay `queued`, as they do without the worker.
 
 To debug the launcher outside Docker, run `uv run python -m attacksurf.sandbox_launcher` with
 `SANDBOX_PROXY_URL` (the proxy, port 8790), `SANDBOX_LAUNCHER_HOST=127.0.0.1`,
 `SANDBOX_ARTIFACT_ROOT` and `SANDBOX_IMAGES_LOCK` set in the environment.
+
+### Sandbox runtime tests
+
+`tests/integration/sandbox/` runs real containers through the worker client, the launcher, the
+proxy and Docker. The launcher and proxy run inside the test process, so the Compose stack isn't
+needed. The tests are skipped unless `RUN_SANDBOX_TESTS=1`; once it is set, a missing Docker or a
+failed image build fails them.
+
+```bash
+make sandbox-test                          # host with gVisor (`runsc`)
+SANDBOX_ALLOW_RUNC=true make sandbox-test  # host without it (weaker isolation)
+make sandbox-images                        # only build the fixture image and print its ID
+```
+
+The tests build the fixture image (or use `SANDBOX_FIXTURE_IMAGE`, a `sha256:` image ID), write
+their own images lock and turn the fixtures on, so you don't set `SANDBOX_FIXTURE_ANALYZERS`.
+`SANDBOX_EXPECT_RUNTIME` (`runsc` or `runc`) makes a different runtime a failure. CI's
+`sandbox (runsc)` job sets it, installs gVisor with `scripts/install-runsc.sh` (pinned release,
+checksum verified) and first checks that a prod launcher refuses to start without `runsc`. A
+`runc` run says nothing about gVisor.
+
+`tests/unit/test_sandbox_compose.py` is separate: it renders the dev `compose.yaml` and checks
+how the sandbox services are isolated, without starting anything. It runs with the normal suite
+and needs Docker Compose (skipped locally without `docker`, a failure in CI).
 
 ## Everyday commands
 
@@ -279,7 +308,7 @@ AGENTS.md         rules for AI coding agents (CLAUDE.md imports it)
 | `git commit` | trailing whitespace/EOF/line endings, YAML/TOML/JSON syntax, merge markers, large files, private keys, **gitleaks** (secrets), **ruff** check + format, **import-linter** (layer rules) |
 | commit message | Conventional Commits check (`.github/scripts/check-commit-msg.sh`, same rules as PR titles) |
 | `git push` | **pyright**, **pytest** (80% coverage gate) |
-| CI on push to `main` / every PR | `lint` (pre-commit hooks + pyright), `test (3.12)`, `test (3.13)`, `test (3.15)` (with a Postgres service), `web-e2e` (Playwright Chromium layout + full-stack MVP E2E with Postgres), `audit` (`pip-audit` on locked dependencies), `secrets` (gitleaks over full git history), `compose` (builds the prod image, checks it runs as non-root, starts the dev stack, curls `/healthz`, runs migrations), `pr-title` (also re-runs on title edits) |
+| CI on push to `main` / every PR | `lint` (pre-commit hooks + pyright), `test (3.12)`, `test (3.13)`, `test (3.15)` (with a Postgres service), `web-e2e` (Playwright Chromium layout + full-stack MVP E2E with Postgres), `audit` (`pip-audit` on locked dependencies), `secrets` (gitleaks over full git history), `compose` (builds the prod image, checks it runs as non-root, starts the dev stack, curls `/healthz`, runs migrations), `sandbox (runsc)` (sandbox runtime tests under gVisor), `pr-title` (also re-runs on title edits). A separate workflow, `sandbox-images.yml`, builds the sandbox images when their files change; it pushes nothing |
 
 Remote hooks and GitHub Actions are pinned to commit SHAs; Dependabot proposes updates. ruff,
 pyright and pytest versions come from `uv.lock`.

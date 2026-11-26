@@ -2,28 +2,32 @@
 
 > Handoff for the next session. Overwritten at the end of every task; not a history log.
 
-**Updated:** 2026-11-24 · **Branch:** `76-web-tls-checks` · **Issue:** #76 (Check TLS certificates and configuration of web hosts)
+**Updated:** 2026-11-26 · **Branch:** `84-sandbox-ci` · **Issue:** #84 (Analysis sandbox runner and analysis worker)
 
 ## Status
-Implemented and tested on branch `76-web-tls-checks`; verifying full suite and opening PR #76.
+Implemented and documented; every check on draft PR #207 passed at `12b2426` (check the run for the docs commit). Decisions on #84's wording, PR review and merge remain.
 
 ## Last task
-- Added 7 TLS rules (`web.tls.cert_expired`, `cert_expiring`, `hostname_mismatch`, `untrusted_chain`, `weak_key`, `weak_signature`, `legacy_protocol`) in `src/attacksurf/domain/rules/web.py` (#76).
-- Implemented `web.tls` (`src/attacksurf/scanners/web/tls.py`) using `ctx.runtime.tls.inspect`, recording capped `Asset.details["tls"]` and deterministic parsed-chain-summary evidence, and registered it in `web_active.checks`, `app.py`, and `workers/app.py` (#76).
-- Added unit tests (`tests/unit/scanners/web/test_tls.py`, `test_profiles.py`) and Postgres integration tests (`tests/integration/workers/test_web_tls.py`), and synced `docs/scanners.md`, `docs/security.md`, and `CHANGELOG.md` (#76).
+- Added the fixture analyzer image and dev/CI-only fixtures, the runtime tests, the `runsc` CI job, the image build workflow and the compose isolation tests; `/tmp` is read-only (ADR 0034).
+- Documented them in `docs/development.md`, `docs/security.md`, `CHANGELOG.md` and `AGENTS.md`.
+- CI on `12b2426`: `sandbox (runsc)` had 14 passed and 1 skipped (the prod-refusal test, which passed in its own step before `runsc` was installed); the compose tests ran in all three `test` jobs.
 
 ## Next step
-Implement #77: Check HTTP security headers, cookies and HTTPS redirects (start after #76 PR is merged).
+Decide how to handle #84's unmet wording (below), check PR #207's description (include `Closes #84` only if the issue should close), then take the PR out of draft.
 
 ## Open threads
-- **Proxy trust:** the proxy has no caller authentication and `worker-analysis` shares the `sandbox` network with it (`docs/security.md`; #92 must close it before prod).
-- **Dropped dev jobs:** `worker-analysis` drops `analysis.*` messages until #87/#101 register tasks; the job rows stay `queued`.
-- **#92 prerequisites:** proxy, launcher and worker in `compose.prod.yaml`, `runsc` on the VPS, and the profile guard test in `tests/unit/scanners/test_profiles.py` removed or changed.
-- Follow-up issues to file (before #92): stray `attacksurf-*` container cleanup after proxy restart; `/tmp/attacksurf-sandbox` symlink hardening.
-- First analysis scanner calling `SandboxRunner.run` must `get_scoped` the artifact first with a tenant-isolation test.
+- PR #207 description: #84 says `worker-analysis` has no artifact mount, but ADR 0028 gives it a writable staging mount (correct the issue's wording). Compose isolation is checked for dev only.
+- #84 also asks for the sandbox services in prod compose and for `make up` to start them healthy. Neither is true: prod has none (left to #92) and dev needs `--profile sandbox`. Record this on the issue before it closes.
+- Compose guard gap: the all-services socket check misses a `/run` or `/var/run` mount.
+- **Proxy trust:** the proxy has no caller authentication and `worker-analysis` shares its network (`docs/security.md`; #92 must close it before prod).
+- **Dropped dev jobs:** no `analysis.*` task is registered, so `worker-analysis` drops those messages and job rows stay `queued`. #87 and #101 are closed; comments and docs saying they will register tasks are stale (`compose.yaml`, `docs/architecture.md`).
+- Also stale: `docs/architecture.md` says no analyzer image exists (the test fixture does); the `pre-pr-check` skill's CI job list lacks `sandbox (runsc)`.
+- **#92 prerequisites:** proxy, launcher and worker in `compose.prod.yaml` (extend the compose guard), `runsc` on the VPS, and the profile guard test in `tests/unit/scanners/test_profiles.py` removed or changed.
+- Follow-up issues to file before #92: stray `attacksurf-*` container cleanup after a proxy restart; `/tmp/attacksurf-sandbox` symlink hardening.
+- First analysis scanner calling `SandboxRunner.run` must `get_scoped` the artifact first, with a tenant-isolation test.
 - From AI summary (#26): prioritize assets in the 200-asset summary input, live eval results, and Claude list prices in `ai/pricing.py`.
 
 ## Notes for the next agent
-- Production plugins are registered in `src/attacksurf/app.py` and `src/attacksurf/workers/app.py`.
-- DB tests need `TEST_DATABASE_URL`; the dev stack exposes PostgreSQL on `127.0.0.1:5432` with `attacksurf_test`.
-- `ScopeGuard` defaults `active_scans_enabled=False`; tests exercising active checks with `ScopeGuard` directly must pass `active_scans_enabled=True`.
+- After #84 merges, the sandbox work continues with #92 (check its other dependencies first).
+- The 1k scale test exceeds 90 s on the two-core dev machine: use `SCALE_BUDGET_SECONDS` (`docs/development.md`).
+- DB tests need `TEST_DATABASE_URL`; `.github/scripts/pytest-hook.sh` resolves it.

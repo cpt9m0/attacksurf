@@ -6,6 +6,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Sandbox runtime and isolation checks (#84): a digest-pinned fixture analyzer image, fixture
+  analyzers for dev and CI only (`SANDBOX_FIXTURE_ANALYZERS`, refused in prod), end-to-end tests
+  with real containers (`make sandbox-test`), a CI job that installs gVisor to run them, an image
+  build workflow, and tests of sandbox service isolation in the dev `compose.yaml`. `/tmp` in the
+  sandbox is now mounted read-only, so `runsc` can't add a writable one (ADR 0034).
 - Guarded TLS certificate and protocol configuration check (`web.tls`, `scanners/web/tls.py`)
   wired into `web_active.checks`, `app.py`, and `workers/app.py`: inspects verified `https://`
   URLs over `ctx.runtime.tls`, records capped `Asset.details["tls"]`, and checks all 7 TLS rules

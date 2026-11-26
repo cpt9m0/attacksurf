@@ -205,6 +205,25 @@ must confirm the artifact belongs to the org before asking. What it guarantees:
 - **Known limit.** A container that exits and is removed before Docker registers the removed-wait
   makes the wait fail, so the run fails (503) instead of reporting an unconfirmed exit code.
 
+#### Checks on the sandbox
+
+- **At run time.** `tests/integration/sandbox/` runs a harmless fixture image through the real
+  client, launcher, proxy and Docker, and checks: no network; read-only input and root
+  filesystem; only `/scratch` and Docker's `/dev` mounts writable, none executable; non-root with
+  no capabilities and `no-new-privileges`; no Docker socket or added environment variables; the
+  wall-time and output-cap kills leave no container behind; unknown and symlinked artifacts are
+  refused; and a prod launcher won't start without `runsc`. CI's `sandbox (runsc)` job runs them
+  under gVisor, with `runc` not allowed.
+- **Fixtures never run in prod.** `SANDBOX_FIXTURE_ANALYZERS` is refused when `ENV=prod`, the
+  launcher's own selection ignores it there, and tests keep fixture names out of `CATALOG` and
+  the committed `sandbox-images.lock`.
+- **Compose isolation (dev only).** `tests/unit/test_sandbox_compose.py` fails if the rendered
+  `compose.yaml` gives the launcher or proxy another setting, an env file or secrets, changes the
+  mounts of the three sandbox services or the members of the internal network, or publishes a
+  port from them. Its all-services socket check matches only paths containing `docker.sock`, so
+  it misses another service mounting `/run` or `/var/run`. `compose.prod.yaml` has no sandbox
+  services yet; #92 must extend these checks when it adds them.
+
 #### Worker-side client and tenant safety
 
 The launcher knows nothing about orgs: any caller that can reach it can name any artifact ID. The
