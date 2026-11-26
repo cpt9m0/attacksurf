@@ -20,7 +20,8 @@ updates:
       prefix: ci
       include: scope
   - package-ecosystem: docker
-    directory: /
+    # The root Dockerfile and every sandbox analyzer image (ADR 0018), so base updates arrive together.
+    directories: ["/", "/sandbox/images/*"]
     schedule:
       interval: weekly
     commit-message:

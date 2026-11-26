@@ -5,6 +5,8 @@
 
 The proxy's allowed calls are amended by [ADR 0023](0023-sandbox-runtime-check.md): one
 read-only `GET /info`, answered with runtime names only, for the launcher's `runsc` check.
+The mounts are amended by [ADR 0034](0034-sandbox-tmp-read-only.md): `/tmp` is also mounted, as
+a read-only `tmpfs`, so `runsc` can't add a writable one.
 
 ## Context
 The code and binary modules (#67) will analyse artifacts an attacker can craft: repositories,

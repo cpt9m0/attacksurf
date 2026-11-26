@@ -231,6 +231,7 @@ def test_sandbox_launcher_settings_defaults() -> None:
     assert settings.sandbox_wall_time_seconds == 600
     assert settings.sandbox_max_concurrent_runs == 2
     assert settings.sandbox_allow_runc is False
+    assert settings.sandbox_fixture_analyzers is False
 
 
 def test_sandbox_launcher_settings_need_no_app_secrets_in_prod() -> None:
@@ -260,15 +261,26 @@ def test_sandbox_launcher_settings_read_from_environment(clean_env: pytest.Monke
     assert settings.sandbox_max_concurrent_runs == 4
 
 
+def test_sandbox_launcher_settings_read_fixture_analyzers_from_environment(
+    clean_env: pytest.MonkeyPatch,
+) -> None:
+    clean_env.setenv("SANDBOX_FIXTURE_ANALYZERS", "true")
+
+    assert SandboxLauncherSettings().sandbox_fixture_analyzers is True
+
+
 def test_sandbox_launcher_settings_ignore_dotenv_file(
     clean_env: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    (tmp_path / ".env").write_text("SANDBOX_ALLOW_RUNC=true\nSANDBOX_WALL_TIME_SECONDS=5\n")
+    (tmp_path / ".env").write_text(
+        "SANDBOX_ALLOW_RUNC=true\nSANDBOX_FIXTURE_ANALYZERS=true\nSANDBOX_WALL_TIME_SECONDS=5\n"
+    )
     clean_env.chdir(tmp_path)
 
     settings = SandboxLauncherSettings()
 
     assert settings.sandbox_allow_runc is False
+    assert settings.sandbox_fixture_analyzers is False
     assert settings.sandbox_wall_time_seconds == 600
 
 
@@ -355,6 +367,26 @@ def test_sandbox_launcher_settings_allow_runc_only_when_asked_outside_prod() -> 
 def test_sandbox_launcher_settings_refuse_runc_in_prod() -> None:
     with pytest.raises(ValueError, match="runc"):
         SandboxLauncherSettings(env="prod", sandbox_allow_runc=True)
+
+
+@pytest.mark.parametrize("env", ["dev", "test"])
+def test_sandbox_launcher_settings_allow_fixture_analyzers_outside_prod(env: str) -> None:
+    settings = SandboxLauncherSettings.model_validate(
+        {"env": env, "sandbox_fixture_analyzers": True}
+    )
+
+    assert settings.sandbox_fixture_analyzers is True
+
+
+def test_sandbox_launcher_settings_refuse_fixture_analyzers_in_prod() -> None:
+    with pytest.raises(ValueError, match="SANDBOX_FIXTURE_ANALYZERS"):
+        SandboxLauncherSettings(env="prod", sandbox_fixture_analyzers=True)
+
+
+def test_sandbox_proxy_settings_have_no_fixture_flag() -> None:
+    # The proxy knows images by digest, never analyzer names: the flag belongs to the launcher.
+    assert "sandbox_fixture_analyzers" not in SandboxProxySettings.model_fields
+    assert "sandbox_fixture_analyzers" in SandboxLauncherSettings.model_fields
 
 
 @pytest.mark.parametrize("root", ["relative/path", "/", "/srv/../etc"])

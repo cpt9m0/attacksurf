@@ -217,6 +217,10 @@ services:
   sandbox-launcher:
     <<: *sandbox
     command: ["python", "-m", "attacksurf.sandbox_launcher"]
+    environment:
+      <<: *sandbox-env
+      # Test-only analyzers for the runtime tests (ADR 0016); refused when ENV=prod.
+      SANDBOX_FIXTURE_ANALYZERS: ${SANDBOX_FIXTURE_ANALYZERS:-false}
     volumes:
       - ./src:/app/src:ro
       - ${SANDBOX_ARTIFACT_ROOT:-/tmp/attacksurf-sandbox}:${SANDBOX_ARTIFACT_ROOT:-/tmp/attacksurf-sandbox}:ro

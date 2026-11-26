@@ -63,6 +63,37 @@ def test_make_down_also_stops_opt_in_sandbox_services(tmp_path: Path) -> None:
     assert commands == [["--profile", "sandbox", "down"]]
 
 
+def test_make_sandbox_images_runs_the_build_script() -> None:
+    assert MAKE is not None
+    result = subprocess.run(  # noqa: S603 (fixed make target, dry run)
+        [MAKE, "--no-print-directory", "-n", "sandbox-images"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["./scripts/build-sandbox-images.sh"]
+
+
+def test_make_sandbox_test_runs_only_the_runtime_tests() -> None:
+    assert MAKE is not None
+    result = subprocess.run(  # noqa: S603 (fixed make target, dry run)
+        [MAKE, "--no-print-directory", "-n", "sandbox-test"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    # `runc` is never allowed by the target itself: the caller has to ask for it.
+    assert result.stdout.splitlines() == [
+        "RUN_SANDBOX_TESTS=1 uv run pytest tests/integration/sandbox -m sandbox_runtime --no-cov"
+    ]
+
+
 @pytest.mark.parametrize("failed_step", [0, 1, 2], ids=["build", "dependencies", "migration"])
 def test_make_up_stops_when_a_prerequisite_fails(tmp_path: Path, failed_step: int) -> None:
     result, commands = _run_make(tmp_path, "up", STARTUP_COMMANDS[failed_step])

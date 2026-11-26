@@ -15,6 +15,10 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 SANDBOX_USER = "65532:65532"
 OSV_BIND = "attacksurf_osv:/data/osv:ro"
 OSV_ANALYZER = "osv-scanner"
+# `/tmp` must be an explicit, closed mount (ADR 0034): without one, runsc can add its own
+# writable, executable tmpfs there, read-only root or not. Only this exact string is accepted.
+_TMP_PATH = "/tmp"  # noqa: S108 (a mount point inside the sandbox, not a host temp file)
+TMP_MOUNT_OPTIONS = "ro,noexec,nosuid,nodev,size=4096"
 
 # Hard ceilings, deliberately not settings: the launcher's configured limits must fit under them.
 MAX_NANO_CPUS = 4_000_000_000
@@ -155,7 +159,7 @@ def validate_create(body: object, policy: SandboxPolicy) -> None:
         _require(_is_string_list(config.get(field, [])), "Command must be a list of strings.")
     _check_isolation(host, policy)
     _check_limits(host)
-    _check_scratch(host["Tmpfs"])
+    _check_tmpfs(host["Tmpfs"])
     _check_binds(host["Binds"], image, policy)
 
 
@@ -193,9 +197,10 @@ def _check_limits(host: dict[str, Any]) -> None:
     _require(seen == set(_ULIMIT_CEILINGS), "Ulimits are required.")
 
 
-def _check_scratch(tmpfs: object) -> None:
+def _check_tmpfs(tmpfs: object) -> None:
     mounts = _object(tmpfs)
-    _require(set(mounts) == {"/scratch"}, "Only /scratch may be a tmpfs.")
+    _require(set(mounts) == {"/scratch", _TMP_PATH}, "The tmpfs mounts are not the allowed set.")
+    _require(mounts[_TMP_PATH] == TMP_MOUNT_OPTIONS, "The temp mount must be locked read-only.")
     options = mounts["/scratch"]
     _require(isinstance(options, str), "Scratch options are malformed.")
     flags = set(options.split(","))

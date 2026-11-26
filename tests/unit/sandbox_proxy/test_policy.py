@@ -32,6 +32,9 @@ POLICY = SandboxPolicy(
     osv_image=OSV_IMAGE,
 )
 Body = dict[str, Any]
+SCRATCH_MOUNT = "rw,noexec,nosuid,nodev,size=1073741824"
+TMP_MOUNT = "ro,noexec,nosuid,nodev,size=4096"
+TMP_PATH = "/tmp"  # noqa: S108 (a mount point inside the sandbox, not a host temp file)
 
 
 def create_body() -> Body:
@@ -48,7 +51,7 @@ def create_body() -> Body:
             "CapDrop": ["ALL"],
             "SecurityOpt": ["no-new-privileges"],
             "Binds": ["/srv/artifacts/org/artifact:/input:ro"],
-            "Tmpfs": {"/scratch": "rw,noexec,nosuid,nodev,size=1073741824"},
+            "Tmpfs": {"/scratch": SCRATCH_MOUNT, TMP_PATH: TMP_MOUNT},
             "NanoCpus": 1_000_000_000,
             "Memory": 1024**3,
             "MemorySwap": 1024**3,
@@ -67,6 +70,11 @@ def host(**changes: Any) -> Callable[[Body], None]:
         body["HostConfig"].update(changes)
 
     return mutate
+
+
+def mounts(scratch: str = SCRATCH_MOUNT, tmp: str = TMP_MOUNT) -> Callable[[Body], None]:
+    """Both tmpfs mounts, valid unless overridden, so a case breaks exactly one thing."""
+    return host(Tmpfs={"/scratch": scratch, TMP_PATH: tmp})
 
 
 def top(**changes: Any) -> Callable[[Body], None]:
@@ -145,13 +153,23 @@ def test_osv_image_may_mount_the_osv_volume_read_only() -> None:
             ),
             id="soft-limit-above-hard",
         ),
-        pytest.param(host(Tmpfs={}), id="no-scratch"),
-        pytest.param(host(Tmpfs={"/etc": "rw,noexec,nosuid,nodev,size=1"}), id="tmpfs-elsewhere"),
-        pytest.param(host(Tmpfs={"/scratch": "rw,nosuid,nodev,size=1"}), id="scratch-exec"),
-        pytest.param(host(Tmpfs={"/scratch": "rw,noexec,nosuid,nodev"}), id="scratch-no-size"),
+        pytest.param(host(Tmpfs={}), id="no-tmpfs"),
+        pytest.param(host(Tmpfs={TMP_PATH: TMP_MOUNT}), id="no-scratch"),
+        pytest.param(host(Tmpfs={"/scratch": SCRATCH_MOUNT}), id="tmp-not-locked"),
         pytest.param(
-            host(Tmpfs={"/scratch": "rw,noexec,nosuid,nodev,size=1g"}), id="scratch-size-units"
+            host(Tmpfs={"/scratch": SCRATCH_MOUNT, TMP_PATH: TMP_MOUNT, "/etc": TMP_MOUNT}),
+            id="tmpfs-elsewhere",
         ),
+        pytest.param(mounts(scratch="rw,nosuid,nodev,size=1"), id="scratch-exec"),
+        pytest.param(mounts(scratch="rw,noexec,nosuid,nodev"), id="scratch-no-size"),
+        pytest.param(mounts(scratch="rw,noexec,nosuid,nodev,size=1g"), id="scratch-size-units"),
+        pytest.param(mounts(tmp="rw,noexec,nosuid,nodev,size=4096"), id="tmp-writable"),
+        pytest.param(mounts(tmp="noexec,nosuid,nodev,size=4096"), id="tmp-mode-missing"),
+        pytest.param(mounts(tmp=TMP_MOUNT + ",rw"), id="tmp-reopened-by-a-later-flag"),
+        pytest.param(mounts(tmp="ro,nosuid,nodev,size=4096"), id="tmp-exec"),
+        pytest.param(mounts(tmp="ro,noexec,nosuid,nodev,size=1073741824"), id="tmp-resized"),
+        pytest.param(mounts(tmp=""), id="tmp-no-options"),
+        pytest.param(host(Tmpfs={"/scratch": SCRATCH_MOUNT, TMP_PATH: None}), id="tmp-not-text"),
         pytest.param(host(Binds=[]), id="no-input"),
         pytest.param(host(Binds="/srv/artifacts/a:/input:ro"), id="binds-not-a-list"),
         pytest.param(host(Binds=["/etc:/input:ro"]), id="bind-outside-artifact-root"),

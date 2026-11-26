@@ -6,6 +6,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Sandbox runtime and isolation checks (#84): a digest-pinned fixture analyzer image, fixture
+  analyzers for dev and CI only (`SANDBOX_FIXTURE_ANALYZERS`, refused in prod), end-to-end tests
+  with real containers (`make sandbox-test`), a CI job that installs gVisor to run them, an image
+  build workflow, and tests of sandbox service isolation in the dev `compose.yaml`. `/tmp` in the
+  sandbox is now mounted read-only, so `runsc` can't add a writable one (ADR 0034).
 - Fixed-path exposed sensitive file, debug endpoint, API docs, admin panel, and `security.txt`
   scanner (`web.exposures`, `scanners/web/exposures.py`) wired into `web_active.checks`, `app.py`,
   and `workers/app.py`, alongside ADR 0033 `ScopeGuard` enforcement (`http_methods`, `http_paths`,

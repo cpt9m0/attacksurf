@@ -1,6 +1,7 @@
 """Performance sanity (#30): a ~1k CT subdomain `dns_passive` scan completes within limits."""
 
 import json
+import os
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -31,14 +32,15 @@ from attacksurf.workers.app import app
 from attacksurf.workers.tasks import pipeline
 from tests.dns_fakes import FakeScopeHttp, MutableDnsZone, patch_dnspython_wire
 from tests.fakes import FakeCache, FakeQueue
+from tests.helpers import scale_budget_seconds
 from tests.integration.factories import make_org
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "dns" / "whois"
 DOMAIN = "scale-test.example.com"
 CT_ENTRIES = 1200  # above MAX_DISCOVERED_ASSETS (1000) to exercise the cap end to end
-# Sequential eager execution runs ~3k jobs over Postgres; 90s allows CI bridge variance while
-# still catching quadratic savepoint or N+1 regressions (>160s).
-SCALE_BUDGET_SECONDS = 90.0
+# Sequential eager execution runs ~3k jobs over Postgres. The time limit is 90s by default, which
+# allows CI bridge variance while still catching quadratic savepoint or N+1 regressions (>160s);
+# `scale_budget_seconds` lets a slower machine lengthen it.
 
 
 def _build_zone_and_http() -> tuple[MutableDnsZone, FakeScopeHttp]:
@@ -143,6 +145,7 @@ def test_1k_subdomain_scan_completes_within_limits(
     scale_env: tuple[sessionmaker[Session], MutableDnsZone, list[str]],
 ) -> None:
     factory, _zone, sent = scale_env
+    budget = scale_budget_seconds(os.environ)  # before the scan, so a bad value fails at once
     with factory() as session:
         org = make_org(session, "scale-org")
         org_id = org.id
@@ -169,7 +172,7 @@ def test_1k_subdomain_scan_completes_within_limits(
     with factory() as session:
         stored_scan = session.get_one(Scan, scan_id)
         assert stored_scan.status is ScanStatus.COMPLETED
-        assert elapsed < SCALE_BUDGET_SECONDS, f"1k subdomain scan took {elapsed:.2f}s"
+        assert elapsed < budget, f"1k subdomain scan took {elapsed:.2f}s (limit {budget:.0f}s)"
 
         subdomains = session.scalars(
             scoped(Asset, org_id).where(

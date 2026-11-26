@@ -15,6 +15,9 @@ from attacksurf.sandbox_launcher.catalog import Analyzer, SandboxLimits
 SANDBOX_USER = "65532:65532"
 OSV_ANALYZER = "osv-scanner"
 OSV_BIND = "attacksurf_osv:/data/osv:ro"
+# Closes `/tmp` (ADR 0034): with nothing mounted there, runsc can add its own writable,
+# executable tmpfs. Tools use `/scratch` instead.
+TMP_MOUNT_OPTIONS = "ro,noexec,nosuid,nodev,size=4096"
 
 _RUNTIMES = frozenset({"runsc", "runc"})
 
@@ -46,7 +49,10 @@ def build_create_body(analyzer: Analyzer, artifact_dir: Path, runtime: str) -> d
             "CapDrop": ["ALL"],
             "SecurityOpt": ["no-new-privileges"],
             "Binds": _binds(analyzer, artifact_dir),
-            "Tmpfs": {"/scratch": f"rw,noexec,nosuid,nodev,size={limits.scratch_bytes}"},
+            "Tmpfs": {
+                "/scratch": f"rw,noexec,nosuid,nodev,size={limits.scratch_bytes}",
+                "/tmp": TMP_MOUNT_OPTIONS,  # noqa: S108 (a container mount, not a host file)
+            },
             "NanoCpus": limits.nano_cpus,
             "Memory": limits.memory_bytes,
             "MemorySwap": limits.memory_bytes,  # equal to Memory: no swap

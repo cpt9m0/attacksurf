@@ -113,6 +113,7 @@ markers = [
     "worker: needs the running Compose workers (RUN_WORKER_TESTS=1)",
     "llm_live: calls a real LLM provider with the LLM_* settings (RUN_LLM_TESTS=1); never in CI",
     "web_e2e: renders real pages in Chromium (RUN_WEB_E2E=1 + `uv run playwright install chromium`)",
+    "sandbox_runtime: starts real sandbox containers; needs Docker (RUN_SANDBOX_TESTS=1, make sandbox-test)",
 ]
 
 [tool.coverage.run]
@@ -133,6 +134,7 @@ dev = [
     "pyright>=1.1.414",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
+    "pyyaml>=6.0.3",
     "ruff>=0.16.10",
 ]
 

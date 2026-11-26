@@ -446,6 +446,15 @@ class SandboxLauncherSettings(_SandboxServiceSettings):
     sandbox_launcher_port: int = Field(default=8791, ge=1, le=65535)
     sandbox_wall_time_seconds: int = Field(default=600, ge=1, le=SANDBOX_MAX_WALL_TIME_SECONDS)
     sandbox_max_concurrent_runs: int = Field(default=2, ge=1, le=16)
+    # Test-only analyzers for the runtime tests and CI; refused in prod. Launcher only: the
+    # proxy knows images by digest, never analyzer names.
+    sandbox_fixture_analyzers: bool = False
+
+    @model_validator(mode="after")
+    def _refuse_fixture_analyzers_in_prod(self) -> Self:
+        if self.env == "prod" and self.sandbox_fixture_analyzers:
+            raise ValueError("SANDBOX_FIXTURE_ANALYZERS is not allowed when ENV=prod")
+        return self
 
     @field_validator("sandbox_proxy_url")
     @classmethod

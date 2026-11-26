@@ -99,7 +99,10 @@ def test_resolve_artifact_path_satisfies_the_proxy_bind_rule(tmp_path: Path) -> 
                 "CapDrop": ["ALL"],
                 "SecurityOpt": ["no-new-privileges"],
                 "Binds": [f"{source}:/input:ro"],
-                "Tmpfs": {"/scratch": "rw,noexec,nosuid,nodev,size=1024"},
+                "Tmpfs": {
+                    "/scratch": "rw,noexec,nosuid,nodev,size=1024",
+                    "/tmp": "ro,noexec,nosuid,nodev,size=4096",  # noqa: S108 (sandbox mount)
+                },
                 "NanoCpus": 1_000_000_000,
                 "Memory": 1024**3,
                 "MemorySwap": 1024**3,

@@ -63,6 +63,7 @@ uv add <pkg> / uv add --dev <pkg>        # add deps (never edit lockfile by hand
 uv run flask --app attacksurf run --debug
 uv run pytest                            # tests + coverage (fails under 80%)
 make eval                                # AI triage eval set against the LLM in .env (opt-in, real calls, never CI)
+make sandbox-images / make sandbox-test  # fixture image / sandbox tests with real containers (docs/development.md)
 uv run ruff check --fix . && uv run ruff format .
 uv run pyright
 uv run pre-commit install                # once: git hooks (pre-commit, commit-msg, pre-push)
@@ -75,7 +76,7 @@ Git hooks run ruff + gitleaks on commit, check the commit message, and run pyrig
 push. The pytest hook resolves `TEST_DATABASE_URL` itself (shell, then `.env`, then a `_test`
 name derived from `.env`'s `DATABASE_URL`, then the local default) and stops if that database is
 unreachable, so it never passes by skipping DB tests. CI (`.github/workflows/ci.yml`) runs the
-same checks plus `web-e2e`, `audit`, a compose smoke test, and the PR-title check. New service or env var? Update
+same checks plus `web-e2e`, `sandbox (runsc)`, `audit`, a compose smoke test, and the PR-title check. New service or env var? Update
 `compose.yaml` and `.env.example` too.
 **Never bypass hooks (`--no-verify`) or weaken CI to get green**: fix the cause.
 

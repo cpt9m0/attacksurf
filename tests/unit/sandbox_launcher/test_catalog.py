@@ -1,6 +1,9 @@
 """The analyzer catalog: fixed commands and limits, joined to image digests from the lock."""
 
 import json
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -8,6 +11,7 @@ import pytest
 from attacksurf.sandbox_launcher import catalog
 from attacksurf.sandbox_launcher.catalog import (
     CATALOG,
+    FIXTURE_SPECS,
     AnalyzerSpec,
     SandboxLimits,
     load_catalog,
@@ -15,6 +19,9 @@ from attacksurf.sandbox_launcher.catalog import (
 from attacksurf.sandbox_proxy import policy
 
 ROOT = Path(__file__).resolve().parents[3]
+FIXTURE_DIR = ROOT / "sandbox" / "images" / "fixture"
+FIXTURE_PYTHON = "/usr/local/bin/python"
+FIXTURE_PROBE = "/opt/fixture/probe.py"
 DIGEST = "ghcr.io/acme/echo@sha256:" + "a" * 64
 OTHER_DIGEST = "sha256:" + "b" * 64
 SPEC = AnalyzerSpec(name="echo", command=("/analyze", "/input"))
@@ -54,6 +61,59 @@ def test_catalog_starts_empty() -> None:
 
 def test_the_committed_images_lock_runs_no_analyzer() -> None:
     assert load_catalog(ROOT / "sandbox-images.lock") == {}
+
+
+def test_catalog_has_no_fixture_analyzer() -> None:
+    assert not [spec.name for spec in CATALOG if spec.name.startswith("fixture-")]
+
+
+def test_the_committed_images_lock_names_no_fixture() -> None:
+    names = json.loads((ROOT / "sandbox-images.lock").read_text())
+
+    assert not [name for name in names if name.startswith("fixture-")]
+
+
+def test_fixture_specs_run_the_probe_with_one_mode_each() -> None:
+    assert [spec.name for spec in FIXTURE_SPECS] == [
+        "fixture-ok",
+        "fixture-probe",
+        "fixture-sleep",
+        "fixture-flood",
+    ]
+    for spec in FIXTURE_SPECS:
+        mode = spec.name.removeprefix("fixture-")
+        assert spec.command == (FIXTURE_PYTHON, FIXTURE_PROBE, mode)
+
+
+def test_fixture_specs_use_the_default_limits() -> None:
+    # The wall time and the output cap must be what stops `sleep` and `flood`, not a tight limit.
+    assert all(spec.limits == SandboxLimits() for spec in FIXTURE_SPECS)
+
+
+def test_fixture_specs_do_not_clash_with_the_catalog(tmp_path: Path) -> None:
+    lock = write_lock(tmp_path, json.dumps({spec.name: OTHER_DIGEST for spec in FIXTURE_SPECS}))
+
+    analyzers = load_catalog(lock, CATALOG + FIXTURE_SPECS)
+
+    assert set(analyzers) == {spec.name for spec in FIXTURE_SPECS}
+
+
+def test_fixture_specs_cover_every_probe_mode() -> None:
+    # The probe prints its own mode list when it is run without one.
+    command = [sys.executable, "-I", "-S", str(FIXTURE_DIR / "probe.py")]
+    result = subprocess.run(command, check=False, capture_output=True, text=True)  # noqa: S603
+
+    match = re.search(r"\{([a-z|]+)\}", result.stderr)
+    assert match, result.stderr
+    assert {spec.name.removeprefix("fixture-") for spec in FIXTURE_SPECS} == set(
+        match.group(1).split("|")
+    )
+
+
+def test_fixture_probe_path_matches_the_image() -> None:
+    dockerfile = (FIXTURE_DIR / "Dockerfile").read_text()
+
+    assert re.search(rf"^COPY\s+\S+\s+probe\.py\s+{re.escape(FIXTURE_PROBE)}$", dockerfile, re.M)
 
 
 def test_load_catalog_with_no_specs_returns_nothing(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ from attacksurf.sandbox_launcher import container
 from attacksurf.sandbox_launcher.artifacts import resolve_artifact
 from attacksurf.sandbox_launcher.catalog import (
     CATALOG,
+    FIXTURE_SPECS,
     LIMIT_CEILINGS,
     Analyzer,
     AnalyzerSpec,
@@ -73,7 +74,10 @@ def test_default_analyzer_builds_the_exact_adr_body() -> None:
             "CapDrop": ["ALL"],
             "SecurityOpt": ["no-new-privileges"],
             "Binds": [f"{ARTIFACT_DIR}:/input:ro"],
-            "Tmpfs": {"/scratch": "rw,noexec,nosuid,nodev,size=1073741824"},
+            "Tmpfs": {
+                "/scratch": "rw,noexec,nosuid,nodev,size=1073741824",
+                "/tmp": "ro,noexec,nosuid,nodev,size=4096",  # noqa: S108 (sandbox mount)
+            },
             "NanoCpus": 1_000_000_000,
             "Memory": 1024**3,
             "MemorySwap": 1024**3,
@@ -107,7 +111,7 @@ def test_body_is_accepted_by_the_proxy_policy(runtime: str) -> None:
         (
             "scratch_bytes",
             2048,
-            lambda h: h["Tmpfs"] == {"/scratch": "rw,noexec,nosuid,nodev,size=2048"},
+            lambda h: h["Tmpfs"]["/scratch"] == "rw,noexec,nosuid,nodev,size=2048",
         ),
         (
             "open_files",
@@ -182,14 +186,15 @@ def test_resolved_artifact_path_feeds_the_builder(tmp_path: Path) -> None:
     validate_create(body, proxy_policy(root=root))
 
 
-@pytest.mark.parametrize("spec", CATALOG, ids=lambda spec: spec.name)
-def test_every_catalog_spec_builds_an_accepted_body(spec: AnalyzerSpec) -> None:
+@pytest.mark.parametrize("runtime", ["runsc", "runc"])
+@pytest.mark.parametrize("spec", CATALOG + FIXTURE_SPECS, ids=lambda spec: spec.name)
+def test_every_catalog_spec_builds_an_accepted_body(spec: AnalyzerSpec, runtime: str) -> None:
     image = OSV_IMAGE if spec.name == policy.OSV_ANALYZER else IMAGE
     osv_image = OSV_IMAGE if spec.name == policy.OSV_ANALYZER else None
 
-    body = build_create_body(Analyzer(spec, image), ARTIFACT_DIR, "runsc")
+    body = build_create_body(Analyzer(spec, image), ARTIFACT_DIR, runtime)
 
-    validate_create(body, proxy_policy(image=image, osv_image=osv_image))
+    validate_create(body, proxy_policy(image=image, osv_image=osv_image, runtime=runtime))
 
 
 # --- B. Boundary cases --------------------------------------------------------------------------
@@ -319,3 +324,4 @@ def test_copied_constants_match_the_proxy() -> None:
     assert container.SANDBOX_USER == policy.SANDBOX_USER
     assert container.OSV_ANALYZER == policy.OSV_ANALYZER
     assert container.OSV_BIND == policy.OSV_BIND
+    assert container.TMP_MOUNT_OPTIONS == policy.TMP_MOUNT_OPTIONS
