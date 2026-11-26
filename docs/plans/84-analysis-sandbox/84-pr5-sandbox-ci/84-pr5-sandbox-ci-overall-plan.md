@@ -77,7 +77,7 @@ Each commit leaves ruff, pyright, lint-imports and pytest green, and tests come 
 | 2 | `feat(infra): add fixture analyzers to the launcher for dev and CI` | `sandbox_launcher/catalog.py`, `config.py`, `sandbox_launcher/__main__.py`, `compose.yaml` (launcher env), `.env.example` |
 | 3a | `fix(security): keep /tmp read-only in the sandbox` | `sandbox_launcher/container.py`, `sandbox_proxy/policy.py`, ADR 0034, ADR 0016 (pointer), `docs/security.md` |
 | 3b | `test(infra): run the sandbox end to end under a real runtime` | `sandbox/images/fixture/probe.py`, `pyproject.toml` (marker), `Makefile` |
-| 4 | `ci(security): build sandbox images and run runsc tests` | `.github/workflows/sandbox-images.yml`, `.github/workflows/ci.yml`, `scripts/install-runsc.sh` |
+| 4 | `ci(security): build sandbox images and run runsc tests` | `.github/workflows/sandbox-images.yml`, `.github/workflows/ci.yml`, `scripts/install-runsc.sh`, `pyproject.toml` |
 | 5 | `test(infra): guard sandbox service isolation in compose` | tests only (compose config + lock guards) |
 | 6 | `docs(infra): record the sandbox CI and close issue 84` | `docs/development.md`, `docs/security.md`, `CHANGELOG.md`, `AGENTS.md` (commands), `STATE.md`; footer `Closes #84` |
 
@@ -139,6 +139,9 @@ Each commit leaves ruff, pyright, lint-imports and pytest green, and tests come 
   and `--no-cov` in the CI job, like `web-e2e`.
 
 ### 4. CI
+**Superseded in part by `04-run-runsc-tests-in-ci.md`:** the release ships as one tarball with
+sidecar binaries, and the job's step order changed there.
+
 - `scripts/install-runsc.sh`: pinned release, SHA-512 verified, `runsc install`,
   `sudo systemctl restart docker`, then `docker info` must list `runsc`.
 - `.github/workflows/sandbox-images.yml`: `on: pull_request` and `push: main`, with a `paths`
@@ -174,8 +177,8 @@ Then `finish-task` and `pre-pr-check`.
   read-only in the launcher). The PR description says so, and #84's checkbox wording should be
   corrected when closing it.
 - **gVisor on GitHub-hosted runners.** `runsc` needs a working platform (the default `systrap`
-  should run on `ubuntu-latest`). If the first run fails for platform reasons, the fallback is to
-  pass `--platform=ptrace` in the daemon's `runtimeArgs` inside `install-runsc.sh`.
+  should run on `ubuntu-latest`). If the first run fails for platform reasons, investigate it:
+  gVisor no longer supports `ptrace`, so it is not a fallback (see the 04 plan).
 - **Proxy bind source on the runner.** The artifact root is under `tmp_path`, which exists on the
   same host as the Docker daemon, so Docker can bind it. This would break on a remote daemon.
 - **Known and left alone:** the proxy has no caller authentication (`STATE.md` open thread, #92).

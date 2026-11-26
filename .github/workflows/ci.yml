@@ -102,6 +102,51 @@ jobs:
       - name: Browser E2E & layout tests
         run: RUN_WEB_E2E=1 uv run pytest tests/e2e -m web_e2e --no-cov
 
+  # The sandbox runtime tests under gVisor, as production requires (ADR 0016). Without runc
+  # permission, a runner that lacks runsc fails instead of falling back.
+  sandbox:
+    name: sandbox (runsc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUN_SANDBOX_TESTS: "1"
+      SANDBOX_ALLOW_RUNC: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false  # a downloaded binary runs as root below
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Build the fixture image
+        run: |
+          built=$(scripts/build-sandbox-images.sh fixture)
+          echo "SANDBOX_FIXTURE_IMAGE=${built#fixture }" >> "$GITHUB_ENV"
+      # Only meaningful while runsc is missing, so it runs before the install.
+      - name: Production refuses to start without runsc
+        env:
+          SANDBOX_EXPECT_RUNTIME: runc
+        run: >-
+          uv run pytest --no-cov
+          tests/integration/sandbox/test_runtime.py::test_launcher_refuses_to_start_in_prod_without_runsc
+      - name: Install gVisor (runsc)
+        run: scripts/install-runsc.sh
+      # Tells "gVisor can't start on this runner" apart from "a sandbox wall failed".
+      - name: gVisor starts a container
+        run: >-
+          docker run --rm --runtime=runsc --network=none "$SANDBOX_FIXTURE_IMAGE"
+          /usr/local/bin/python /opt/fixture/probe.py ok
+      - name: Sandbox runtime tests under runsc
+        env:
+          SANDBOX_EXPECT_RUNTIME: runsc
+        run: make sandbox-test
+      - name: Show containers and Docker logs on failure
+        if: failure()
+        run: |
+          docker ps -a
+          sudo journalctl -u docker --no-pager -n 200
+
   audit:
     name: audit
     runs-on: ubuntu-latest

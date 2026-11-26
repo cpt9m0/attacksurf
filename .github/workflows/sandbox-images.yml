@@ -1,0 +1,36 @@
+# Builds the sandbox analyzer images when they change (ADR 0018). Nothing is pushed: the runtime
+# tests use the local image ID. #92 adds the first real analyzer, and with it a main-only job that
+# may push. Path-filtered, so don't make it a required check (it would block other PRs).
+name: Sandbox images
+
+on:
+  pull_request:
+    paths:
+      - sandbox/images/**
+      - scripts/build-sandbox-images.sh
+      - .github/workflows/sandbox-images.yml
+  push:
+    branches: [main]
+    paths:
+      - sandbox/images/**
+      - scripts/build-sandbox-images.sh
+      - .github/workflows/sandbox-images.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sandbox-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build sandbox images
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/build-sandbox-images.sh
