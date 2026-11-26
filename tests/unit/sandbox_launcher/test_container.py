@@ -74,7 +74,10 @@ def test_default_analyzer_builds_the_exact_adr_body() -> None:
             "CapDrop": ["ALL"],
             "SecurityOpt": ["no-new-privileges"],
             "Binds": [f"{ARTIFACT_DIR}:/input:ro"],
-            "Tmpfs": {"/scratch": "rw,noexec,nosuid,nodev,size=1073741824"},
+            "Tmpfs": {
+                "/scratch": "rw,noexec,nosuid,nodev,size=1073741824",
+                "/tmp": "ro,noexec,nosuid,nodev,size=4096",  # noqa: S108 (sandbox mount)
+            },
             "NanoCpus": 1_000_000_000,
             "Memory": 1024**3,
             "MemorySwap": 1024**3,
@@ -108,7 +111,7 @@ def test_body_is_accepted_by_the_proxy_policy(runtime: str) -> None:
         (
             "scratch_bytes",
             2048,
-            lambda h: h["Tmpfs"] == {"/scratch": "rw,noexec,nosuid,nodev,size=2048"},
+            lambda h: h["Tmpfs"]["/scratch"] == "rw,noexec,nosuid,nodev,size=2048",
         ),
         (
             "open_files",
@@ -321,3 +324,4 @@ def test_copied_constants_match_the_proxy() -> None:
     assert container.SANDBOX_USER == policy.SANDBOX_USER
     assert container.OSV_ANALYZER == policy.OSV_ANALYZER
     assert container.OSV_BIND == policy.OSV_BIND
+    assert container.TMP_MOUNT_OPTIONS == policy.TMP_MOUNT_OPTIONS

@@ -75,7 +75,8 @@ Each commit leaves ruff, pyright, lint-imports and pytest green, and tests come 
 |---|---|---|
 | 1 | `build(infra): add the sandbox fixture analyzer image` | `sandbox/images/fixture/Dockerfile`, `.../probe.py`, `scripts/build-sandbox-images.sh`, `Makefile` target, `.github/dependabot.yml` |
 | 2 | `feat(infra): add fixture analyzers to the launcher for dev and CI` | `sandbox_launcher/catalog.py`, `config.py`, `sandbox_launcher/__main__.py`, `compose.yaml` (launcher env), `.env.example` |
-| 3 | `test(infra): run the sandbox end to end under a real runtime` | `pyproject.toml` (marker), tests only otherwise |
+| 3a | `fix(security): keep /tmp read-only in the sandbox` | `sandbox_launcher/container.py`, `sandbox_proxy/policy.py`, ADR 0034, ADR 0016 (pointer), `docs/security.md` |
+| 3b | `test(infra): run the sandbox end to end under a real runtime` | `sandbox/images/fixture/probe.py`, `pyproject.toml` (marker), `Makefile` |
 | 4 | `ci(security): build sandbox images and run runsc tests` | `.github/workflows/sandbox-images.yml`, `.github/workflows/ci.yml`, `scripts/install-runsc.sh` |
 | 5 | `test(infra): guard sandbox service isolation in compose` | tests only (compose config + lock guards) |
 | 6 | `docs(infra): record the sandbox CI and close issue 84` | `docs/development.md`, `docs/security.md`, `CHANGELOG.md`, `AGENTS.md` (commands), `STATE.md`; footer `Closes #84` |
@@ -112,6 +113,9 @@ Each commit leaves ruff, pyright, lint-imports and pytest green, and tests come 
   and `CATALOG` has no `fixture-` name; every fixture create body passes the real proxy policy.
 
 ### 3. End-to-end runtime tests
+**Superseded in part by `03-run-sandbox-end-to-end.md`:** the work is two commits (3a locks
+`/tmp`, 3b adds the tests), and the skip rule, wall times and checks below changed there.
+
 - `tests/integration/sandbox/conftest.py`: skip unless `RUN_SANDBOX_TESTS=1`, except in CI
   (`CI=true`), where a missing Docker or `runsc` is a failure. Fixtures: `fixture_image_id` (runs
   the build script or reads `SANDBOX_FIXTURE_IMAGE`), `artifact_root` (a real directory under
