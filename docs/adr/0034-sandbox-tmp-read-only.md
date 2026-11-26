@@ -38,6 +38,21 @@ future analyzer image would have to remember it, and nothing at the gate could c
   runtime tests (`tests/integration/sandbox/`) search the whole filesystem from inside the
   sandbox. Under `runc`, two kernel mounts that Docker adds are also writable, `/dev/shm` and
   `/dev/mqueue`; neither allows exec. The tests fail on any other writable directory, or on one
-  that runs files. What `runsc` shows is still to be seen.
-- That `runsc` honours the read-only mount is to be proven by the CI job that runs the sandbox
-  under `runsc`.
+  that runs files.
+
+## Results under `runsc`
+CI's `sandbox (runsc)` job passed on 2026-11-26 at commit `8c408e4`
+([run](https://github.com/cpt9m0/attacksurf/actions/runs/45776869301)): `runsc`
+`release-20261109.0` on an `ubuntu-26.04` runner, with the `runc` fallback off. 14 tests passed.
+The one skipped there, that a prod launcher refuses to start without `runsc`, passed in its own
+step before `runsc` was installed.
+
+- **`runsc` honours the read-only `/tmp`.** The probe searched the filesystem, apart from `/proc`
+  and `/sys`, without being cut short. No directory outside `/scratch`, `/dev/shm` and
+  `/dev/mqueue` accepted a file, so `/tmp` did not, and no writable directory ran one. The
+  fixture image's `/tmp` is empty (checked on a local build), one of the cases where `runsc`
+  would add its own mount.
+- `/scratch` was writable and did not allow exec. The test accepts `/dev/shm` and `/dev/mqueue`
+  but doesn't require them, and the log doesn't show which of them `runsc` made writable.
+- Still not reproduced: that `runsc` adds a writable `/tmp` when the explicit mount is missing.
+  No test removes the mount, since the proxy refuses that request.
