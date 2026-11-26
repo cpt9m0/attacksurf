@@ -39,7 +39,9 @@ pytestmark = [
 # `/scratch` plus the kernel mounts Docker adds under /dev (ADR 0034). Don't add to this to get a
 # pass: a new entry is a hole to look at.
 ALLOWED_WRITABLE = {"/scratch", "/dev/shm", "/dev/mqueue"}  # noqa: S108 (paths in the sandbox)
-GVISOR_KERNEL_RELEASE = "4.4.0"
+# What the `runsc` pinned in `scripts/install-runsc.sh` reports from `uname` (gVisor's
+# `pkg/sentry/kernel/version`). Check it again when the pin moves.
+GVISOR_KERNEL_RELEASE = "4.19.0-gvisor"
 
 
 def expected_runtime() -> str | None:
