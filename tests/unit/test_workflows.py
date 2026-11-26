@@ -77,6 +77,15 @@ def test_every_action_is_pinned_to_a_commit_sha(path: Path) -> None:
         assert VERSION_COMMENT.fullmatch(rest), f"{value} needs a `# vX.Y.Z` comment"
 
 
+def test_no_ci_file_raises_the_scale_test_time_limit() -> None:
+    # Longer limits are for slow developer machines. CI keeps the 90 s default; this covers the
+    # workflows and the scripts under .github, such as the pre-push hook everyone runs.
+    files = [path for path in WORKFLOWS.parent.rglob("*") if path.suffix in {".yml", ".sh", ".py"}]
+
+    assert WORKFLOWS / "ci.yml" in files
+    assert not [path.name for path in files if "SCALE_BUDGET_SECONDS" in path.read_text()]
+
+
 def test_sandbox_images_workflow_can_only_read() -> None:
     workflow = load("sandbox-images.yml")
 

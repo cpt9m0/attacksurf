@@ -30,6 +30,31 @@ def make_settings(**overrides: Any) -> Settings:
     return _InitOnlySettings(**overrides)
 
 
+# The scale test's limit (#30). CI keeps the default; a slower machine may only lengthen it, and
+# the ceiling keeps a typo from switching the check off.
+DEFAULT_SCALE_BUDGET_SECONDS = 90.0
+MAX_SCALE_BUDGET_SECONDS = 600.0
+
+
+def scale_budget_seconds(environ: Mapping[str, str]) -> float:
+    """The 1k scale test's time limit: `SCALE_BUDGET_SECONDS` if set, else the default."""
+    raw = environ.get("SCALE_BUDGET_SECONDS")
+    if not raw:
+        return DEFAULT_SCALE_BUDGET_SECONDS
+    refused = (
+        f"SCALE_BUDGET_SECONDS must be a number from {DEFAULT_SCALE_BUDGET_SECONDS:.0f} "
+        f"to {MAX_SCALE_BUDGET_SECONDS:.0f}"
+    )
+    try:
+        seconds = float(raw)
+    except ValueError:
+        raise ValueError(refused) from None
+    # Written as a range check so that "nan" is refused too.
+    if not DEFAULT_SCALE_BUDGET_SECONDS <= seconds <= MAX_SCALE_BUDGET_SECONDS:
+        raise ValueError(refused)
+    return seconds
+
+
 def llm_live_skip_reason(
     environ: Mapping[str, str], settings: Callable[[], Settings]
 ) -> str | None:

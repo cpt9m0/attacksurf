@@ -115,6 +115,17 @@ local default above. It refuses to run against a database not named `*_test` and
 message if the database is unreachable — so it never "passes" by silently skipping DB tests.
 Nothing is needed on a fresh clone with `make up` running.
 
+**Slow machines.** `test_1k_subdomain_scan_completes_within_limits` gives a 1,000-subdomain scan
+90 seconds, and coverage tracing, which the full suite uses, slows the scan. If your machine
+needs longer, set `SCALE_BUDGET_SECONDS` (90 to 600) in your shell; `.env` is not read for it:
+
+```bash
+SCALE_BUDGET_SECONDS=150 git push
+```
+
+A longer limit also lets a smaller slowdown pass on that machine, so use the lowest one that
+works. CI always uses 90 seconds, and a test keeps the variable out of `.github/`.
+
 ## Configuration
 
 All settings live in `src/attacksurf/config.py` and are read from environment variables or `.env`
