@@ -69,7 +69,10 @@ def add_asset() -> Response:
     raw_type = body.get("type") if isinstance(body, dict) else None
     if not isinstance(value, str):
         return _error(422, 'Send a JSON object with a "value" string.')
-    if raw_type is not None and raw_type not in {AssetType.DOMAIN.value, AssetType.URL.value}:
+    if raw_type is not None and (
+        not isinstance(raw_type, str)
+        or raw_type not in {AssetType.DOMAIN.value, AssetType.URL.value}
+    ):
         return _error(422, 'Optional "type" must be "domain" or "url".')
     session = get_session()
     try:

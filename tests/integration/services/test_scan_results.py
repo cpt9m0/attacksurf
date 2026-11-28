@@ -1387,3 +1387,47 @@ def test_persist_batches_multi_asset_discovery_outputs(
     )
 
     assert batch_sizes == [3]
+
+
+def test_persist_never_deactivates_user_added_url_with_parent(
+    db_session: Session, catalog: dict[str, Rule]
+) -> None:
+    scan = make_scan(db_session)
+    user_url = assets_service.record_asset(
+        db_session,
+        scan.org_id,
+        AssetType.URL,
+        "https://app.acme.example/",
+        source=AssetSource.USER,
+        parent_id=scan.root_asset_id,
+    )
+    discovered_url = assets_service.record_asset(
+        db_session,
+        scan.org_id,
+        AssetType.URL,
+        "https://gone.acme.example/",
+        source=AssetSource.DISCOVERED,
+        parent_id=scan.root_asset_id,
+    )
+    scan.started_at = max(user_url.last_seen, discovered_url.last_seen) + timedelta(minutes=1)
+    db_session.flush()
+
+    for asset in (user_url, discovered_url):
+        persist_scan_output(
+            db_session,
+            scan,
+            asset.id,
+            ScanOutput(
+                observations=(
+                    AssetObservation(
+                        asset=AssetRef(type=AssetType.URL, value=asset.value), active=False
+                    ),
+                )
+            ),
+            catalog=catalog,
+        )
+    db_session.refresh(user_url)
+    db_session.refresh(discovered_url)
+    assert user_url.is_active is True
+    assert user_url.deactivated_at is None
+    assert discovered_url.is_active is False

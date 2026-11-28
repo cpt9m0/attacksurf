@@ -351,3 +351,7 @@ def test_api_add_url_filter_by_tech_and_tenant_isolation(
     # Tenant isolation: Bob cannot read Alice's URL or filter her tech.
     assert bob.get(f"/api/v1/assets/{url_json['id']}").status_code == 404
     assert bob.get("/api/v1/assets?tech=Nginx").get_json()["total"] == 0
+
+    # Non-string "type" values return 422 rather than raising TypeError in set lookup.
+    assert _post(alice, "/api/v1/assets", {"value": "example.com", "type": []}).status_code == 422
+    assert _post(alice, "/api/v1/assets", {"value": "example.com", "type": {}}).status_code == 422

@@ -61,6 +61,7 @@ def add_root_domain(
         raise DomainAlreadyAdded(f"{name} is already in your assets.")
     restored = existing is not None and not existing.is_active
     asset = record_asset(session, org_id, AssetType.DOMAIN, name, source=AssetSource.USER)
+    _attach_orphan_urls(session, org_id, asset)
     seed_schedule(
         session,
         org_id=org_id,
@@ -129,6 +130,25 @@ def add_url_asset(
     )
     session.commit()
     return asset
+
+
+def _attach_orphan_urls(session: Session, org_id: UUID, root: Asset) -> int:
+    """Attach active orphan user-added URLs whose hostname falls under ``root``."""
+    orphans = session.scalars(
+        scoped(Asset, org_id).where(
+            Asset.type == AssetType.URL,
+            Asset.source == AssetSource.USER,
+            Asset.parent_id.is_(None),
+            Asset.is_active.is_(True),
+        )
+    ).all()
+    attached = 0
+    for row in orphans:
+        host = (urlsplit(row.value).hostname or "").rstrip(".").lower()
+        if host == root.value or host.endswith(f".{root.value}"):
+            row.parent_id = root.id
+            attached += 1
+    return attached
 
 
 def _covering_root_domain(session: Session, org_id: UUID, host: str) -> tuple[Asset | None, bool]:

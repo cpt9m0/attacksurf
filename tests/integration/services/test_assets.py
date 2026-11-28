@@ -510,3 +510,19 @@ def test_add_url_asset_links_verified_root_saves_unverified_and_enforces_rules(
         select(AuditLog).where(AuditLog.action == "asset.url_restored")
     ).one()
     assert restored_log.target_id == str(verified_url.id)
+
+
+def test_add_root_domain_attaches_existing_orphan_user_urls(db_session: Session, org: Org) -> None:
+    orphan = add_url_asset(db_session, org.id, "https://later.example.org/app", actor_id=None)
+    unrelated = add_url_asset(db_session, org.id, "https://elsewhere.net/", actor_id=None)
+    assert orphan.parent_id is None
+    assert get_asset(db_session, org.id, orphan.id).verification is OwnershipState.NONE
+
+    root = add_root_domain(db_session, org.id, "example.org", actor_id=None)
+    db_session.refresh(orphan)
+    db_session.refresh(unrelated)
+    assert orphan.parent_id == root.id
+    assert unrelated.parent_id is None
+
+    _mark_verified(db_session, org, root)
+    assert get_asset(db_session, org.id, orphan.id).verification is OwnershipState.VERIFIED
