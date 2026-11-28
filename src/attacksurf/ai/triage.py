@@ -43,6 +43,47 @@ MAX_OTHER_FINDINGS = 25
 MAX_WEB_CONTEXT_DIGEST_FINDINGS = MAX_FINDINGS_PER_BATCH + MAX_OTHER_FINDINGS
 MAX_HOST_HINTS = 8
 REDACTED_HEADER_NAMES = frozenset({"authorization", "proxy-authorization", "cookie", "set-cookie"})
+VOLATILE_HEADER_NAMES = frozenset(
+    {
+        "date",
+        "age",
+        "expires",
+        "last-modified",
+        "etag",
+        "x-request-id",
+        "x-correlation-id",
+        "x-trace-id",
+        "traceparent",
+        "tracestate",
+        "x-amzn-trace-id",
+        "x-amz-request-id",
+        "x-amz-cf-id",
+        "x-amz-id-2",
+        "cf-ray",
+        "x-served-by",
+        "x-timer",
+        "x-cache",
+        "x-cache-hits",
+        "server-timing",
+        "alt-svc",
+        "report-to",
+        "nel",
+    }
+)
+_EXCLUDED_CONTEXT_HEADERS = REDACTED_HEADER_NAMES | VOLATILE_HEADER_NAMES
+_VOLATILE_HEADER_PREFIXES = ("x-request-", "x-correlation-", "x-trace-", "x-amz-", "x-amzn-")
+
+
+def is_excluded_context_header(name: str) -> bool:
+    """Return True for sensitive or per-request volatile headers excluded from web context."""
+    lowered = name.strip().lower()
+    return (
+        not lowered
+        or lowered in _EXCLUDED_CONTEXT_HEADERS
+        or lowered.startswith(_VOLATILE_HEADER_PREFIXES)
+    )
+
+
 _TITLE_KEYS = frozenset({"title", "page_title"})
 _BANNER_KEYS = frozenset({"banner", "server", "x-powered-by", "x_powered_by", "header_value"})
 _EXCERPT_KEYS = frozenset({"excerpt", "body_excerpt", "file_excerpt", "snippet"})
@@ -321,7 +362,7 @@ def _web_context_payload(
 ) -> dict[str, Any]:
     headers: dict[str, str] = {}
     for raw_k, raw_v in ctx.headers.items():
-        if raw_k.strip().lower() in REDACTED_HEADER_NAMES:
+        if is_excluded_context_header(raw_k):
             continue
         headers[cap(raw_k, WEB_HEADER_KEY_MAX_LENGTH)] = cap(raw_v, WEB_HEADER_VALUE_MAX_LENGTH)
         if len(headers) >= MAX_WEB_CONTEXT_HEADERS:

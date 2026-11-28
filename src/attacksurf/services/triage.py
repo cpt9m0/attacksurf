@@ -26,7 +26,6 @@ from attacksurf.ai.triage import (
     MAX_WEB_CONTEXT_DIGEST_FINDINGS,
     MAX_WEB_CONTEXT_HEADERS,
     MAX_WEB_CONTEXT_TECHNOLOGIES,
-    REDACTED_HEADER_NAMES,
     TRIAGE_PROMPT_VERSION,
     TRIAGE_PURPOSE,
     RelatedFinding,
@@ -37,6 +36,7 @@ from attacksurf.ai.triage import (
     WebContext,
     WebTechnology,
     extract_host_hints,
+    is_excluded_context_header,
     match_results,
     triage_batch,
     triage_cache_key,
@@ -522,10 +522,10 @@ def _select_web_headers(raw_headers: object) -> dict[str, str]:
     for k, v in raw_headers.items():
         if not isinstance(k, str) or not isinstance(v, str):
             continue
-        lowered = k.strip().lower()
-        if not lowered or lowered in REDACTED_HEADER_NAMES:
+        if is_excluded_context_header(k):
             continue
-        by_lower.setdefault(lowered, (k, v))
+        lowered = k.strip().lower()
+        by_lower.setdefault(lowered, (lowered, v))
     ordered_keys = [key for key in _PRIORITY_WEB_HEADERS if key in by_lower]
     ordered_keys.extend(sorted(key for key in by_lower if key not in _PRIORITY_WEB_HEADERS))
     return {by_lower[key][0]: by_lower[key][1] for key in ordered_keys[:MAX_WEB_CONTEXT_HEADERS]}

@@ -564,7 +564,15 @@ def test_url_triage_cache_invalidates_when_sibling_finding_is_added_or_fixed(
         parent_id=scan.root_asset_id,
     )
     url.details = {
-        "web": {"status_code": 200, "title": "Admin Console", "headers": {"server": "Apache"}},
+        "web": {
+            "status_code": 200,
+            "title": "Admin Console",
+            "headers": {
+                "server": "Apache",
+                "date": "Fri, 28 Nov 2026 01:00:00 GMT",
+                "x-request-id": "req-1",
+            },
+        },
         "technologies": [{"name": "Apache HTTP Server", "version": "2.4.49"}],
     }
     db_session.flush()
@@ -582,9 +590,26 @@ def test_url_triage_cache_invalidates_when_sibling_finding_is_added_or_fixed(
         db_session, scan.org_id, scan.id, url.id, model=MODEL, include_info=False
     )
     assert first is not None
+    assert first.batch.web_context is not None
+    assert first.batch.web_context.headers == {"server": "Apache"}
     store_triage(
         db_session, scan.org_id, first, {"F1": _judgment()}, config=_config(), triaged_at=NOW
     )
+    db_session.flush()
+
+    # Changing per-request volatile headers on the next probe must stay a cache hit.
+    url.details = {
+        "web": {
+            "status_code": 200,
+            "title": "Admin Console",
+            "headers": {
+                "server": "Apache",
+                "date": "Fri, 28 Nov 2026 02:00:00 GMT",
+                "x-request-id": "req-2",
+            },
+        },
+        "technologies": [{"name": "Apache HTTP Server", "version": "2.4.49"}],
+    }
     db_session.flush()
 
     assert _assets(db_session, scan) == []

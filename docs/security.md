@@ -252,8 +252,9 @@ Each AI feature documents its payload here as it is added:
 - **Triage** (#25, #81, ADR 0029, prompt `triage/v2`; `triage/v1` kept for stored cache keys),
   one call per asset batch of at most 20 findings: the asset's name and type; for `url` assets
   its optional `web_context` (host name, derived host-role hints, status code, title capped at
-  200 characters, content-type capped at 128 characters, up to 15 non-sensitive headers capped at
-  256 characters with `authorization`/`proxy-authorization`/`cookie`/`set-cookie` stripped, up to
+  200 characters, content-type capped at 128 characters, up to 15 headers capped at
+  256 characters with `authorization`/`proxy-authorization`/`cookie`/`set-cookie` stripped and
+  volatile headers such as `date`, `etag`, and request/trace IDs excluded, up to
   25 detected technologies, and up to 25 sibling active `other_findings` rule/title/severity/location
   summaries on the same URL); per finding a batch-local reference (`F1`, `F2`, ...), the rule ID,
   title, description, scanner severity and confidence, location, and up to 5 evidence items with

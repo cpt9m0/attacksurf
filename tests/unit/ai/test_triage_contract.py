@@ -432,7 +432,15 @@ def test_web_context_digest_tracks_context_changes_and_ignores_redacted_headers(
         host_hints=("admin",),
         status_code=200,
         title="Admin Console",
-        headers={"server": "Apache/2.4.49", "set-cookie": "sid=xyz", "authorization": "Bearer a"},
+        headers={
+            "server": "Apache/2.4.49",
+            "set-cookie": "sid=xyz",
+            "authorization": "Bearer a",
+            "date": "Fri, 28 Nov 2026 02:00:00 GMT",
+            "x-request-id": "req-12345",
+            "cf-ray": "99999-DFW",
+            "etag": '"v1"',
+        },
         technologies=(WebTechnology("Apache HTTP Server", "2.4.49"),),
         other_findings=(
             RelatedFinding("web.components.known_vulnerable", "Vulnerable", Severity.CRITICAL),
