@@ -267,3 +267,61 @@ def test_dashboard_returns_latest_summary_per_active_root_with_top_3_risks(
     root.deactivated_at = NOW
     db_session.flush()
     assert list_latest_root_summaries(db_session, older.org_id) == ()
+
+
+def test_get_scan_summary_resolves_valid_risk_chains_and_drops_foreign_ones(
+    db_session: Session,
+) -> None:
+    scan = _scan(db_session, "acme")
+    url = record_asset(
+        db_session,
+        scan.org_id,
+        AssetType.URL,
+        "https://ci.acme.example/",
+        source=AssetSource.DISCOVERED,
+        parent_id=scan.root_asset_id,
+    )
+    f1 = make_finding(db_session, scan.org_id, url.id, title="Outdated Jenkins", location="f1")
+    f2 = make_finding(db_session, scan.org_id, url.id, title="Exposed Login", location="f2")
+    other = _scan(db_session, "globex")
+    foreign_finding = make_finding(
+        db_session, other.org_id, other.root_asset_id, title="Globex secret"
+    )
+    stored = StoredSummary(
+        headline="Web chain summary.",
+        web_exposure="CI URL exposes outdated Jenkins.",
+        key_risks=[],
+        risk_chains=[
+            {
+                "title": "Valid CI chain",
+                "finding_ids": [f1.id, f2.id],
+                "asset_id": url.id,
+                "why": "Compounds risk.",
+            },  # type: ignore[list-item]
+            {
+                "title": "Cross-org chain dropped",
+                "finding_ids": [f1.id, foreign_finding.id],
+                "asset_id": other.root_asset_id,
+                "why": "Cannot resolve foreign finding.",
+            },  # type: ignore[list-item]
+        ],
+        notable_assets=[],
+        changes="No change.",
+        next_actions=[],
+        prompt_version="summary/v2",
+        provider=ProviderKind.ANTHROPIC,
+        model="muse-spark-1.3",
+        generated_at=NOW,
+    )
+    scan.ai_summary = stored.model_dump(mode="json")
+    db_session.flush()
+
+    view = get_scan_summary(db_session, scan.org_id, scan.id, now=NOW)
+
+    assert view.summary is not None
+    assert view.summary.web_exposure == "CI URL exposes outdated Jenkins."
+    assert len(view.risk_chains) == 1
+    assert view.risk_chains[0].title == "Valid CI chain"
+    assert view.risk_chains[0].asset_id == url.id
+    assert view.risk_chains[0].asset_value == "https://ci.acme.example/"
+    assert [item.finding_id for item in view.risk_chains[0].findings] == [f1.id, f2.id]

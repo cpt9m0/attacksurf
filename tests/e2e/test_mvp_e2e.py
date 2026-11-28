@@ -200,7 +200,9 @@ class _DynamicSummaryProvider:
             )
             payload = {
                 "headline": f"Exposure summary for {data.get('root', DOMAIN)}.",
+                "web_exposure": "",
                 "key_risks": key_risks,
+                "risk_chains": [],
                 "notable_assets": notable_assets,
                 "changes": "Compared against baseline scan observations.",
                 "next_actions": ["Remediate high-priority DNS and takeover findings."],

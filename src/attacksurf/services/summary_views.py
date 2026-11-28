@@ -9,7 +9,7 @@ from uuid import UUID
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from attacksurf.ai.schemas import StoredSummary
+from attacksurf.ai.schemas import MIN_CHAIN_FINDINGS, StoredSummary
 from attacksurf.domain.assets import AssetType
 from attacksurf.domain.findings import Severity
 from attacksurf.domain.scans import JobStatus, ScanNotFound, ScanStatus
@@ -63,12 +63,29 @@ class SummaryNotableAssetView:
 
 
 @dataclass(frozen=True)
+class SummaryChainFindingView:
+    finding_id: UUID
+    title: str
+    severity: Severity
+
+
+@dataclass(frozen=True)
+class SummaryRiskChainView:
+    title: str
+    findings: tuple[SummaryChainFindingView, ...]
+    asset_id: UUID | None
+    asset_value: str | None
+    why: str
+
+
+@dataclass(frozen=True)
 class ScanSummaryView:
     state: SummaryState
     notice: str | None
     summary: StoredSummary | None
     key_risks: tuple[SummaryRiskView, ...]
     notable_assets: tuple[SummaryNotableAssetView, ...]
+    risk_chains: tuple[SummaryRiskChainView, ...] = ()
 
     @property
     def active(self) -> bool:
@@ -101,12 +118,14 @@ def get_scan_summary(
     if stored is not None:
         risks = _resolve_risks(session, org_id, stored)
         assets = _resolve_assets(session, org_id, stored)
+        chains = _resolve_risk_chains(session, org_id, stored)
         return ScanSummaryView(
             state=SummaryState.DONE,
             notice=None,
             summary=stored,
             key_risks=risks,
             notable_assets=assets,
+            risk_chains=chains,
         )
     run = session.scalars(
         scoped(Job, org_id)
@@ -320,3 +339,42 @@ def _resolve_assets(
         for item in stored.notable_assets
         if (asset := by_id.get(item.asset_id)) is not None
     )
+
+
+def _resolve_risk_chains(
+    session: Session, org_id: UUID, stored: StoredSummary
+) -> tuple[SummaryRiskChainView, ...]:
+    if not stored.risk_chains:
+        return ()
+    finding_ids = {fid for chain in stored.risk_chains for fid in chain.finding_ids}
+    findings = _load_findings(session, org_id, finding_ids)
+    asset_ids = {chain.asset_id for chain in stored.risk_chains if chain.asset_id is not None}
+    assets_by_id = (
+        {
+            asset.id: asset
+            for asset in session.scalars(scoped(Asset, org_id).where(Asset.id.in_(asset_ids)))
+        }
+        if asset_ids
+        else {}
+    )
+    resolved_chains: list[SummaryRiskChainView] = []
+    for chain in stored.risk_chains:
+        chain_findings = tuple(
+            SummaryChainFindingView(finding_id=fid, title=title, severity=severity)
+            for fid in chain.finding_ids
+            if (loaded := findings.get(fid)) is not None
+            for title, severity, _ in (loaded,)
+        )
+        if len(chain_findings) < MIN_CHAIN_FINDINGS:
+            continue
+        asset = assets_by_id.get(chain.asset_id) if chain.asset_id is not None else None
+        resolved_chains.append(
+            SummaryRiskChainView(
+                title=chain.title,
+                findings=chain_findings,
+                asset_id=asset.id if asset is not None else None,
+                asset_value=asset.value if asset is not None else None,
+                why=chain.why,
+            )
+        )
+    return tuple(resolved_chains)

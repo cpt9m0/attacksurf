@@ -12,6 +12,9 @@ from openai.lib._pydantic import to_strict_json_schema
 from pydantic import ValidationError
 
 from attacksurf.ai.schemas import (
+    MAX_CHAIN_FINDINGS,
+    MAX_CHAIN_TITLE_LENGTH,
+    MAX_CHAIN_WHY_LENGTH,
     MAX_CHANGES_LENGTH,
     MAX_HEADLINE_LENGTH,
     MAX_KEY_RISK_WHY_LENGTH,
@@ -20,11 +23,16 @@ from attacksurf.ai.schemas import (
     MAX_NEXT_ACTIONS,
     MAX_NOTABLE_ASSETS,
     MAX_NOTABLE_REASON_LENGTH,
+    MAX_RISK_CHAINS,
+    MAX_WEB_EXPOSURE_LENGTH,
+    MIN_CHAIN_FINDINGS,
     ExposureSummary,
     KeyRisk,
     NotableAsset,
+    RiskChain,
     StoredKeyRisk,
     StoredNotableAsset,
+    StoredRiskChain,
     StoredSummary,
 )
 from attacksurf.ai.summary import (
@@ -62,10 +70,21 @@ def _notable(**overrides: Any) -> dict[str, Any]:
     } | overrides
 
 
+def _chain(**overrides: Any) -> dict[str, Any]:
+    return {
+        "title": "Outdated Jenkins paired with exposed login",
+        "finding_refs": ["F1", "F2"],
+        "asset_ref": "A1",
+        "why": "Known Jenkins CVEs combined with public console access heighten compromise risk.",
+    } | overrides
+
+
 def _reply(**overrides: Any) -> dict[str, Any]:
     return {
         "headline": "One high-risk takeover and two sensitive hosts need attention.",
+        "web_exposure": "Jenkins 2.346 on ci.acme.example exposes an admin panel and CVEs.",
         "key_risks": [_risk()],
+        "risk_chains": [_chain()],
         "notable_assets": [_notable()],
         "changes": "1 new high finding and 1 new subdomain since the last scan.",
         "next_actions": ["Remove the dangling CNAME on assets.acme.example."],
@@ -75,11 +94,13 @@ def _reply(**overrides: Any) -> dict[str, Any]:
 def _stored(**overrides: Any) -> StoredSummary:
     data: dict[str, Any] = {
         "headline": "One high-risk takeover needs attention.",
+        "web_exposure": "Exposed Jenkins instance.",
         "key_risks": [{"finding_id": str(FINDING_ID), "why": "Subdomain takeover risk."}],
+        "risk_chains": [],
         "notable_assets": [{"asset_id": str(ASSET_ID), "reason": "Exposed Jenkins host."}],
         "changes": "1 new high finding since the last scan.",
         "next_actions": ["Remove the dangling CNAME."],
-        "prompt_version": "summary/v1",
+        "prompt_version": "summary/v2",
         "provider": ProviderKind.ANTHROPIC,
         "model": "test-model",
         "generated_at": datetime(2026, 11, 20, 12, 0, tzinfo=UTC),
@@ -120,9 +141,13 @@ def test_valid_summary_reply_parses() -> None:
 
 
 def test_a_clean_scan_reply_with_empty_lists_is_valid() -> None:
-    reply = ExposureSummary.model_validate(_reply(key_risks=[], notable_assets=[], next_actions=[]))
+    reply = ExposureSummary.model_validate(
+        _reply(web_exposure="", key_risks=[], risk_chains=[], notable_assets=[], next_actions=[])
+    )
 
+    assert reply.web_exposure == ""
     assert reply.key_risks == []
+    assert reply.risk_chains == []
     assert reply.notable_assets == []
     assert reply.next_actions == []
 
@@ -153,11 +178,25 @@ def test_invalid_asset_refs_are_rejected(ref: str) -> None:
     ("field", "value"),
     [
         ("headline", "x" * MAX_HEADLINE_LENGTH),
+        ("web_exposure", ""),
+        ("web_exposure", "x" * MAX_WEB_EXPOSURE_LENGTH),
         (
             "key_risks",
             [
                 _risk(finding_ref=f"F{i}", why="x" * MAX_KEY_RISK_WHY_LENGTH)
                 for i in range(1, MAX_KEY_RISKS + 1)
+            ],
+        ),
+        (
+            "risk_chains",
+            [
+                _chain(
+                    title="x" * MAX_CHAIN_TITLE_LENGTH,
+                    finding_refs=[f"F{j}" for j in range(1, MAX_CHAIN_FINDINGS + 1)],
+                    asset_ref=None,
+                    why="x" * MAX_CHAIN_WHY_LENGTH,
+                )
+                for _ in range(MAX_RISK_CHAINS)
             ],
         ),
         (
@@ -180,9 +219,15 @@ def test_values_at_the_limit_are_accepted(field: str, value: Any) -> None:
     [
         ("headline", ""),
         ("headline", "x" * (MAX_HEADLINE_LENGTH + 1)),
+        ("web_exposure", "x" * (MAX_WEB_EXPOSURE_LENGTH + 1)),
         ("key_risks", [_risk(finding_ref=f"F{i}") for i in range(1, MAX_KEY_RISKS + 2)]),
         ("key_risks", [_risk(why="")]),
         ("key_risks", [_risk(why="x" * (MAX_KEY_RISK_WHY_LENGTH + 1))]),
+        ("risk_chains", [_chain() for _ in range(MAX_RISK_CHAINS + 1)]),
+        ("risk_chains", [_chain(finding_refs=["F1"])]),
+        ("risk_chains", [_chain(finding_refs=[f"F{i}" for i in range(1, MAX_CHAIN_FINDINGS + 2)])]),
+        ("risk_chains", [_chain(title="")]),
+        ("risk_chains", [_chain(why="x" * (MAX_CHAIN_WHY_LENGTH + 1))]),
         ("notable_assets", [_notable(asset_ref=f"A{i}") for i in range(1, MAX_NOTABLE_ASSETS + 2)]),
         ("notable_assets", [_notable(reason="")]),
         ("notable_assets", [_notable(reason="x" * (MAX_NOTABLE_REASON_LENGTH + 1))]),
@@ -199,7 +244,16 @@ def test_values_outside_the_limit_are_rejected(field: str, value: Any) -> None:
 
 
 @pytest.mark.parametrize(
-    "missing", ["headline", "key_risks", "notable_assets", "changes", "next_actions"]
+    "missing",
+    [
+        "headline",
+        "web_exposure",
+        "key_risks",
+        "risk_chains",
+        "notable_assets",
+        "changes",
+        "next_actions",
+    ],
 )
 def test_required_fields_are_required(missing: str) -> None:
     fields = _reply()
@@ -215,11 +269,14 @@ def test_extra_fields_are_rejected_at_every_level() -> None:
     with pytest.raises(ValidationError):
         KeyRisk.model_validate(_risk(severity="critical"))
     with pytest.raises(ValidationError):
+        RiskChain.model_validate(_chain(severity="critical"))
+    with pytest.raises(ValidationError):
         NotableAsset.model_validate(_notable(tags=["notable"]))
 
 
 def test_every_reply_field_is_described_for_the_model() -> None:
     assert all(field.description for field in KeyRisk.model_fields.values())
+    assert all(field.description for field in RiskChain.model_fields.values())
     assert all(field.description for field in NotableAsset.model_fields.values())
     assert all(field.description for field in ExposureSummary.model_fields.values())
 
@@ -295,10 +352,32 @@ def test_stored_summary_rejects_unknown_provider_and_extra_fields() -> None:
 
 def test_constants_match_adr_0030() -> None:
     assert SUMMARY_PURPOSE == "summary"
-    assert SUMMARY_PROMPT_VERSION == "summary/v1"
+    assert SUMMARY_PROMPT_VERSION == "summary/v2"
+    assert MIN_CHAIN_FINDINGS == 2
     assert MAX_SUMMARY_FINDINGS == 25
     assert MAX_SUMMARY_ASSETS == 200
     assert MAX_SUMMARY_RATIONALE_LENGTH == 300
+
+
+def test_v1_stored_summary_without_web_fields_still_validates() -> None:
+    legacy = {
+        "headline": "Legacy scan summary.",
+        "key_risks": [{"finding_id": str(FINDING_ID), "why": "Subdomain takeover risk."}],
+        "notable_assets": [{"asset_id": str(ASSET_ID), "reason": "Exposed Jenkins host."}],
+        "changes": "No changes.",
+        "next_actions": ["Review findings."],
+        "prompt_version": "summary/v1",
+        "provider": "anthropic",
+        "model": "test-model",
+        "generated_at": "2026-11-20T12:00:00Z",
+    }
+    parsed = StoredSummary.model_validate(legacy)
+    assert parsed.web_exposure == ""
+    assert parsed.risk_chains == []
+    chain_record = StoredRiskChain(
+        title="Legacy test", finding_ids=[FINDING_ID, ASSET_ID], asset_id=ASSET_ID, why="Compounds."
+    )
+    assert len(chain_record.finding_ids) == 2
 
 
 def test_summary_input_accepts_zero_up_to_its_limits() -> None:

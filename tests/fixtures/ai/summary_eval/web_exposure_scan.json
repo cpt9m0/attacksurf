@@ -1,0 +1,92 @@
+{
+  "why": "Acceptance criterion of #82: website scan surfaces web posture, links existing finding refs in risk_chains (outdated Jenkins + exposed login on ci.), and flags ci./staging. URLs as notable while ignoring www.",
+  "root_domain": "acme.example",
+  "changes": {
+    "new_findings": {"total": 3, "by_severity": {"critical": 1, "low": 1, "info": 1}},
+    "fixed_findings": {"total": 0, "by_severity": {}},
+    "regressed_findings": {"total": 0, "by_severity": {}},
+    "total_findings": {"total": 3, "by_severity": {"critical": 1, "low": 1, "info": 1}},
+    "new_assets": {"total": 3, "names": ["https://ci.acme.example/", "https://staging.acme.example/", "https://www.acme.example/"]},
+    "disappeared_assets": {"total": 0, "names": []}
+  },
+  "findings": [
+    {
+      "ref": "F1",
+      "rule_id": "web.components.known_vulnerable",
+      "title": "Web component matches known vulnerabilities",
+      "severity": "critical",
+      "asset": "https://ci.acme.example/",
+      "triage": {
+        "priority": "P1",
+        "adjusted_severity": "critical",
+        "false_positive_likelihood": "low",
+        "rationale": "Jenkins 2.346 has CISA KEV vulnerabilities and sits alongside an exposed login console."
+      }
+    },
+    {
+      "ref": "F2",
+      "rule_id": "web.exposure.admin_panel",
+      "title": "Publicly reachable administrative or login interface",
+      "severity": "info",
+      "asset": "https://ci.acme.example/",
+      "triage": {
+        "priority": "P2",
+        "adjusted_severity": "medium",
+        "false_positive_likelihood": "low",
+        "rationale": "CI build server login interface is exposed on the public internet."
+      }
+    },
+    {
+      "ref": "F3",
+      "rule_id": "web.headers.csp_missing",
+      "title": "HTML response lacks Content-Security-Policy header",
+      "severity": "low",
+      "asset": "https://www.acme.example/"
+    }
+  ],
+  "assets": [
+    {"ref": "A1", "name": "acme.example", "type": "domain"},
+    {"ref": "A2", "name": "ci.acme.example", "type": "subdomain"},
+    {
+      "ref": "A3",
+      "name": "https://ci.acme.example/",
+      "type": "url",
+      "web": {
+        "status_code": 200,
+        "title": "Dashboard [Jenkins]",
+        "technologies": ["Jenkins 2.346"],
+        "exposure_counts": {"critical": 1, "info": 1},
+        "exposure_rules": ["web.components.known_vulnerable", "web.exposure.admin_panel"]
+      }
+    },
+    {
+      "ref": "A4",
+      "name": "https://staging.acme.example/",
+      "type": "url",
+      "web": {
+        "status_code": 200,
+        "title": "Staging WordPress",
+        "technologies": ["WordPress 5.8", "PHP 7.4"]
+      }
+    },
+    {
+      "ref": "A5",
+      "name": "https://www.acme.example/",
+      "type": "url",
+      "web": {
+        "status_code": 200,
+        "title": "Acme Marketing",
+        "technologies": ["Hugo 0.124.0"],
+        "exposure_counts": {"low": 1},
+        "exposure_rules": ["web.headers.csp_missing"]
+      }
+    }
+  ],
+  "expect": {
+    "required_key_risks": ["F1"],
+    "required_notable_assets": ["A3", "A4"],
+    "forbidden_notable_assets": ["A1", "A5"],
+    "require_web_exposure": true,
+    "required_risk_chain_findings": [["F1", "F2"]]
+  }
+}

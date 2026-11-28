@@ -241,8 +241,8 @@ def test_triage_task_is_skipped_with_a_notice_when_the_budget_is_spent(
 
 def _summary_reply() -> str:
     return (
-        '{"headline": "Scan summarized.", "key_risks": [], "notable_assets": [], '
-        '"changes": "No changes.", "next_actions": []}'
+        '{"headline": "Scan summarized.", "web_exposure": "", "key_risks": [], '
+        '"risk_chains": [], "notable_assets": [], "changes": "No changes.", "next_actions": []}'
     )
 
 

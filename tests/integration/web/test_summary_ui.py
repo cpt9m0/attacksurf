@@ -54,6 +54,8 @@ def _attach_summary(
     finding_ids: list[UUID] | None = None,
     asset_ids: list[UUID] | None = None,
     headline: str = "Subdomain takeover risk on assets.acme.example.",
+    web_exposure: str = "",
+    risk_chains: list[dict[str, object]] | None = None,
     why: str = "Dangling CNAME points to an unclaimed cloud bucket.",
     reason: str = "Exposed CI server.",
     changes: str = "1 new high finding since the last scan.",
@@ -63,17 +65,19 @@ def _attach_summary(
     assert scan is not None
     stored = StoredSummary(
         headline=headline,
+        web_exposure=web_exposure,
         key_risks=[
             {"finding_id": fid, "why": why}  # type: ignore[misc]
             for fid in (finding_ids or [])
         ],
+        risk_chains=risk_chains or [],  # type: ignore[arg-type]
         notable_assets=[
             {"asset_id": aid, "reason": reason}  # type: ignore[misc]
             for aid in (asset_ids or [])
         ],
         changes=changes,
         next_actions=next_actions if next_actions is not None else ["Remove the dangling CNAME."],
-        prompt_version="summary/v1",
+        prompt_version="summary/v2" if (web_exposure or risk_chains) else "summary/v1",
         provider=ProviderKind.ANTHROPIC,
         model="muse-spark-1.3",
         generated_at=NOW,
@@ -180,8 +184,9 @@ def test_xss_in_ai_summary_is_escaped_on_scan_page_and_dashboard(
     alice: FlaskClient, db_session: Session, org_id: UUID
 ) -> None:
     root = _asset(db_session, org_id)
-    finding = _finding(db_session, org_id, root.id, title="Dangling CNAME")
-    finding_id, root_id = finding.id, root.id
+    finding = _finding(db_session, org_id, root.id, title="Dangling CNAME", location="f1")
+    finding2 = _finding(db_session, org_id, root.id, title="Exposed Admin", location="f2")
+    finding_id, finding2_id, root_id = finding.id, finding2.id, root.id
     scan = _completed_scan(db_session, org_id, root_id)
     scan_id = scan.id
     _attach_summary(
@@ -190,6 +195,15 @@ def test_xss_in_ai_summary_is_escaped_on_scan_page_and_dashboard(
         finding_ids=[finding_id],
         asset_ids=[root_id],
         headline=XSS,
+        web_exposure=XSS,
+        risk_chains=[
+            {
+                "title": XSS,
+                "finding_ids": [finding_id, finding2_id],
+                "asset_id": root_id,
+                "why": XSS,
+            }
+        ],
         why=XSS,
         reason=XSS,
         changes=XSS,
@@ -200,6 +214,49 @@ def test_xss_in_ai_summary_is_escaped_on_scan_page_and_dashboard(
         body = _body(alice, path)
         assert "&lt;script&gt;alert(&#39;summary-xss&#39;)&lt;/script&gt;" in body
         assert XSS not in body
+
+
+def test_scan_page_renders_web_exposure_and_risk_chains_sections(
+    alice: FlaskClient, db_session: Session, org_id: UUID
+) -> None:
+    root = _asset(db_session, org_id)
+    ci_url = record_asset(
+        db_session,
+        org_id,
+        AssetType.URL,
+        "https://ci.acme.example/",
+        source=AssetSource.DISCOVERED,
+        parent_id=root.id,
+    )
+    f1 = _finding(db_session, org_id, ci_url.id, title="Outdated Jenkins", location="f1")
+    f2 = _finding(db_session, org_id, ci_url.id, title="Exposed Login", location="f2")
+    f1_id, f2_id, url_id = f1.id, f2.id, ci_url.id
+    scan_id = _completed_scan(db_session, org_id, root.id).id
+    _attach_summary(
+        db_session,
+        scan_id,
+        finding_ids=[f1_id],
+        asset_ids=[url_id],
+        web_exposure="ci.acme.example runs Jenkins 2.346 with an open login form.",
+        risk_chains=[
+            {
+                "title": "Jenkins + Public Login",
+                "finding_ids": [f1_id, f2_id],
+                "asset_id": url_id,
+                "why": "Vulnerable Jenkins instance is directly exposed without VPN.",
+            }
+        ],
+    )
+
+    body = _body(alice, f"/scans/{scan_id}/summary", headers=HTMX)
+
+    assert "Web exposure" in body
+    assert "ci.acme.example runs Jenkins 2.346 with an open login form." in body
+    assert "Risk chains" in body
+    assert "Jenkins + Public Login" in body
+    assert f'href="/findings/{f1_id}"' in body
+    assert f'href="/findings/{f2_id}"' in body
+    assert f'href="/assets/{url_id}"' in body
 
 
 # --- Dashboard card ------------------------------------------------------------------------

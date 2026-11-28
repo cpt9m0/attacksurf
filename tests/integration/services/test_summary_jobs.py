@@ -11,7 +11,12 @@ from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
 from attacksurf.ai.schemas import FindingTriage, StoredTriage
-from attacksurf.ai.summary import MAX_SUMMARY_ASSETS, MAX_SUMMARY_FINDINGS, SUMMARY_PURPOSE
+from attacksurf.ai.summary import (
+    MAX_SUMMARY_ASSETS,
+    MAX_SUMMARY_FINDINGS,
+    SUMMARY_PROMPT_VERSION,
+    SUMMARY_PURPOSE,
+)
 from attacksurf.ai.triage import TRIAGE_PROMPT_VERSION
 from attacksurf.config import Settings
 from attacksurf.domain.assets import AssetSource, AssetType
@@ -121,7 +126,9 @@ def _job(session: Session, scan: Scan, stage: str = "summary") -> Job:
 def _reply(**overrides: Any) -> str:
     data: dict[str, Any] = {
         "headline": "High-risk subdomain takeover and exposed Jenkins host.",
+        "web_exposure": "",
         "key_risks": [{"finding_ref": "F1", "why": "Dangling CNAME can be claimed."}],
+        "risk_chains": [],
         "notable_assets": [{"asset_ref": "A1", "reason": "Root or sensitive host."}],
         "changes": "1 new high finding since the last scan.",
         "next_actions": ["Remove the dangling CNAME."],
@@ -342,7 +349,7 @@ def test_run_summary_stores_only_real_ids_and_records_usage(
     assert stored is not None
     assert [risk.finding_id for risk in stored.key_risks] == [finding.id]
     assert [asset.asset_id for asset in stored.notable_assets] == [jenkins.id]
-    assert stored.prompt_version == "summary/v1"
+    assert stored.prompt_version == SUMMARY_PROMPT_VERSION
     [usage] = _usage(db_session, scan)
     assert (usage.purpose, usage.success, usage.key_source) == (
         SUMMARY_PURPOSE,
@@ -612,3 +619,110 @@ def test_notable_tagging_never_touches_another_root_or_another_org(db_session: S
     assert _refreshed(db_session, other_root).tags == []
     assert _refreshed(db_session, other_root_host).tags == ["keep", "notable"]
     assert _refreshed(db_session, globex_host).tags == ["corp"]
+
+
+def test_build_summary_input_includes_url_web_context_and_run_summary_tags_notable_urls(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scan = _completed_scan(db_session)
+    ci_url = record_asset(
+        db_session,
+        scan.org_id,
+        AssetType.URL,
+        "https://ci.acme.example/",
+        source=AssetSource.DISCOVERED,
+        parent_id=scan.root_asset_id,
+    )
+    ci_url.details = {
+        "web": {"status_code": 200, "title": "Jenkins Dashboard"},
+        "technologies": [{"name": "Jenkins", "version": "2.346"}],
+    }
+    www_url = record_asset(
+        db_session,
+        scan.org_id,
+        AssetType.URL,
+        "https://www.acme.example/",
+        source=AssetSource.DISCOVERED,
+        parent_id=scan.root_asset_id,
+    )
+    www_url.details = {
+        "web": {"status_code": 200, "title": "Marketing"},
+        "technologies": [{"name": "Hugo", "version": "0.124"}],
+    }
+    for index in range(MAX_SUMMARY_ASSETS + 10):
+        _subdomain(db_session, scan, f"sub-{index:03d}")
+
+    vuln = _observed(
+        db_session,
+        scan,
+        ci_url.id,
+        rule_id="web.components.known_vulnerable",
+        title="Outdated Jenkins",
+        severity=Severity.CRITICAL,
+        location="jenkins",
+    )
+    admin = _observed(
+        db_session,
+        scan,
+        ci_url.id,
+        rule_id="web.exposure.admin_panel",
+        title="Exposed Jenkins login",
+        severity=Severity.INFO,
+        location="/login",
+    )
+    _judge(db_session, vuln, priority="P1", adjusted="critical", rationale="KEV matched.")
+    _judge(db_session, admin, priority="P2", adjusted="medium", rationale="Public login.")
+    db_session.flush()
+
+    built = summary.build_summary_input(db_session, scan.org_id, scan.id)
+    assert len(built.assets) == MAX_SUMMARY_ASSETS
+    urls_by_id = {
+        asset.asset_id: asset for asset in built.assets if asset.asset_type is AssetType.URL
+    }
+    assert {ci_url.id, www_url.id} <= set(urls_by_id)
+    ci_entry = urls_by_id[ci_url.id]
+    assert ci_entry.web is not None
+    assert ci_entry.web.technologies == ("Jenkins 2.346",)
+    assert ci_entry.web.exposure_counts == (("critical", 1), ("info", 1))
+    assert ci_entry.web.exposure_rules == (
+        "web.components.known_vulnerable",
+        "web.exposure.admin_panel",
+    )
+
+    job = _job(db_session, scan)
+    f_refs = {f.finding_id: f.ref for f in built.findings}
+    _use_provider(
+        monkeypatch,
+        FakeLLMProvider(
+            _reply(
+                web_exposure="Jenkins CI on ci.acme.example exposes CVEs behind an open console.",
+                key_risks=[{"finding_ref": f_refs[vuln.id], "why": "Outdated Jenkins."}],
+                risk_chains=[
+                    {
+                        "title": "Jenkins + Login",
+                        "finding_refs": [f_refs[vuln.id], f_refs[admin.id]],
+                        "asset_ref": ci_entry.ref,
+                        "why": "Exploitable component behind public login.",
+                    },
+                    {
+                        "title": "Unknown finding in chain dropped",
+                        "finding_refs": [f_refs[vuln.id], "F99"],
+                        "asset_ref": ci_entry.ref,
+                        "why": "Invented ref F99.",
+                    },
+                ],
+                notable_assets=[{"asset_ref": ci_entry.ref, "reason": "Exposed Jenkins CI URL."}],
+            )
+        ),
+    )
+
+    summary.run_summary(db_session, scan.org_id, job.id, _settings(), retry_allowed=True)
+
+    stored = summary.stored_summary(_refreshed(db_session, scan))
+    assert stored is not None
+    assert stored.web_exposure.startswith("Jenkins CI")
+    assert len(stored.risk_chains) == 1
+    assert stored.risk_chains[0].finding_ids == [vuln.id, admin.id]
+    assert stored.risk_chains[0].asset_id == ci_url.id
+    assert _refreshed(db_session, ci_url).tags == ["notable"]
+    assert _refreshed(db_session, www_url).tags == []

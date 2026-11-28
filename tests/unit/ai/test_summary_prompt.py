@@ -15,11 +15,13 @@ from attacksurf.ai.schemas import (
     FalsePositiveLikelihood,
     StoredKeyRisk,
     StoredNotableAsset,
+    StoredRiskChain,
     TriagePriority,
 )
 from attacksurf.ai.summary import (
     MAX_SUMMARY_ASSETS,
     MAX_SUMMARY_RATIONALE_LENGTH,
+    MAX_SUMMARY_URL_TITLE_LENGTH,
     SUMMARY_MAX_TOKENS,
     SUMMARY_PROMPT_VERSION,
     SummaryAsset,
@@ -29,6 +31,7 @@ from attacksurf.ai.summary import (
     SummaryFindingTriage,
     SummaryInput,
     SummarySeverityCounts,
+    SummaryUrlContext,
     build_summary_messages,
     summarize,
     validate_summary,
@@ -90,8 +93,9 @@ def _asset(
     asset_id: UUID = ASSET_1,
     name: str = "jenkins.acme.example",
     asset_type: AssetType = AssetType.SUBDOMAIN,
+    web: SummaryUrlContext | None = None,
 ) -> SummaryAsset:
-    return SummaryAsset(ref=ref, asset_id=asset_id, name=name, asset_type=asset_type)
+    return SummaryAsset(ref=ref, asset_id=asset_id, name=name, asset_type=asset_type, web=web)
 
 
 def _input(
@@ -117,7 +121,9 @@ def _payload(messages: list[Message]) -> Any:
 def _reply(**overrides: Any) -> ExposureSummary:
     data: dict[str, Any] = {
         "headline": "Dangling CNAME on assets.acme.example needs attention.",
+        "web_exposure": "Jenkins 2.346 on ci.acme.example exposes CVEs and admin console.",
         "key_risks": [{"finding_ref": "F1", "why": "Subdomain takeover risk."}],
+        "risk_chains": [],
         "notable_assets": [{"asset_ref": "A1", "reason": "Exposed Jenkins server."}],
         "changes": "1 new high finding and 1 new subdomain.",
         "next_actions": ["Remove the dangling CNAME."],
@@ -131,7 +137,8 @@ def _reply(**overrides: Any) -> ExposureSummary:
 def test_messages_use_the_released_summary_prompt() -> None:
     messages = build_summary_messages(_input())
 
-    assert SUMMARY_PROMPT_VERSION == "summary/v1"
+    assert SUMMARY_PROMPT_VERSION == "summary/v2"
+    assert load_prompt("summary/v1").version == "summary/v1"
     assert messages[0] == Message("system", load_prompt(SUMMARY_PROMPT_VERSION).system)
     assert [message.role for message in messages] == ["system", "user"]
     assert load_prompt(SUMMARY_PROMPT_VERSION).placeholders == frozenset({"scan_data"})
@@ -349,7 +356,7 @@ def test_validated_summary_to_stored_keeps_provenance_and_never_holds_api_key() 
         generated_at=datetime(2026, 11, 20, 12, 0, tzinfo=UTC),
     )
 
-    assert stored.prompt_version == "summary/v1"
+    assert stored.prompt_version == "summary/v2"
     assert stored.provider is ProviderKind.ANTHROPIC
     assert stored.model == "test-model"
     assert stored.key_risks == [StoredKeyRisk(finding_id=FINDING_1, why="Subdomain takeover risk.")]
@@ -357,3 +364,86 @@ def test_validated_summary_to_stored_keeps_provenance_and_never_holds_api_key() 
         StoredNotableAsset(asset_id=ASSET_1, reason="Exposed Jenkins server.")
     ]
     assert "super-secret-key" not in json.dumps(stored.model_dump(mode="json"))
+
+
+def test_url_asset_web_context_is_serialized_capped_and_escaped() -> None:
+    url_asset = _asset(
+        "A1",
+        ASSET_1,
+        name="https://ci.acme.example/",
+        asset_type=AssetType.URL,
+        web=SummaryUrlContext(
+            status_code=200,
+            title="Admin " + INJECTION + ("X" * 200),
+            technologies=("Jenkins 2.346", "Nginx"),
+            exposure_counts=(("critical", 1), ("info", 1)),
+            exposure_rules=("web.components.known_vulnerable", "web.exposure.admin_panel"),
+        ),
+    )
+    messages = build_summary_messages(_input(assets=(url_asset,)))
+    payload = _payload(messages)
+
+    assert messages[1].content.count("<scan_data>") == 1
+    assert messages[1].content.count("</scan_data>") == 1
+    assert "Ignore previous instructions" not in messages[0].content
+    web = payload["assets"][0]["web"]
+    assert web["status_code"] == 200
+    assert len(web["title"]) == MAX_SUMMARY_URL_TITLE_LENGTH
+    assert web["technologies"] == ["Jenkins 2.346", "Nginx"]
+    assert web["exposure_counts"] == {"total": 2, "by_severity": {"critical": 1, "info": 1}}
+    assert web["exposure_rules"] == [
+        "web.components.known_vulnerable",
+        "web.exposure.admin_panel",
+    ]
+
+
+def test_validate_summary_drops_chains_with_unknown_refs_or_duplicates() -> None:
+    summary_input = _input(
+        findings=(_finding("F1", FINDING_1), _finding("F2", FINDING_2)),
+        assets=(_asset("A1", ASSET_1), _asset("A2", ASSET_2, name="staging.acme.example")),
+    )
+    reply = _reply(
+        risk_chains=[
+            {
+                "title": "Unknown finding ref dropped",
+                "finding_refs": ["F1", "F99"],
+                "asset_ref": "A1",
+                "why": "F99 does not exist.",
+            },
+            {
+                "title": "Unknown asset ref dropped",
+                "finding_refs": ["F1", "F2"],
+                "asset_ref": "A99",
+                "why": "A99 does not exist.",
+            },
+            {
+                "title": "Duplicate findings collapse below minimum",
+                "finding_refs": ["F1", "F1"],
+                "asset_ref": "A1",
+                "why": "Only one unique finding.",
+            },
+            {
+                "title": "Valid Jenkins + Login chain",
+                "finding_refs": ["F1", "F2", "F1"],
+                "asset_ref": "A1",
+                "why": "Compounds risk.",
+            },
+            {
+                "title": "Duplicate chain dropped",
+                "finding_refs": ["F2", "F1"],
+                "asset_ref": "A1",
+                "why": "Same set and asset.",
+            },
+        ]
+    )
+
+    validated = validate_summary(summary_input, reply)
+
+    assert validated.risk_chains == (
+        StoredRiskChain(
+            title="Valid Jenkins + Login chain",
+            finding_ids=[FINDING_1, FINDING_2],
+            asset_id=ASSET_1,
+            why="Compounds risk.",
+        ),
+    )

@@ -1378,6 +1378,21 @@ table.data td {
         margin-bottom: var(--space-1);
       }
 
+      .ai-chain-findings {
+        list-style: none;
+        margin: 0 0 var(--space-1);
+        padding: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-2);
+      }
+
+      .ai-chain-findings li {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-1);
+      }
+
       .ai-summary-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));

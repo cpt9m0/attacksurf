@@ -497,18 +497,21 @@ flowchart LR
   and tail tasks use `workers.base.ChordTask` (kept results, sanitized errors), which
   `PipelineTask` also builds on. When batches finish, `finish_triage` (`ai.triage_done`) skips
   the unused failure job and queues `ai.summarize`.
-- Exposure summary (#26, ADR 0030): `ai/schemas.py` defines `ExposureSummary` (`headline`,
-  `key_risks`, `notable_assets`, `changes`, `next_actions`) and `StoredSummary` (with real
-  finding/asset UUIDs and provenance in `Scan.ai_summary`, migration `0013`). `ai/summary.py`
-  defines `SummaryInput` (no raw evidence: change stats from `parse_diff`, up to 25 active
-  observed findings as `F1`..`F25`, up to 200 active assets under the root as `A1`..`A200`),
-  `build_summary_messages` (prompt `summary/v1`, one `scan_data_block`), `summarize`, and
-  `validate_summary` (maps refs to real IDs and drops unknown or duplicate refs).
-  `services/summary.py` (`run_summary`, task `ai.summarize`, `TrackedTask`) gates with
-  `enforce_triage_budget`, returns without paying twice if `Scan.ai_summary` is already present,
-  records usage with purpose `"summary"` on success and failure, stores the validated summary,
-  and syncs the AI-owned `"notable"` tag on `Asset.tags` under the scan's root without touching
-  other tag values, other roots, or other organizations.
+- Exposure summary (#26, #82, ADR 0030): `ai/schemas.py` defines `ExposureSummary` (`headline`,
+  `web_exposure`, `key_risks`, `risk_chains` grouping 2–5 existing finding refs, `notable_assets`
+  covering sensitive hosts and URLs, `changes`, `next_actions`) and `StoredSummary` (with real
+  finding/asset UUIDs and provenance in `Scan.ai_summary`, migration `0013`, backward-compatible
+  with stored `summary/v1` summaries). `ai/summary.py` defines `SummaryInput` (no raw evidence:
+  change stats from `parse_diff`, up to 25 active observed findings as `F1`..`F25`, up to 200
+  active assets under the root as `A1`..`A200` with optional per-URL `SummaryUrlContext` for up
+  to 50 URLs), `build_summary_messages` (prompt `summary/v2`, one `scan_data_block`), `summarize`,
+  and `validate_summary` (maps refs to real IDs and drops unknown or duplicate refs as well as any
+  risk chain referencing unknown finding/asset refs). `services/summary.py` (`run_summary`, task
+  `ai.summarize`, `TrackedTask`) gates with `enforce_triage_budget`, returns without paying twice if
+  `Scan.ai_summary` is already present, records usage with purpose `"summary"` on success and
+  failure, stores the validated summary, and syncs the AI-owned `"notable"` tag on `Asset.tags`
+  under the scan's root (covering URLs as well as domains/subdomains) without touching other tag
+  values, other roots, or other organizations.
 - The UI reads triage through `services/triage_views.get_scan_triage` (the run's state from its
   jobs, and the scan's judged findings by priority, capped at 100) for the scan page's polled
   `ui.scan_triage` section, and through `finding_views` (`ai_triage` parsed as `StoredTriage`)
