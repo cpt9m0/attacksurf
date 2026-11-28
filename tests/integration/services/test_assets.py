@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import delete, event, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from attacksurf.domain.assets import (
     AssetNotFound,
@@ -10,14 +10,22 @@ from attacksurf.domain.assets import (
     AssetType,
     InvalidAssetValue,
     RelationKind,
+    UrlAlreadyAdded,
 )
-from attacksurf.infra.db.models import Asset, AssetRelation, Org
+from attacksurf.domain.scanners import AssetRef
+from attacksurf.domain.verification import OwnershipState, VerificationMethod, VerificationStatus
+from attacksurf.infra.db.models import Asset, AssetRelation, AuditLog, Org, Verification
+from attacksurf.services.asset_views import get_asset
 from attacksurf.services.assets import (
+    add_root_domain,
+    add_url_asset,
+    archive_root_domain,
     record_asset,
     record_assets,
     record_relation,
     record_relations,
 )
+from attacksurf.services.ownership import DbOwnershipChecker
 
 T0 = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 
@@ -430,3 +438,75 @@ def test_record_relations_batches_deduplicates_and_rejects_foreign_assets(
             [(host.id, foreign.id, RelationKind.RESOLVES_TO)],
             seen_at=T0,
         )
+
+
+def _mark_verified(db_session: Session, org: Org, root: Asset) -> None:
+    now = datetime.now(UTC)
+    db_session.add(
+        Verification(
+            org_id=org.id,
+            asset_id=root.id,
+            method=VerificationMethod.DNS_TXT,
+            token="tok-123",
+            status=VerificationStatus.VERIFIED,
+            verified_at=now,
+            last_checked_at=now,
+            recheck_at=now + timedelta(hours=20),
+            expires_at=now + timedelta(hours=24),
+        )
+    )
+    db_session.flush()
+
+
+def test_add_url_asset_links_verified_root_saves_unverified_and_enforces_rules(
+    db_session: Session, org: Org
+) -> None:
+    verified_root = add_root_domain(db_session, org.id, "example.com", actor_id=None)
+    _mark_verified(db_session, org, verified_root)
+    unverified_root = add_root_domain(db_session, org.id, "pending.org", actor_id=None)
+
+    verified_url = add_url_asset(
+        db_session, org.id, "https://app.example.com/login?next=1", actor_id=None
+    )
+    unverified_url = add_url_asset(db_session, org.id, "https://pending.org/", actor_id=None)
+    orphan_url = add_url_asset(db_session, org.id, "https://unowned.net/portal", actor_id=None)
+
+    assert verified_url.type is AssetType.URL
+    assert verified_url.source is AssetSource.USER
+    assert verified_url.parent_id == verified_root.id
+    assert get_asset(db_session, org.id, verified_url.id).verification is OwnershipState.VERIFIED
+
+    assert unverified_url.parent_id == unverified_root.id
+    assert get_asset(db_session, org.id, unverified_url.id).verification is OwnershipState.NONE
+    assert orphan_url.parent_id is None
+    assert get_asset(db_session, org.id, orphan_url.id).verification is OwnershipState.NONE
+
+    checker = DbOwnershipChecker(sessionmaker(bind=db_session.get_bind()))
+    assert checker.is_verified(org.id, AssetRef(type=AssetType.URL, value=verified_url.value))
+    assert not checker.is_verified(org.id, AssetRef(type=AssetType.URL, value=unverified_url.value))
+    assert not checker.is_verified(org.id, AssetRef(type=AssetType.URL, value=orphan_url.value))
+
+    audits = db_session.scalars(select(AuditLog).where(AuditLog.action == "asset.url_added")).all()
+    assert len(audits) == 3
+
+    with pytest.raises(UrlAlreadyAdded):
+        add_url_asset(db_session, org.id, "https://app.example.com/login?next=1", actor_id=None)
+    with pytest.raises(InvalidAssetValue, match="ports"):
+        add_url_asset(db_session, org.id, "https://app.example.com:9443/", actor_id=None)
+    with pytest.raises(InvalidAssetValue, match=r"Internal-only|public"):
+        add_url_asset(db_session, org.id, "https://printer.corp/", actor_id=None)
+    with pytest.raises(InvalidAssetValue, match="credentials"):
+        add_url_asset(db_session, org.id, "https://user:pass@app.example.com/", actor_id=None)
+
+    # Archiving the root deactivates verified_url; adding it again restores it.
+    archive_root_domain(db_session, org.id, verified_root.id, actor_id=None)
+    restored = add_url_asset(
+        db_session, org.id, "https://app.example.com/login?next=1", actor_id=None
+    )
+    assert restored.id == verified_url.id
+    assert restored.is_active is True
+    assert restored.parent_id is None
+    restored_log = db_session.scalars(
+        select(AuditLog).where(AuditLog.action == "asset.url_restored")
+    ).one()
+    assert restored_log.target_id == str(verified_url.id)

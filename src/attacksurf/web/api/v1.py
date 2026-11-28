@@ -15,7 +15,13 @@ from flask_login import current_user
 from werkzeug.exceptions import HTTPException
 
 from attacksurf.domain.accounts import Role
-from attacksurf.domain.assets import AssetError, AssetNotFound, DomainAlreadyAdded
+from attacksurf.domain.assets import (
+    AssetError,
+    AssetNotFound,
+    AssetType,
+    DomainAlreadyAdded,
+    UrlAlreadyAdded,
+)
 from attacksurf.domain.findings import (
     FindingError,
     FindingNotFound,
@@ -60,17 +66,28 @@ def list_assets() -> Response:
 def add_asset() -> Response:
     body = request.get_json(silent=True)
     value = body.get("value") if isinstance(body, dict) else None
+    raw_type = body.get("type") if isinstance(body, dict) else None
     if not isinstance(value, str):
         return _error(422, 'Send a JSON object with a "value" string.')
+    if raw_type is not None and raw_type not in {AssetType.DOMAIN.value, AssetType.URL.value}:
+        return _error(422, 'Optional "type" must be "domain" or "url".')
     session = get_session()
     try:
-        asset = assets_service.add_root_domain(
-            session,
-            _org_id(),
-            value,
-            actor_id=current_user.session_user.user_id,
-            scan_default_frequency=get_settings().scan_default_frequency,
-        )
+        if raw_type == AssetType.URL.value:
+            asset = assets_service.add_url_asset(
+                session,
+                _org_id(),
+                value,
+                actor_id=current_user.session_user.user_id,
+            )
+        else:
+            asset = assets_service.add_root_domain(
+                session,
+                _org_id(),
+                value,
+                actor_id=current_user.session_user.user_id,
+                scan_default_frequency=get_settings().scan_default_frequency,
+            )
     except AssetError as exc:
         return _asset_error(exc)
     response = jsonify(_json(asset_views.get_asset(session, _org_id(), asset.id)))
@@ -319,7 +336,7 @@ def _asset_error(exc: AssetError) -> Response:
     # Asset error messages are written for users and never carry other orgs' data.
     if isinstance(exc, AssetNotFound):
         return _error(404, str(exc))
-    if isinstance(exc, DomainAlreadyAdded):
+    if isinstance(exc, (DomainAlreadyAdded, UrlAlreadyAdded)):
         return _error(409, str(exc))
     return _error(422, str(exc))
 

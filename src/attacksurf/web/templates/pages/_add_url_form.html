@@ -1,0 +1,11 @@
+{#- Swapped in place by HTMX: re-rendered with `url_error` (422) on invalid input. Without JS it
+    posts normally and the whole assets page comes back. -#}
+{%- from "components/form.html" import csrf_field, form_field -%}
+<form id="add-url" class="form form-inline" method="post" action="{{ url_for('ui.add_url') }}"
+      hx-post="{{ url_for('ui.add_url') }}" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="find button">
+  {{ csrf_field() }}
+  {{ form_field("url", "URL", value=url_value, error=url_error, autocomplete="off", autofocus=url_error is not none,
+                placeholder="https://app.example.com/",
+                hint="An http or https URL on a verified root domain (or saved as unverified until that domain is verified).") }}
+  <button type="submit" class="btn btn-primary">Add URL</button>
+</form>

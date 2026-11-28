@@ -24,3 +24,14 @@
 {% macro status_pill(status) -%}
 <span class="pill pill-{{ _status_tones.get(status, 'neutral') }}">{{ status | replace("_", " ") }}</span>
 {%- endmacro %}
+
+{#- Binary pass/fail/unknown pill (icon + text, never color alone). -#}
+{% macro check_pill(passed) -%}
+{%- if passed is sameas true -%}
+<span class="pill pill-good">{{ icon("shield-check") }}Pass</span>
+{%- elif passed is sameas false -%}
+<span class="pill pill-bad">{{ icon("triangle-alert") }}Fail</span>
+{%- else -%}
+<span class="pill pill-neutral">{{ icon("info") }}N/A</span>
+{%- endif -%}
+{%- endmacro %}

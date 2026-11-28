@@ -8,9 +8,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, Select, case, func, or_
+import idna
+from sqlalchemy import ColumnElement, Select, case, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from attacksurf.domain.assets import AssetNotFound, AssetSource, AssetType, RelationKind
@@ -23,7 +25,7 @@ from attacksurf.domain.findings import (
     severity_from_rank,
 )
 from attacksurf.domain.scans import ScanStatus, ScanTrigger
-from attacksurf.domain.verification import OwnershipState, ownership_state
+from attacksurf.domain.verification import OwnershipState, VerificationStatus, ownership_state
 from attacksurf.infra.db.models import Asset, AssetRelation, Finding, Scan, Verification
 from attacksurf.infra.db.tenancy import scoped
 
@@ -32,6 +34,13 @@ MAX_FINDINGS = 200
 MAX_SCANS = 50
 MAX_DETAIL_RECORDS = 20
 MAX_DETAIL_LENGTH = 512
+_SECURITY_HEADER_CHECKS = (
+    ("hsts", "HSTS"),
+    ("csp", "Content-Security-Policy"),
+    ("clickjacking_protected", "Clickjacking protection"),
+    ("nosniff", "X-Content-Type-Options"),
+    ("redirects_to_https", "HTTPS redirect"),
+)
 _DNS_FIELDS = (
     ("a", "A"),
     ("aaaa", "AAAA"),
@@ -55,6 +64,7 @@ class AssetFilter:
     type: AssetType | None = None
     root_id: UUID | None = None  # the root itself and everything discovered under it
     tag: str | None = None
+    tech: str | None = None
     q: str | None = None  # substring of the stored (punycode) value, case-insensitive
     status: AssetStatus = AssetStatus.ACTIVE
 
@@ -116,6 +126,53 @@ class IpDetails:
 
 
 @dataclass(frozen=True)
+class RedirectHop:
+    url: str
+    status: int
+
+
+@dataclass(frozen=True)
+class WebDetails:
+    status_code: int | None
+    title: str | None
+    final_url: str | None
+    content_type: str | None
+    redirect_chain: tuple[RedirectHop, ...]
+    redirect_stopped_out_of_scope: bool
+
+
+@dataclass(frozen=True)
+class TechnologyView:
+    name: str
+    version: str | None
+    categories: tuple[str, ...]
+    confidence: int | None
+
+
+@dataclass(frozen=True)
+class TlsDetails:
+    protocol: str | None
+    cipher: str | None
+    issuer: str | None
+    subject: str | None
+    not_before: str | None
+    not_after: str | None
+    trusted_chain: bool | None
+    hostname_matches: bool | None
+    error_code: str | None
+    key_type: str | None
+    key_size: int | None
+    legacy_protocols_accepted: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class HeaderCheckRow:
+    key: str
+    label: str
+    passed: bool | None
+
+
+@dataclass(frozen=True)
 class AssetDetail:
     asset: AssetRow
     outgoing: tuple[RelationRow, ...]  # this asset --kind--> peer
@@ -124,6 +181,10 @@ class AssetDetail:
     dns: DnsDetails | None = None
     ip: IpDetails | None = None
     uploaded_as: str | None = None  # the uploader's file name: display only, always escaped
+    web: WebDetails | None = None
+    technologies: tuple[TechnologyView, ...] = ()
+    tls: TlsDetails | None = None
+    security_headers: tuple[HeaderCheckRow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -219,6 +280,10 @@ def get_asset_detail(session: Session, org_id: UUID, asset_id: UUID) -> AssetDet
         dns=_dns_details(details, asset.value),
         ip=_ip_details(details),
         uploaded_as=_uploaded_as(details),
+        web=_web_details(details),
+        technologies=_technologies(details),
+        tls=_tls_details(details),
+        security_headers=_security_header_rows(details),
     )
 
 
@@ -292,9 +357,33 @@ def list_root_domains(session: Session, org_id: UUID) -> tuple[RootOption, ...]:
     return tuple(RootOption(id=r.id, value=r.value, is_active=r.is_active) for r in roots)
 
 
+def list_technologies(session: Session, org_id: UUID) -> tuple[str, ...]:
+    """Distinct fingerprinted technology names across the org's assets, sorted cleanly."""
+    names: set[str] = set()
+    rows = session.scalars(
+        scoped(Asset, org_id)
+        .where(func.jsonb_typeof(Asset.details["technologies"]) == "array")
+        .with_only_columns(Asset.details["technologies"])
+    ).all()
+    for raw_list in rows:
+        if not isinstance(raw_list, list):
+            continue
+        for item in raw_list:
+            if isinstance(item, dict):
+                raw_name = item.get("name")
+                if isinstance(raw_name, str) and raw_name.strip():
+                    names.add(raw_name.strip()[:MAX_DETAIL_LENGTH])
+    return tuple(sorted(names, key=str.casefold))
+
+
 def _asset_rows(org_id: UUID) -> tuple[Select[Any], Any]:
     """Assets with their root's value and open-finding stats; returns the root alias too."""
     proofs = (
+        scoped(Verification, org_id)
+        .with_only_columns(Verification.asset_id, Verification.status, Verification.expires_at)
+        .subquery()
+    )
+    parent_proofs = (
         scoped(Verification, org_id)
         .with_only_columns(Verification.asset_id, Verification.status, Verification.expires_at)
         .subquery()
@@ -319,16 +408,71 @@ def _asset_rows(org_id: UUID) -> tuple[Select[Any], Any]:
             stats.c.max_rank,
             proofs.c.status,
             proofs.c.expires_at,
+            root.type,
+            root.is_active,
+            parent_proofs.c.status,
+            parent_proofs.c.expires_at,
         )
         .outerjoin(root, (root.id == Asset.parent_id) & (root.org_id == org_id))
         .outerjoin(stats, stats.c.asset_id == Asset.id)
         .outerjoin(proofs, proofs.c.asset_id == Asset.id)
+        .outerjoin(parent_proofs, parent_proofs.c.asset_id == Asset.parent_id)
     )
     return stmt, root
 
 
+def _url_host_matches_root(url: str, root_value: str | None) -> bool:
+    if not root_value:
+        return False
+    raw_host = urlsplit(url).hostname
+    if not raw_host:
+        return False
+    try:
+        host = idna.encode(raw_host.removesuffix("."), uts46=True).decode("ascii").lower()
+    except idna.IDNAError:
+        return False
+    return host == root_value or host.endswith(f".{root_value}")
+
+
+def _asset_verification(
+    asset: Asset,
+    *,
+    now: datetime,
+    verification: VerificationStatus | None,
+    expires_at: datetime | None,
+    root_value: str | None,
+    root_type: AssetType | None,
+    root_active: bool | None,
+    parent_verification: VerificationStatus | None,
+    parent_expires_at: datetime | None,
+) -> OwnershipState:
+    if asset.type is AssetType.URL:
+        if (
+            asset.is_active
+            and asset.parent_id is not None
+            and root_type == AssetType.DOMAIN
+            and root_active is True
+            and _url_host_matches_root(asset.value, root_value)
+        ):
+            return ownership_state(parent_verification, parent_expires_at, now)
+        return OwnershipState.NONE
+    return ownership_state(verification, expires_at, now)
+
+
 def _asset_row(row: Any) -> AssetRow:
-    asset, root_value, open_findings, max_rank, verification, expires_at = row
+    (
+        asset,
+        root_value,
+        open_findings,
+        max_rank,
+        verification,
+        expires_at,
+        root_type,
+        root_active,
+        parent_verification,
+        parent_expires_at,
+    ) = row
+    now = datetime.now(UTC)
     return AssetRow(
         id=asset.id,
         type=asset.type,
@@ -342,7 +486,17 @@ def _asset_row(row: Any) -> AssetRow:
         is_active=asset.is_active,
         open_findings=open_findings or 0,
         max_severity=severity_from_rank(max_rank),
-        verification=ownership_state(verification, expires_at, datetime.now(UTC)),
+        verification=_asset_verification(
+            asset,
+            now=now,
+            verification=verification,
+            expires_at=expires_at,
+            root_value=root_value,
+            root_type=root_type,
+            root_active=root_active,
+            parent_verification=parent_verification,
+            parent_expires_at=parent_expires_at,
+        ),
     )
 
 
@@ -354,6 +508,20 @@ def _filter_conditions(flt: AssetFilter) -> list[ColumnElement[bool]]:
         conditions.append(or_(Asset.id == flt.root_id, Asset.parent_id == flt.root_id))
     if flt.tag:
         conditions.append(Asset.tags.contains([flt.tag]))
+    if flt.tech:
+        tech_el = (
+            func.jsonb_array_elements(Asset.details["technologies"])
+            .table_valued("value")
+            .alias("tech_el")
+        )
+        conditions.append(
+            (func.jsonb_typeof(Asset.details["technologies"]) == "array")
+            & exists(
+                select(1)
+                .select_from(tech_el)
+                .where(func.lower(tech_el.c.value.op("->>")("name")) == flt.tech.lower())
+            )
+        )
     if flt.q:
         conditions.append(Asset.value.ilike(f"%{_escape_like(flt.q.lower())}%", escape="\\"))
     if flt.status is AssetStatus.ACTIVE:
@@ -404,6 +572,130 @@ def _ip_details(details: Any) -> IpDetails | None:
     if ptr is None and org is None and country is None and number is None:
         return None
     return IpDetails(ptr=ptr, asn=number, org=org, country=country)
+
+
+def _detail_int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _detail_bool(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _web_details(details: Any) -> WebDetails | None:
+    raw = details.get("web") if isinstance(details, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    status_code = _detail_int(raw.get("status_code"))
+    title = _detail_text(raw.get("title"))
+    final_url = _detail_text(raw.get("final_url"))
+    content_type = _detail_text(raw.get("content_type"))
+    stopped_oos = raw.get("redirect_stopped_out_of_scope") is True
+    chain_items: list[RedirectHop] = []
+    raw_chain = raw.get("redirect_chain")
+    if isinstance(raw_chain, list):
+        for hop in raw_chain[:MAX_DETAIL_RECORDS]:
+            if isinstance(hop, dict):
+                hop_url = _detail_text(hop.get("url"))
+                hop_status = _detail_int(hop.get("status"))
+                if hop_url is not None and hop_status is not None:
+                    chain_items.append(RedirectHop(url=hop_url, status=hop_status))
+    if (
+        status_code is None
+        and title is None
+        and final_url is None
+        and content_type is None
+        and not chain_items
+        and not stopped_oos
+    ):
+        return None
+    return WebDetails(
+        status_code=status_code,
+        title=title,
+        final_url=final_url,
+        content_type=content_type,
+        redirect_chain=tuple(chain_items),
+        redirect_stopped_out_of_scope=stopped_oos,
+    )
+
+
+def _technologies(details: Any) -> tuple[TechnologyView, ...]:
+    raw = details.get("technologies") if isinstance(details, dict) else None
+    if not isinstance(raw, list):
+        return ()
+    techs: list[TechnologyView] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = _detail_text(item.get("name"))
+        if name is None:
+            continue
+        techs.append(
+            TechnologyView(
+                name=name,
+                version=_detail_text(item.get("version")),
+                categories=_detail_values(item.get("categories")),
+                confidence=_detail_int(item.get("confidence")),
+            )
+        )
+    return tuple(techs)
+
+
+def _tls_details(details: Any) -> TlsDetails | None:
+    raw = details.get("tls") if isinstance(details, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    protocol = _detail_text(raw.get("protocol"))
+    cipher = _detail_text(raw.get("cipher"))
+    issuer = _detail_text(raw.get("issuer"))
+    subject = _detail_text(raw.get("subject"))
+    not_before = _detail_text(raw.get("not_before"))
+    not_after = _detail_text(raw.get("not_after"))
+    trusted_chain = _detail_bool(raw.get("trusted_chain"))
+    hostname_matches = _detail_bool(raw.get("hostname_matches"))
+    error_code = _detail_text(raw.get("error_code"))
+    key_type = _detail_text(raw.get("key_type"))
+    key_size = _detail_int(raw.get("key_size"))
+    legacy = _detail_values(raw.get("legacy_protocols_accepted"))
+    if (
+        protocol is None
+        and cipher is None
+        and issuer is None
+        and subject is None
+        and not_after is None
+        and trusted_chain is None
+        and hostname_matches is None
+        and error_code is None
+        and not legacy
+    ):
+        return None
+    return TlsDetails(
+        protocol=protocol,
+        cipher=cipher,
+        issuer=issuer,
+        subject=subject,
+        not_before=not_before,
+        not_after=not_after,
+        trusted_chain=trusted_chain,
+        hostname_matches=hostname_matches,
+        error_code=error_code,
+        key_type=key_type,
+        key_size=key_size,
+        legacy_protocols_accepted=legacy,
+    )
+
+
+def _security_header_rows(details: Any) -> tuple[HeaderCheckRow, ...]:
+    raw = details.get("security_headers") if isinstance(details, dict) else None
+    if not isinstance(raw, dict):
+        return ()
+    rows = [
+        HeaderCheckRow(key=key, label=label, passed=_detail_bool(raw.get(key)))
+        for key, label in _SECURITY_HEADER_CHECKS
+    ]
+    if all(row.passed is None for row in rows):
+        return ()
+    return tuple(rows)
 
 
 def _detail_values(value: Any) -> tuple[str, ...]:

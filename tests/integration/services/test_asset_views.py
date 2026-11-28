@@ -322,3 +322,99 @@ def test_root_options_list_root_domains_only(db_session: Session, acme: Tree) ->
         (acme.root.id, "example.com", False),
         (other.id, "example.org", True),
     ]
+
+
+def test_list_assets_filters_by_technology_and_detail_exposes_web_panels(
+    db_session: Session, acme: Tree
+) -> None:
+    wp_url = record_asset(
+        db_session,
+        acme.org.id,
+        AssetType.URL,
+        "https://www.example.com/",
+        source=AssetSource.DISCOVERED,
+        parent_id=acme.root.id,
+        seen_at=T0,
+    )
+    wp_url.details = {
+        "web": {
+            "status_code": 200,
+            "title": "Acme Portal",
+            "final_url": "https://www.example.com/",
+            "content_type": "text/html; charset=utf-8",
+            "redirect_chain": [{"url": "http://www.example.com/", "status": 301}],
+            "redirect_stopped_out_of_scope": False,
+        },
+        "technologies": [
+            {"name": "WordPress", "version": "6.5.2", "categories": ["CMS"], "confidence": 100},
+            {
+                "name": "Nginx",
+                "version": "1.26.2",
+                "categories": ["Web servers"],
+                "confidence": 100,
+            },
+        ],
+        "tls": {
+            "protocol": "TLSv1.3",
+            "cipher": "TLS_AES_256_GCM_SHA384",
+            "issuer": "CN=R10,O=Let's Encrypt",
+            "subject": "CN=www.example.com",
+            "not_before": "2026-10-01T00:00:00+00:00",
+            "not_after": "2027-01-01T00:00:00+00:00",
+            "trusted_chain": True,
+            "hostname_matches": True,
+            "error_code": None,
+            "key_type": "EC",
+            "key_size": 256,
+            "legacy_protocols_accepted": [],
+        },
+        "security_headers": {
+            "hsts": True,
+            "csp": False,
+            "clickjacking_protected": True,
+            "nosniff": True,
+            "redirects_to_https": True,
+        },
+    }
+    other_org = Org(name="globex", slug="globex")
+    db_session.add(other_org)
+    db_session.flush()
+    other_url = record_asset(
+        db_session,
+        other_org.id,
+        AssetType.URL,
+        "https://globex.example/",
+        source=AssetSource.USER,
+        seen_at=T0,
+    )
+    other_url.details = {
+        "technologies": [{"name": "Django", "version": "5.0", "categories": [], "confidence": 100}]
+    }
+    db_session.flush()
+
+    assert asset_views.list_technologies(db_session, acme.org.id) == ("Nginx", "WordPress")
+    assert asset_views.list_technologies(db_session, other_org.id) == ("Django",)
+
+    filtered = asset_views.list_assets(db_session, acme.org.id, AssetFilter(tech="wordpress"))
+    assert [item.value for item in filtered.items] == ["https://www.example.com/"]
+    assert asset_views.list_assets(db_session, acme.org.id, AssetFilter(tech="Django")).total == 0
+
+    detail = asset_views.get_asset_detail(db_session, acme.org.id, wp_url.id)
+    assert detail.web is not None
+    assert detail.web.status_code == 200
+    assert detail.web.title == "Acme Portal"
+    assert [h.url for h in detail.web.redirect_chain] == ["http://www.example.com/"]
+    assert [(t.name, t.version) for t in detail.technologies] == [
+        ("WordPress", "6.5.2"),
+        ("Nginx", "1.26.2"),
+    ]
+    assert detail.tls is not None
+    assert detail.tls.protocol == "TLSv1.3"
+    assert detail.tls.issuer == "CN=R10,O=Let's Encrypt"
+    assert [(h.key, h.passed) for h in detail.security_headers] == [
+        ("hsts", True),
+        ("csp", False),
+        ("clickjacking_protected", True),
+        ("nosniff", True),
+        ("redirects_to_https", True),
+    ]

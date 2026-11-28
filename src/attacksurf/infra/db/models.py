@@ -116,9 +116,9 @@ class Asset(TenantScoped, Timestamps, Base):
     """Anything an org owns or we discovered for it: domain, subdomain, IP, URL (repo/binary later).
 
     `value` is always the normalized form (`domain.assets.normalize_asset_value`).
-    `parent_id` is the asset a discovered one was found under and is fixed at the first
-    sighting (so the parent graph can't form cycles). Deleting a parent deletes what was
-    discovered under it; user-added assets are always roots, so they never go with it.
+    `parent_id` is the asset a discovered one (or user-added URL under its covering root) was
+    linked under. Deleting a parent deletes what points to it via `parent_id`; user-added
+    domains, repos, and binaries always have `parent_id IS NULL`.
     """
 
     __tablename__ = "assets"
@@ -130,7 +130,10 @@ class Asset(TenantScoped, Timestamps, Base):
             ["parent_id", "org_id"], ["assets.id", "assets.org_id"], ondelete="CASCADE"
         ),
         CheckConstraint("parent_id IS NULL OR parent_id <> id", name="no_self_parent"),
-        CheckConstraint("source = 'discovered' OR parent_id IS NULL", name="user_asset_is_root"),
+        CheckConstraint(
+            "source = 'discovered' OR parent_id IS NULL OR type = 'url'",
+            name="user_asset_is_root",
+        ),
         CheckConstraint("is_active = (deactivated_at IS NULL)", name="deactivated_at_matches"),
         # Which scan discovered/deactivated it, so a scan's diff counts only its own changes
         # even when scans overlap (ADR 0027). NULL for user roots and pre-#20 rows. `use_alter`

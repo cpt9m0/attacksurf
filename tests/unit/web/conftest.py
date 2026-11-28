@@ -41,6 +41,7 @@ def _no_scans(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(scan_views, "list_scans", lambda *_args, **_kw: no_scans)
     monkeypatch.setattr(scan_views, "active_scan_for_root", lambda *_args, **_kw: None)
     monkeypatch.setattr(asset_views, "list_root_domains", lambda *_args, **_kw: ())
+    monkeypatch.setattr(asset_views, "list_technologies", lambda *_args, **_kw: ())
     # Findings and the dashboard read the database too; render an empty org here.
     no_findings = finding_views.FindingPage(items=(), page=1, pages=1, total=0)
     monkeypatch.setattr(finding_views, "list_findings", lambda *_args, **_kw: no_findings)

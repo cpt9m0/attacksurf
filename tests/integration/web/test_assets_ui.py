@@ -5,23 +5,54 @@ pass ids around and tests re-read rows after requests.
 """
 
 import re
-from datetime import UTC, datetime
+import ssl
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 from flask import Flask
 from flask.testing import FlaskClient
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 from werkzeug.test import TestResponse
 
 from attacksurf.domain.accounts import Role
 from attacksurf.domain.assets import AssetSource, AssetType, RelationKind
 from attacksurf.domain.findings import Confidence, Severity, finding_fingerprint
+from attacksurf.domain.jobs import JobTask, PipelineQueue, TaskQueue
+from attacksurf.domain.net import HttpBody, TlsError
 from attacksurf.domain.scans import ScanStatus, ScanTrigger
-from attacksurf.infra.db.models import Asset, Finding, Membership, Scan, ScanSchedule, User
+from attacksurf.domain.verification import VerificationMethod, VerificationStatus
+from attacksurf.infra import public_suffix
+from attacksurf.infra.db.models import (
+    Asset,
+    Finding,
+    Membership,
+    Scan,
+    ScanSchedule,
+    User,
+    Verification,
+)
+from attacksurf.infra.scope_guard import ScopeGuard
+from attacksurf.infra.tls import RawTlsHandshake
+from attacksurf.scanners.profiles import PROFILES
+from attacksurf.scanners.registry import registry
+from attacksurf.scanners.web import components as _web_components  # noqa: F401
+from attacksurf.scanners.web import exposures as _web_exposures  # noqa: F401
+from attacksurf.scanners.web import headers as _web_headers  # noqa: F401
+from attacksurf.scanners.web import probe as _web_probe  # noqa: F401
+from attacksurf.scanners.web import tls as _web_tls  # noqa: F401
+from attacksurf.scanners.web import wordpress as _web_wordpress  # noqa: F401
 from attacksurf.services import asset_views
+from attacksurf.services import scans as scans_service
 from attacksurf.services.assets import record_asset, record_relation
+from attacksurf.services.ownership import DbOwnershipChecker
+from attacksurf.services.scanner_jobs import run_check
+from tests.dns_fakes import FakeScopeHttp, MutableDnsZone
 
 _CSRF = re.compile(r'name="csrf_token" value="([^"]+)"')
 _INLINE_CODE = (
@@ -557,3 +588,313 @@ def test_asset_with_no_dns_records_does_not_render_an_empty_dns_card(
     html = _html(alice, f"/assets/{www_id}")
 
     assert 'id="dns-title"' not in html
+
+
+def test_add_url_via_ui_renders_verified_and_unverified_states_and_escapes_web_panels(
+    alice: FlaskClient, db_app: Flask, db_session: Session
+) -> None:
+    _add(alice, "example.com")
+    root_id = _root_id(db_session)
+    now = datetime.now(UTC)
+    db_session.add(
+        Verification(
+            org_id=_org_id(db_session, root_id),
+            asset_id=root_id,
+            method=VerificationMethod.DNS_TXT,
+            token="verify-tok",
+            status=VerificationStatus.VERIFIED,
+            verified_at=now,
+            last_checked_at=now,
+            recheck_at=now,
+            expires_at=now.replace(year=now.year + 1),
+        )
+    )
+    db_session.commit()
+
+    # Invalid HTMX submission returns 422 inline form partial with url_error.
+    bad = alice.post(
+        "/assets/url",
+        data={"url": "https://printer.corp/", "csrf_token": _csrf(alice)},
+        headers=HTMX,
+    )
+    assert bad.status_code == 422
+    assert 'id="add-url"' in bad.get_data(as_text=True)
+
+    # Verified URL links under example.com.
+    ok = alice.post(
+        "/assets/url",
+        data={"url": "https://app.example.com/portal", "csrf_token": _csrf(alice)},
+    )
+    assert ok.status_code == 303
+    url_row = db_session.scalars(
+        select(Asset).where(
+            Asset.type == AssetType.URL, Asset.value == "https://app.example.com/portal"
+        )
+    ).one()
+    url_row.details = {
+        "web": {
+            "status_code": 200,
+            "title": "<script>alert('xss')</script>App",
+            "final_url": "https://app.example.com/portal",
+            "content_type": "text/html",
+            "redirect_chain": [{"url": "http://app.example.com/portal", "status": 301}],
+        },
+        "technologies": [
+            {"name": "WordPress", "version": "6.5.2", "categories": ["CMS"], "confidence": 100},
+        ],
+        "tls": {
+            "protocol": "TLSv1.3",
+            "cipher": "TLS_AES_256_GCM_SHA384",
+            "issuer": "CN=<Issuer>",
+            "not_after": "2027-01-01T00:00:00+00:00",
+            "trusted_chain": True,
+            "hostname_matches": True,
+        },
+        "security_headers": {
+            "hsts": True,
+            "csp": False,
+            "clickjacking_protected": True,
+            "nosniff": True,
+            "redirects_to_https": True,
+        },
+    }
+    url_id = url_row.id
+    db_session.commit()
+
+    detail_html = _html(alice, f"/assets/{url_id}")
+    assert "Verified" in detail_html
+    assert "&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;App" in detail_html
+    assert "<script>alert('xss')</script>" not in detail_html
+    assert "WordPress" in detail_html
+    assert "6.5.2" in detail_html
+    assert "TLSv1.3" in detail_html
+    assert "CN=&lt;Issuer&gt;" in detail_html
+    assert "Content-Security-Policy" in detail_html
+    assert not any(pattern.search(detail_html) for pattern in _INLINE_CODE)
+
+    # Filter list by technology.
+    filtered_html = _html(alice, "/assets?tech=WordPress")
+    assert "https://app.example.com/portal" in filtered_html
+    assert "1 asset matches" in filtered_html
+
+    # Unverified URL is saved and shows explanation banner + tenant isolation blocks Bob.
+    unverified_resp = alice.post(
+        "/assets/url",
+        data={"url": "https://other.example.net/", "csrf_token": _csrf(alice)},
+    )
+    assert unverified_resp.status_code == 303
+    unverified_row = db_session.scalars(
+        select(Asset).where(
+            Asset.type == AssetType.URL, Asset.value == "https://other.example.net/"
+        )
+    ).one()
+    unverified_html = _html(alice, f"/assets/{unverified_row.id}")
+    assert "Active web checks paused" in unverified_html
+    assert "skipped until a covering root domain is verified" in unverified_html
+
+    bob = _signup(db_app, "bob@example.com")
+    assert bob.get(f"/assets/{url_id}").status_code == 404
+    bob_list = _html(bob, "/assets?tech=WordPress")
+    assert "0 assets" in bob_list
+    assert "https://app.example.com/portal" not in bob_list
+    # Bob adding a URL for a domain verified only by Alice still stores it as unverified for Bob.
+    bob_add = bob.post(
+        "/assets/url",
+        data={"url": "https://app.example.com/portal", "csrf_token": _csrf(bob)},
+    )
+    assert bob_add.status_code == 303
+    assert "Active web checks paused" in _html(bob, bob_add.headers["Location"])
+
+
+def test_add_url_run_web_active_and_view_panels_on_url_detail(
+    alice: FlaskClient, db_session: Session
+) -> None:
+    class _Queue(TaskQueue, PipelineQueue):
+        def __init__(self) -> None:
+            self.tasks: list[tuple[str, UUID, UUID]] = []
+            self.header: tuple[JobTask, ...] = ()
+            self.tail: tuple[JobTask, ...] = ()
+
+        def enqueue(self, task_name: str, *, org_id: UUID, job_id: UUID) -> str:
+            self.tasks.append((task_name, org_id, job_id))
+            return "task-1"
+
+        def enqueue_workflow(
+            self, header: tuple[JobTask, ...], tail: tuple[JobTask, ...], error: JobTask
+        ) -> None:
+            del error
+            self.header = header
+            self.tail = tail
+
+    class _Events:
+        def publish(self, event: object) -> None:
+            del event
+
+    class _FakeTls:
+        def __init__(self, der_cert: bytes) -> None:
+            self._cert = der_cert
+
+        def handshake(
+            self,
+            *,
+            address: str,
+            port: int,
+            server_hostname: str,
+            verify: bool,
+            check_hostname: bool = True,
+            timeout: float,
+            min_version: ssl.TLSVersion | None = None,
+            max_version: ssl.TLSVersion | None = None,
+        ) -> RawTlsHandshake:
+            del address, port, server_hostname, check_hostname, timeout, max_version
+            if min_version in {ssl.TLSVersion.TLSv1, ssl.TLSVersion.TLSv1_1}:
+                raise TlsError("legacy disabled")
+            return RawTlsHandshake("TLSv1.3", "TLS_AES_256_GCM_SHA384", 256, (self._cert,), verify)
+
+    _add(alice, "example.com")
+    root_id = _root_id(db_session)
+    org_id = _org_id(db_session, root_id)
+    now = datetime.now(UTC)
+    db_session.add(
+        Verification(
+            org_id=org_id,
+            asset_id=root_id,
+            method=VerificationMethod.DNS_TXT,
+            token="verify-tok",
+            status=VerificationStatus.VERIFIED,
+            verified_at=now,
+            last_checked_at=now,
+            recheck_at=now,
+            expires_at=now + timedelta(days=2),
+        )
+    )
+    db_session.commit()
+
+    resp = alice.post(
+        "/assets/url",
+        data={"url": "https://app.example.com/portal", "csrf_token": _csrf(alice)},
+    )
+    assert resp.status_code == 303
+    url_row = db_session.scalars(
+        select(Asset).where(
+            Asset.org_id == org_id,
+            Asset.type == AssetType.URL,
+            Asset.value == "https://app.example.com/portal",
+        )
+    ).one()
+    url_id = url_row.id
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "app.example.com")]))
+        .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Acme Test CA")]))
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=5))
+        .not_valid_after(now + timedelta(days=90))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName("app.example.com")]), critical=False
+        )
+        .sign(key, hashes.SHA256())
+    ).public_bytes(serialization.Encoding.DER)
+
+    dns = MutableDnsZone()
+    dns.set_records("example.com", "A", ("93.184.216.34",))
+    dns.set_records("app.example.com", "A", ("93.184.216.34",))
+    http = FakeScopeHttp(
+        {
+            "https://example.com/": HttpBody(status_code=200, content=b"<html>Root</html>"),
+            "http://example.com/": HttpBody(
+                status_code=301, content=b"", final_url="https://example.com/"
+            ),
+            "https://app.example.com/portal": HttpBody(
+                status_code=200,
+                content=b"<html><head><title>App Portal</title></head><body>Hi</body></html>",
+                headers={
+                    "Content-Type": "text/html",
+                    "Server": "nginx/1.26.2",
+                    "Strict-Transport-Security": "max-age=31536000",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            ),
+        }
+    )
+    factory = sessionmaker(bind=db_session.get_bind())
+    guard = ScopeGuard(
+        dns=dns,
+        http=http,
+        ownership=DbOwnershipChecker(factory),
+        classify=public_suffix.classify,
+        active_scans_enabled=True,
+        tls=_FakeTls(cert),
+    )
+    events = _Events()
+    q_disc = _Queue()
+    scans_service.start_scan(
+        db_session,
+        q_disc,
+        org_id=org_id,
+        root_asset_id=root_id,
+        profile="web_active",
+        registry=registry,
+        profiles=PROFILES,
+    )
+    scans_service.dispatch_stage(
+        db_session,
+        q_disc,
+        org_id,
+        q_disc.tasks[0][2],
+        registry=registry,
+        profiles=PROFILES,
+    )
+    db_session.commit()
+    for task in q_disc.header:
+        run_check(
+            db_session,
+            org_id,
+            task.job_id,
+            registry=registry,
+            gate=guard,
+            events=events,
+            retry_allowed=False,
+            profiles=PROFILES,
+        )
+    q_chk = _Queue()
+    scans_service.dispatch_stage(
+        db_session,
+        q_chk,
+        org_id,
+        q_disc.tail[0].job_id,
+        registry=registry,
+        profiles=PROFILES,
+    )
+    db_session.commit()
+    for task in q_chk.header:
+        run_check(
+            db_session,
+            org_id,
+            task.job_id,
+            registry=registry,
+            gate=guard,
+            events=events,
+            retry_allowed=False,
+            profiles=PROFILES,
+        )
+
+    html = _html(alice, f"/assets/{url_id}")
+    assert "App Portal" in html
+    assert "Nginx" in html
+    assert "1.26.2" in html
+    assert "TLSv1.3" in html
+    assert "Acme Test CA" in html
+    assert "HSTS" in html
+    assert "Content-Security-Policy" in html
+
+    api_detail = alice.get(f"/api/v1/assets/{url_id}").get_json()
+    assert api_detail["web"]["title"] == "App Portal"
+    assert any(
+        t["name"] == "Nginx" and t["version"] == "1.26.2" for t in api_detail["technologies"]
+    )
+    assert api_detail["tls"]["protocol"] == "TLSv1.3"
+    assert any(h["key"] == "hsts" and h["passed"] is True for h in api_detail["security_headers"])
