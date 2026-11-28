@@ -4,7 +4,8 @@
 `store_summary` are building blocks and don't. Every query is scoped by `org_id`.
 """
 
-from collections.abc import Collection
+from collections import Counter, defaultdict
+from collections.abc import Collection, Mapping, Sequence
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -18,6 +19,9 @@ from attacksurf.ai.summary import (
     MAX_SUMMARY_ASSETS,
     MAX_SUMMARY_DIFF_ASSETS,
     MAX_SUMMARY_FINDINGS,
+    MAX_SUMMARY_URL_EXPOSURE_RULES,
+    MAX_SUMMARY_URL_TECHNOLOGIES,
+    MAX_SUMMARY_WEB_URLS,
     SUMMARY_PROMPT_VERSION,
     SUMMARY_PURPOSE,
     SummaryAsset,
@@ -27,11 +31,13 @@ from attacksurf.ai.summary import (
     SummaryFindingTriage,
     SummaryInput,
     SummarySeverityCounts,
+    SummaryUrlContext,
     ValidatedSummary,
     summarize,
     validate_summary,
 )
 from attacksurf.config import Settings
+from attacksurf.domain.assets import AssetType
 from attacksurf.domain.findings import ACTIVE_STATUSES, SEVERITY_RANK
 from attacksurf.domain.jobs import JobNotFound, TaskQueue
 from attacksurf.domain.llm import LLMConfig, LLMError, LLMUnavailable
@@ -299,23 +305,117 @@ def _finding_sort_key(
 
 
 def _select_assets(session: Session, org_id: UUID, root_asset_id: UUID) -> tuple[SummaryAsset, ...]:
-    rows = session.scalars(
+    all_rows = session.scalars(
         scoped(Asset, org_id)
         .where(
             Asset.is_active.is_(True),
             (Asset.id == root_asset_id) | (Asset.parent_id == root_asset_id),
         )
         .order_by(Asset.value, Asset.type, Asset.id)
-        .limit(MAX_SUMMARY_ASSETS)
     ).all()
+    url_rows = [asset for asset in all_rows if asset.type is AssetType.URL]
+    if not url_rows:
+        return tuple(
+            SummaryAsset(
+                ref=f"A{index}",
+                asset_id=asset.id,
+                name=asset.value,
+                asset_type=asset.type,
+            )
+            for index, asset in enumerate(all_rows[:MAX_SUMMARY_ASSETS], start=1)
+        )
+
+    active_url_findings = session.scalars(
+        scoped(Finding, org_id).where(
+            Finding.asset_id.in_([asset.id for asset in url_rows]),
+            Finding.status.in_(ACTIVE_STATUSES),
+        )
+    ).all()
+    by_url: defaultdict[UUID, list[Finding]] = defaultdict(list)
+    for finding in active_url_findings:
+        by_url[finding.asset_id].append(finding)
+
+    ranked_urls = sorted(
+        url_rows,
+        key=lambda asset: (
+            -len(by_url[asset.id]),
+            -max((SEVERITY_RANK[f.severity] for f in by_url[asset.id]), default=-1),
+            asset.value,
+            asset.id,
+        ),
+    )
+    reserved_urls = ranked_urls[:MAX_SUMMARY_WEB_URLS]
+    enriched_ids = {asset.id for asset in reserved_urls}
+    if len(all_rows) <= MAX_SUMMARY_ASSETS:
+        selected = all_rows
+    else:
+        others = [asset for asset in all_rows if asset.id not in enriched_ids]
+        selected = sorted(
+            [*reserved_urls, *others[: MAX_SUMMARY_ASSETS - len(reserved_urls)]],
+            key=lambda asset: (asset.value, asset.type, asset.id),
+        )
+
     return tuple(
         SummaryAsset(
             ref=f"A{index}",
             asset_id=asset.id,
             name=asset.value,
             asset_type=asset.type,
+            web=_url_context(asset, by_url[asset.id]) if asset.id in enriched_ids else None,
         )
-        for index, asset in enumerate(rows, start=1)
+        for index, asset in enumerate(selected, start=1)
+    )
+
+
+def _url_context(asset: Asset, findings: Sequence[Finding]) -> SummaryUrlContext:
+    details = asset.details if isinstance(asset.details, Mapping) else {}
+    raw_web = details.get("web")
+    web = raw_web if isinstance(raw_web, Mapping) else {}
+
+    raw_status = web.get("status_code")
+    status_code = (
+        raw_status if isinstance(raw_status, int) and not isinstance(raw_status, bool) else None
+    )
+    raw_title = web.get("title")
+    title = raw_title if isinstance(raw_title, str) else ""
+
+    techs: list[str] = []
+    raw_techs = details.get("technologies")
+    if isinstance(raw_techs, list):
+        for item in raw_techs:
+            if not isinstance(item, Mapping):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            version = item.get("version")
+            label = (
+                f"{name.strip()} {version.strip()}"
+                if isinstance(version, str) and version.strip()
+                else name.strip()
+            )
+            techs.append(label)
+            if len(techs) >= MAX_SUMMARY_URL_TECHNOLOGIES:
+                break
+
+    sev_counts = Counter(finding.severity for finding in findings)
+    ordered_counts = tuple(
+        (severity.value, sev_counts[severity])
+        for severity in sorted(sev_counts, key=lambda s: -SEVERITY_RANK[s])
+    )
+    seen_rules: list[str] = []
+    for finding in sorted(findings, key=lambda f: (-SEVERITY_RANK[f.severity], f.rule_id)):
+        if finding.rule_id not in seen_rules:
+            seen_rules.append(finding.rule_id)
+            if len(seen_rules) >= MAX_SUMMARY_URL_EXPOSURE_RULES:
+                break
+
+    return SummaryUrlContext(
+        status_code=status_code,
+        title=title,
+        technologies=tuple(techs),
+        exposure_counts=ordered_counts,
+        exposure_rules=tuple(seen_rules),
     )
 
 

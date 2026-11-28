@@ -30,6 +30,12 @@ MAX_KEY_RISK_WHY_LENGTH = 300
 MAX_NOTABLE_ASSETS = 10
 MAX_NOTABLE_REASON_LENGTH = 200
 MAX_CHANGES_LENGTH = 600
+MAX_WEB_EXPOSURE_LENGTH = 600
+MAX_RISK_CHAINS = 5
+MAX_CHAIN_FINDINGS = 5
+MIN_CHAIN_FINDINGS = 2
+MAX_CHAIN_TITLE_LENGTH = 120
+MAX_CHAIN_WHY_LENGTH = 300
 MAX_NEXT_ACTIONS = 5
 MAX_NEXT_ACTION_LENGTH = 200
 _SHA256_HEX = r"^[0-9a-f]{64}$"
@@ -200,7 +206,39 @@ NotableReason = Annotated[
     Field(
         min_length=1,
         max_length=MAX_NOTABLE_REASON_LENGTH,
-        description="Why this host looks sensitive or worth inspecting first.",
+        description=(
+            "Why this host or URL looks sensitive or worth inspecting first (e.g. admin panel, "
+            "outdated CMS, CI/CD, dev/staging, vpn, or exposed backups)."
+        ),
+    ),
+]
+WebExposure = Annotated[
+    str,
+    Field(
+        max_length=MAX_WEB_EXPOSURE_LENGTH,
+        description=(
+            "Short plain-language summary of web-layer exposure (HTTP endpoints, technologies, "
+            "TLS/headers, exposed paths), or an empty string when no web URLs or web findings "
+            "were observed."
+        ),
+    ),
+]
+ChainTitle = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=MAX_CHAIN_TITLE_LENGTH,
+        description="Short title naming the compounding risk chain.",
+    ),
+]
+ChainWhy = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=MAX_CHAIN_WHY_LENGTH,
+        description=(
+            "Why these findings compound into greater risk together, in one or two sentences."
+        ),
     ),
 ]
 SummaryChanges = Annotated[
@@ -233,7 +271,7 @@ class KeyRisk(BaseModel):
 
 
 class NotableAsset(BaseModel):
-    """One host from the input that looks sensitive or worth checking first."""
+    """One host or URL from the input that looks sensitive or worth checking first."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -241,23 +279,51 @@ class NotableAsset(BaseModel):
     reason: NotableReason
 
 
+class RiskChain(BaseModel):
+    """Two to five existing findings that compound into a higher combined exposure risk."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: ChainTitle
+    finding_refs: list[FindingRef] = Field(
+        min_length=MIN_CHAIN_FINDINGS,
+        max_length=MAX_CHAIN_FINDINGS,
+        description=(
+            "Two to five existing finding refs from the input (e.g. F1, F2) that compound together."
+        ),
+    )
+    asset_ref: AssetRef | None = Field(
+        description="Asset ref from the input (e.g. A1) where the chain occurs, or null."
+    )
+    why: ChainWhy
+
+
 class ExposureSummary(BaseModel):
-    """A short exposure summary for the scanned domain."""
+    """A short exposure summary for the scanned domain and its observed web endpoints."""
 
     model_config = ConfigDict(extra="forbid")
 
     headline: SummaryHeadline
+    web_exposure: WebExposure
     key_risks: list[KeyRisk] = Field(
         max_length=MAX_KEY_RISKS,
         description=(
             "Up to five top risks, ranked most urgent first, each citing a finding from the input."
         ),
     )
+    risk_chains: list[RiskChain] = Field(
+        max_length=MAX_RISK_CHAINS,
+        description=(
+            "Up to five compounding risk chains grouping two to five existing findings from the "
+            "input."
+        ),
+    )
     notable_assets: list[NotableAsset] = Field(
         max_length=MAX_NOTABLE_ASSETS,
         description=(
-            "Up to ten hosts from the input whose names suggest sensitive, internal, or legacy "
-            "services (such as admin, jenkins, vpn, staging, or old)."
+            "Up to ten hosts or URLs from the input whose names or web posture suggest sensitive, "
+            "administrative, pre-production, CI/CD, or outdated CMS/app services (such as admin, "
+            "jenkins, vpn, staging, outdated WordPress, or old)."
         ),
     )
     changes: SummaryChanges
@@ -274,7 +340,7 @@ class StoredKeyRisk(BaseModel):
 
 
 class StoredNotableAsset(BaseModel):
-    """One validated notable host linked to a real asset ID."""
+    """One validated notable asset linked to a real asset ID."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -282,16 +348,33 @@ class StoredNotableAsset(BaseModel):
     reason: NotableReason
 
 
+class StoredRiskChain(BaseModel):
+    """One validated compounding risk chain linked to real finding IDs (and optional asset ID)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: ChainTitle
+    finding_ids: list[UUID] = Field(
+        min_length=MIN_CHAIN_FINDINGS,
+        max_length=MAX_CHAIN_FINDINGS,
+    )
+    asset_id: UUID | None = None
+    why: ChainWhy
+
+
 class StoredSummary(BaseModel):
     """`Scan.ai_summary`: one validated exposure summary with real IDs and provenance.
 
-    A row that doesn't validate (written by an older version) counts as missing.
+    A row that doesn't validate (written by an older version) counts as missing. Defaults on
+    ``web_exposure`` and ``risk_chains`` preserve compatibility with stored ``summary/v1`` rows.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     headline: SummaryHeadline
+    web_exposure: WebExposure = ""
     key_risks: list[StoredKeyRisk] = Field(max_length=MAX_KEY_RISKS)
+    risk_chains: list[StoredRiskChain] = Field(default_factory=list, max_length=MAX_RISK_CHAINS)
     notable_assets: list[StoredNotableAsset] = Field(max_length=MAX_NOTABLE_ASSETS)
     changes: SummaryChanges
     next_actions: NextActions

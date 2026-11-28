@@ -20,6 +20,7 @@ from attacksurf.ai.summary import (
     SummaryFindingTriage,
     SummaryInput,
     SummarySeverityCounts,
+    SummaryUrlContext,
 )
 from attacksurf.domain.assets import AssetType
 from attacksurf.domain.findings import Severity
@@ -34,6 +35,8 @@ class SummaryExpectation:
     required_notable_assets: frozenset[str] = frozenset()
     forbidden_notable_assets: frozenset[str] = frozenset()
     max_notable_assets: int | None = None
+    require_web_exposure: bool = False
+    required_risk_chain_findings: tuple[frozenset[str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -55,16 +58,24 @@ def check_summary(case: SummaryEvalCase, reply: ExposureSummary) -> list[str]:
     known_assets = {asset.ref for asset in case.summary_input.assets}
     risk_refs = [risk.finding_ref for risk in reply.key_risks]
     notable_refs = [asset.asset_ref for asset in reply.notable_assets]
+    chain_finding_refs = [ref for chain in reply.risk_chains for ref in chain.finding_refs]
+    chain_asset_refs = [chain.asset_ref for chain in reply.risk_chains if chain.asset_ref]
 
     problems: list[str] = []
-    unknown_findings = sorted(set(risk_refs) - known_findings)
+    unknown_findings = sorted((set(risk_refs) | set(chain_finding_refs)) - known_findings)
     if unknown_findings:
         problems.append(f"unknown finding refs: {', '.join(unknown_findings)}")
-    unknown_assets = sorted(set(notable_refs) - known_assets)
+    unknown_assets = sorted((set(notable_refs) | set(chain_asset_refs)) - known_assets)
     if unknown_assets:
         problems.append(f"unknown asset refs: {', '.join(unknown_assets)}")
 
     expect = case.expectation
+    if expect.require_web_exposure and not reply.web_exposure.strip():
+        problems.append("missing required web_exposure")
+    chain_sets = [frozenset(chain.finding_refs) for chain in reply.risk_chains]
+    for expected_group in expect.required_risk_chain_findings:
+        if not any(expected_group <= group for group in chain_sets):
+            problems.append(f"missing risk chain covering: {', '.join(sorted(expected_group))}")
     missing_risks = sorted(expect.required_key_risks - set(risk_refs))
     if missing_risks:
         problems.append(f"missing required key risks: {', '.join(missing_risks)}")
@@ -99,6 +110,10 @@ def _case(path: Path) -> SummaryEvalCase:
         required_notable_assets=frozenset(expect_data.get("required_notable_assets", ())),
         forbidden_notable_assets=frozenset(expect_data.get("forbidden_notable_assets", ())),
         max_notable_assets=expect_data.get("max_notable_assets"),
+        require_web_exposure=bool(expect_data.get("require_web_exposure", False)),
+        required_risk_chain_findings=tuple(
+            frozenset(group) for group in expect_data.get("required_risk_chain_findings", ())
+        ),
     )
     return SummaryEvalCase(
         name=path.stem,
@@ -158,9 +173,24 @@ def _finding(case_name: str, item: Mapping[str, Any]) -> SummaryFinding:
 
 
 def _asset(case_name: str, item: Mapping[str, Any]) -> SummaryAsset:
+    raw_web = item.get("web")
+    web = (
+        None
+        if raw_web is None
+        else SummaryUrlContext(
+            status_code=raw_web.get("status_code"),
+            title=str(raw_web.get("title", "")),
+            technologies=tuple(str(t) for t in raw_web.get("technologies", ())),
+            exposure_counts=tuple(
+                (str(k), int(v)) for k, v in raw_web.get("exposure_counts", {}).items()
+            ),
+            exposure_rules=tuple(str(r) for r in raw_web.get("exposure_rules", ())),
+        )
+    )
     return SummaryAsset(
         ref=item["ref"],
         asset_id=uuid5(NAMESPACE_URL, f"summary-eval/{case_name}/asset/{item['ref']}"),
         name=item["name"],
         asset_type=AssetType(item["type"]),
+        web=web,
     )

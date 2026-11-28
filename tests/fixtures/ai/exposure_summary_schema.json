@@ -27,7 +27,7 @@
     },
     "NotableAsset": {
       "additionalProperties": false,
-      "description": "One host from the input that looks sensitive or worth checking first.",
+      "description": "One host or URL from the input that looks sensitive or worth checking first.",
       "properties": {
         "asset_ref": {
           "description": "The asset's reference exactly as given in the input, for example A1.",
@@ -36,7 +36,7 @@
           "type": "string"
         },
         "reason": {
-          "description": "Why this host looks sensitive or worth inspecting first.",
+          "description": "Why this host or URL looks sensitive or worth inspecting first (e.g. admin panel, outdated CMS, CI/CD, dev/staging, vpn, or exposed backups).",
           "maxLength": 200,
           "minLength": 1,
           "title": "Reason",
@@ -49,23 +49,76 @@
       ],
       "title": "NotableAsset",
       "type": "object"
+    },
+    "RiskChain": {
+      "additionalProperties": false,
+      "description": "Two to five existing findings that compound into a higher combined exposure risk.",
+      "properties": {
+        "title": {
+          "description": "Short title naming the compounding risk chain.",
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "finding_refs": {
+          "description": "Two to five existing finding refs from the input (e.g. F1, F2) that compound together.",
+          "items": {
+            "description": "The finding's reference exactly as given in the input, for example F1.",
+            "pattern": "^F[1-9][0-9]?$",
+            "type": "string"
+          },
+          "maxItems": 5,
+          "minItems": 2,
+          "title": "Finding Refs",
+          "type": "array"
+        },
+        "asset_ref": {
+          "anyOf": [
+            {
+              "description": "The asset's reference exactly as given in the input, for example A1.",
+              "pattern": "^A[1-9][0-9]{0,2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Asset ref from the input (e.g. A1) where the chain occurs, or null.",
+          "title": "Asset Ref"
+        },
+        "why": {
+          "description": "Why these findings compound into greater risk together, in one or two sentences.",
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Why",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "finding_refs",
+        "asset_ref",
+        "why"
+      ],
+      "title": "RiskChain",
+      "type": "object"
     }
   },
   "additionalProperties": false,
-  "description": "A short exposure summary for the scanned domain.",
+  "description": "A short exposure summary for the scanned domain and its observed web endpoints.",
   "properties": {
-    "changes": {
-      "description": "What changed since the previous scan (new, fixed, or regressed findings and assets), or that nothing changed.",
-      "maxLength": 600,
-      "minLength": 1,
-      "title": "Changes",
-      "type": "string"
-    },
     "headline": {
       "description": "One short sentence capturing the domain's current exposure.",
       "maxLength": 200,
       "minLength": 1,
       "title": "Headline",
+      "type": "string"
+    },
+    "web_exposure": {
+      "description": "Short plain-language summary of web-layer exposure (HTTP endpoints, technologies, TLS/headers, exposed paths), or an empty string when no web URLs or web findings were observed.",
+      "maxLength": 600,
+      "title": "Web Exposure",
       "type": "string"
     },
     "key_risks": {
@@ -77,6 +130,31 @@
       "title": "Key Risks",
       "type": "array"
     },
+    "risk_chains": {
+      "description": "Up to five compounding risk chains grouping two to five existing findings from the input.",
+      "items": {
+        "$ref": "#/$defs/RiskChain"
+      },
+      "maxItems": 5,
+      "title": "Risk Chains",
+      "type": "array"
+    },
+    "notable_assets": {
+      "description": "Up to ten hosts or URLs from the input whose names or web posture suggest sensitive, administrative, pre-production, CI/CD, or outdated CMS/app services (such as admin, jenkins, vpn, staging, outdated WordPress, or old).",
+      "items": {
+        "$ref": "#/$defs/NotableAsset"
+      },
+      "maxItems": 10,
+      "title": "Notable Assets",
+      "type": "array"
+    },
+    "changes": {
+      "description": "What changed since the previous scan (new, fixed, or regressed findings and assets), or that nothing changed.",
+      "maxLength": 600,
+      "minLength": 1,
+      "title": "Changes",
+      "type": "string"
+    },
     "next_actions": {
       "description": "Concrete next steps for the security team, most urgent first.",
       "items": {
@@ -87,20 +165,13 @@
       "maxItems": 5,
       "title": "Next Actions",
       "type": "array"
-    },
-    "notable_assets": {
-      "description": "Up to ten hosts from the input whose names suggest sensitive, internal, or legacy services (such as admin, jenkins, vpn, staging, or old).",
-      "items": {
-        "$ref": "#/$defs/NotableAsset"
-      },
-      "maxItems": 10,
-      "title": "Notable Assets",
-      "type": "array"
     }
   },
   "required": [
     "headline",
+    "web_exposure",
     "key_risks",
+    "risk_chains",
     "notable_assets",
     "changes",
     "next_actions"

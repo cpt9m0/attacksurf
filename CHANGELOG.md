@@ -6,6 +6,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Website AI exposure summary (`#82`): extended `ExposureSummary` and `StoredSummary` with
+  `web_exposure` and validated `risk_chains` (2–5 existing finding refs), added prompt `summary/v2`
+  (keeping `summary/v1` pinned and legacy summaries readable), enriched up to 50 active URL assets
+  with capped tech stacks and active exposure counts/rules, rendered "Web exposure" and "Risk
+  chains" on `/scans/<id>`, synced `notable` tags to notable URLs, and added `web_exposure_scan`
+  eval fixture.
 - Website AI triage (`#81`): added versioned prompt `triage/v2` (preserving `triage/v1` for
   stored cache keys and staleness checks) with `WebContext` support for `url` assets—host-role
   hints (`admin.`, `staging.`, etc.), capped response metadata/technologies, and active sibling

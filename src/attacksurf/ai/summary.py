@@ -15,10 +15,13 @@ from attacksurf.ai.prompts import load_prompt
 from attacksurf.ai.schemas import (
     ASSET_REF_PATTERN,
     FINDING_REF_PATTERN,
+    MIN_CHAIN_FINDINGS,
     ExposureSummary,
     FalsePositiveLikelihood,
+    RiskChain,
     StoredKeyRisk,
     StoredNotableAsset,
+    StoredRiskChain,
     StoredSummary,
     TriagePriority,
 )
@@ -28,11 +31,15 @@ from attacksurf.domain.findings import Severity
 from attacksurf.domain.llm import LLMConfig, LLMProvider, LLMResult, Message
 
 SUMMARY_PURPOSE = "summary"  # `LLMUsage.purpose` of every summary call
-SUMMARY_PROMPT_VERSION = "summary/v1"
+SUMMARY_PROMPT_VERSION = "summary/v2"
 # A cap, not a spend: room for a full summary, plus thinking tokens on reasoning models.
 SUMMARY_MAX_TOKENS = 8192
 MAX_SUMMARY_FINDINGS = 25
 MAX_SUMMARY_ASSETS = 200
+MAX_SUMMARY_WEB_URLS = 50
+MAX_SUMMARY_URL_TECHNOLOGIES = 10
+MAX_SUMMARY_URL_EXPOSURE_RULES = 8
+MAX_SUMMARY_URL_TITLE_LENGTH = 120
 MAX_SUMMARY_RATIONALE_LENGTH = 300
 MAX_SUMMARY_DIFF_ASSETS = 25
 SUMMARY_STRING_LENGTH = 500
@@ -89,6 +96,17 @@ class SummaryFinding:
 
 
 @dataclass(frozen=True)
+class SummaryUrlContext:
+    """Capped web-layer posture and active exposure summary for one active URL asset."""
+
+    status_code: int | None = None
+    title: str = ""
+    technologies: tuple[str, ...] = ()
+    exposure_counts: tuple[tuple[str, int], ...] = ()
+    exposure_rules: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class SummaryAsset:
     """One active asset under the scan's root."""
 
@@ -96,6 +114,7 @@ class SummaryAsset:
     asset_id: UUID
     name: str
     asset_type: AssetType
+    web: SummaryUrlContext | None = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +153,8 @@ class ValidatedSummary:
     notable_assets: tuple[StoredNotableAsset, ...]
     changes: str
     next_actions: tuple[str, ...]
+    web_exposure: str = ""
+    risk_chains: tuple[StoredRiskChain, ...] = ()
 
     def to_stored(
         self,
@@ -145,7 +166,9 @@ class ValidatedSummary:
         """Build the `StoredSummary` record to persist on `Scan.ai_summary`."""
         return StoredSummary(
             headline=self.headline,
+            web_exposure=self.web_exposure,
             key_risks=list(self.key_risks),
+            risk_chains=list(self.risk_chains),
             notable_assets=list(self.notable_assets),
             changes=self.changes,
             next_actions=list(self.next_actions),
@@ -180,8 +203,10 @@ def summarize(provider: LLMProvider, summary_input: SummaryInput) -> LLMResult[E
 def validate_summary(summary_input: SummaryInput, reply: ExposureSummary) -> ValidatedSummary:
     """Map refs to real finding and asset IDs, dropping unknown and duplicate refs.
 
-    Preserves ranked order by keeping the first occurrence of each known ref. A stored summary
-    produced through this function can only ever reference finding and asset IDs from the input.
+    Preserves ranked order by keeping the first occurrence of each known ref. Risk chains with
+    any unknown finding ref, unknown asset ref, or fewer than `MIN_CHAIN_FINDINGS` distinct
+    findings are dropped completely. A stored summary produced through this function can only
+    ever reference finding and asset IDs from the input.
     """
     finding_ids = {finding.ref: finding.finding_id for finding in summary_input.findings}
     asset_ids = {asset.ref: asset.asset_id for asset in summary_input.assets}
@@ -204,13 +229,56 @@ def validate_summary(summary_input: SummaryInput, reply: ExposureSummary) -> Val
         seen_assets.add(notable.asset_ref)
         notable_assets.append(StoredNotableAsset(asset_id=asset_id, reason=notable.reason))
 
+    risk_chains = _validate_risk_chains(reply.risk_chains, finding_ids, asset_ids)
+
     return ValidatedSummary(
         headline=reply.headline,
+        web_exposure=reply.web_exposure,
         key_risks=tuple(key_risks),
+        risk_chains=tuple(risk_chains),
         notable_assets=tuple(notable_assets),
         changes=reply.changes,
         next_actions=tuple(reply.next_actions),
     )
+
+
+def _validate_risk_chains(
+    chains: list[RiskChain],
+    finding_ids: dict[str, UUID],
+    asset_ids: dict[str, UUID],
+) -> list[StoredRiskChain]:
+    validated: list[StoredRiskChain] = []
+    seen: set[tuple[frozenset[UUID], UUID | None]] = set()
+    for chain in chains:
+        asset_id: UUID | None = None
+        if chain.asset_ref is not None:
+            asset_id = asset_ids.get(chain.asset_ref)
+            if asset_id is None:
+                continue
+        mapped_ids: list[UUID] = []
+        valid = True
+        for ref in chain.finding_refs:
+            finding_id = finding_ids.get(ref)
+            if finding_id is None:
+                valid = False
+                break
+            if finding_id not in mapped_ids:
+                mapped_ids.append(finding_id)
+        if not valid or len(mapped_ids) < MIN_CHAIN_FINDINGS:
+            continue
+        dedupe_key = (frozenset(mapped_ids), asset_id)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        validated.append(
+            StoredRiskChain(
+                title=chain.title,
+                finding_ids=mapped_ids,
+                asset_id=asset_id,
+                why=chain.why,
+            )
+        )
+    return validated
 
 
 def _diff_payload(diff: SummaryDiff) -> dict[str, Any]:
@@ -257,8 +325,33 @@ def _finding_payload(finding: SummaryFinding) -> dict[str, Any]:
 
 
 def _asset_payload(asset: SummaryAsset) -> dict[str, Any]:
-    return {
+    item: dict[str, Any] = {
         "ref": asset.ref,
         "name": asset.name,
         "type": asset.asset_type,
     }
+    if asset.web is not None:
+        item["web"] = _url_web_payload(asset.web)
+    return item
+
+
+def _url_web_payload(web: SummaryUrlContext) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if web.status_code is not None:
+        payload["status_code"] = web.status_code
+    if web.title:
+        payload["title"] = cap(web.title, MAX_SUMMARY_URL_TITLE_LENGTH)
+    if web.technologies:
+        payload["technologies"] = [
+            cap(tech, 80) for tech in web.technologies[:MAX_SUMMARY_URL_TECHNOLOGIES]
+        ]
+    total_exposures = sum(count for _, count in web.exposure_counts)
+    payload["exposure_counts"] = {
+        "total": total_exposures,
+        "by_severity": dict(web.exposure_counts),
+    }
+    if web.exposure_rules:
+        payload["exposure_rules"] = [
+            cap(rule_id, 100) for rule_id in web.exposure_rules[:MAX_SUMMARY_URL_EXPOSURE_RULES]
+        ]
+    return payload

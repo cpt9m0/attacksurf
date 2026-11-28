@@ -262,15 +262,19 @@ Each AI feature documents its payload here as it is added:
   characters, file excerpts capped at 500 characters, and other strings capped at 2,000
   characters. All of it goes inside one escaped `<scan_data>` block. Never sent: database IDs,
   org or user data, other assets' or other organizations' data, or raw `.env` secret values.
-- **Exposure summary** (#26, ADR 0030, prompt `summary/v1`), one call per completed scan after
-  triage: the root domain, aggregate scan change stats from `Scan.stats` (new, fixed, regressed,
-  and total finding counts by severity; new and disappeared asset counts and up to 25 names), up
-  to 25 active findings observed by this scan under batch-local refs (`F1`..`F25`, with rule ID,
-  title, scanner severity, asset name, and for non-stale triages the priority, adjusted severity,
-  false-positive likelihood, and rationale capped at 300 characters), and up to 200 active assets
-  under the scan's root (`A1`..`A200`, name and type). All of it goes inside one escaped
-  `<scan_data>` block. Never sent: raw evidence, database IDs, org or user data, other roots'
-  assets, or other organizations' data.
+- **Exposure summary** (#26, #82, ADR 0030, prompt `summary/v2`; `summary/v1` stored summaries
+  remain compatible), one call per completed scan after triage: the root domain, aggregate scan
+  change stats from `Scan.stats` (new, fixed, regressed, and total finding counts by severity; new
+  and disappeared asset counts and up to 25 names), up to 25 active findings observed by this scan
+  under batch-local refs (`F1`..`F25`, with rule ID, title, scanner severity, asset name, and for
+  non-stale triages the priority, adjusted severity, false-positive likelihood, and rationale
+  capped at 300 characters), and up to 200 active assets under the scan's root (`A1`..`A200`, name
+  and type, prioritizing up to 50 URLs with status code, title capped at 120 characters, up to 10
+  detected technologies, and active exposure severity counts + up to 8 rule IDs). Output returns
+  `web_exposure` (capped at 600 chars) and validated `risk_chains` (2–5 existing finding refs and
+  optional known asset ref; chains with unknown refs are dropped before storage). All input goes
+  inside one escaped `<scan_data>` block. Never sent: raw evidence, HTTP headers/cookies, database
+  IDs, org or user data, other roots' assets, or other organizations' data.
  Orgs can disable AI or bring their own
 provider key; monthly UTC token budgets (`LLM_MONTHLY_INSTANCE_TOKEN_BUDGET` for the instance key
 and optional per-org caps) skip AI triage and summaries gracefully once reached.

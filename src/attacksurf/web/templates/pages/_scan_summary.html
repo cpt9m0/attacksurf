@@ -26,6 +26,11 @@
       {{ ai_label(summary.summary, summary.summary.generated_at) }}
       <p class="ai-summary-headline">{{ summary.summary.headline }}</p>
 
+      {%- if summary.summary.web_exposure %}
+      <h3>Web exposure</h3>
+      <p class="prose">{{ summary.summary.web_exposure }}</p>
+      {%- endif %}
+
       {%- if summary.key_risks %}
       <h3>Key risks</h3>
       <ul class="ai-summary-list">
@@ -37,6 +42,31 @@
             <span class="muted mono">{{ risk.asset_value }}</span>
           </div>
           <p class="prose">{{ risk.why }}</p>
+        </li>
+        {%- endfor %}
+      </ul>
+      {%- endif %}
+
+      {%- if summary.risk_chains %}
+      <h3>Risk chains</h3>
+      <ul class="ai-summary-list">
+        {%- for chain in summary.risk_chains %}
+        <li>
+          <div class="ai-summary-item-head">
+            <strong>{{ chain.title }}</strong>
+            {%- if chain.asset_id and chain.asset_value %}
+            <a class="mono" href="{{ url_for('ui.asset_detail', asset_id=chain.asset_id) }}">{{ chain.asset_value }}</a>
+            {%- endif %}
+          </div>
+          <ul class="ai-chain-findings">
+            {%- for item in chain.findings %}
+            <li>
+              {{ severity_badge(item.severity) }}
+              <a href="{{ url_for('ui.finding_detail', finding_id=item.finding_id) }}">{{ item.title }}</a>
+            </li>
+            {%- endfor %}
+          </ul>
+          <p class="prose">{{ chain.why }}</p>
         </li>
         {%- endfor %}
       </ul>
