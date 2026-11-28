@@ -21,11 +21,15 @@ from attacksurf.ai.schemas import (
 )
 from attacksurf.ai.triage import (
     TRIAGE_PURPOSE,
+    RelatedFinding,
     TriageBatch,
     TriageCacheInput,
     TriageEvidence,
     TriageFinding,
+    WebContext,
+    WebTechnology,
     triage_cache_key,
+    web_context_digest,
 )
 from attacksurf.domain.assets import AssetType
 from attacksurf.domain.findings import Confidence, EvidenceKind, Severity
@@ -397,3 +401,65 @@ def test_cache_key_is_accepted_by_stored_triage() -> None:
     stored = _stored().model_copy(update={"cache_key": key})
 
     assert StoredTriage.model_validate(stored.model_dump(mode="json")).cache_key == key
+
+
+def test_cache_key_changes_with_context_digest() -> None:
+    without_ctx = triage_cache_key("triage/v2", "test-model", _CACHE_INPUT)
+    with_ctx = triage_cache_key(
+        "triage/v2", "test-model", replace(_CACHE_INPUT, context_digest="0" * 64)
+    )
+    changed_ctx = triage_cache_key(
+        "triage/v2", "test-model", replace(_CACHE_INPUT, context_digest="1" * 64)
+    )
+
+    assert len({without_ctx, with_ctx, changed_ctx}) == 3
+
+
+def test_web_context_digest_tracks_context_changes_and_ignores_redacted_headers() -> None:
+    base = WebContext(
+        host="admin.acme.example",
+        host_hints=("admin",),
+        status_code=200,
+        title="Admin Console",
+        headers={"server": "Apache/2.4.49"},
+        technologies=(WebTechnology("Apache HTTP Server", "2.4.49"),),
+        other_findings=(
+            RelatedFinding("web.components.known_vulnerable", "Vulnerable", Severity.CRITICAL),
+        ),
+    )
+    same_with_cookie = WebContext(
+        host="admin.acme.example",
+        host_hints=("admin",),
+        status_code=200,
+        title="Admin Console",
+        headers={"server": "Apache/2.4.49", "set-cookie": "sid=xyz", "authorization": "Bearer a"},
+        technologies=(WebTechnology("Apache HTTP Server", "2.4.49"),),
+        other_findings=(
+            RelatedFinding("web.components.known_vulnerable", "Vulnerable", Severity.CRITICAL),
+        ),
+    )
+    with_admin = WebContext(
+        host="admin.acme.example",
+        host_hints=("admin",),
+        status_code=200,
+        title="Admin Console",
+        headers={"server": "Apache/2.4.49"},
+        technologies=(WebTechnology("Apache HTTP Server", "2.4.49"),),
+        other_findings=(
+            RelatedFinding("web.components.known_vulnerable", "Vulnerable", Severity.CRITICAL),
+            RelatedFinding("web.exposure.admin_panel", "Admin panel", Severity.INFO, "/admin"),
+        ),
+    )
+    with_new_title = WebContext(
+        host="admin.acme.example",
+        host_hints=("admin",),
+        status_code=200,
+        title="Updated Title",
+        headers={"server": "Apache/2.4.49"},
+        technologies=(WebTechnology("Apache HTTP Server", "2.4.49"),),
+        other_findings=base.other_findings,
+    )
+
+    assert web_context_digest(base) == web_context_digest(same_with_cookie)
+    assert web_context_digest(base) != web_context_digest(with_admin)
+    assert web_context_digest(base) != web_context_digest(with_new_title)

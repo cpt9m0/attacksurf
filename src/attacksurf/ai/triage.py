@@ -40,6 +40,7 @@ WEB_EXCERPT_MAX_LENGTH = 500
 MAX_WEB_CONTEXT_HEADERS = 15
 MAX_WEB_CONTEXT_TECHNOLOGIES = 25
 MAX_OTHER_FINDINGS = 25
+MAX_WEB_CONTEXT_DIGEST_FINDINGS = MAX_FINDINGS_PER_BATCH + MAX_OTHER_FINDINGS
 MAX_HOST_HINTS = 8
 REDACTED_HEADER_NAMES = frozenset({"authorization", "proxy-authorization", "cookie", "set-cookie"})
 _TITLE_KEYS = frozenset({"title", "page_title"})
@@ -240,29 +241,31 @@ class TriageCacheInput:
     confidence: Confidence
     title: str
     description: str
+    context_digest: str | None = None
 
 
 def triage_cache_key(prompt_version: str, model: str, finding: TriageCacheInput) -> str:
     """SHA-256 hex naming one judgment: a finding is triaged again only when a part changes.
 
     Same scheme as `finding_fingerprint`: a JSON array keeps the parts unambiguous, and the
-    version prefix lets the scheme change without colliding with stored keys.
+    version prefix lets the scheme change without colliding with stored keys. When
+    `finding.context_digest` is None (non-URL assets or legacy `triage/v1`), the 9-element
+    payload stays byte-for-byte unchanged.
     """
-    payload = json.dumps(
-        [
-            _CACHE_KEY_VERSION,
-            prompt_version,
-            model,
-            finding.fingerprint,
-            finding.evidence_digest,
-            finding.severity,
-            finding.confidence,
-            finding.title,
-            finding.description,
-        ],
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+    parts: list[Any] = [
+        _CACHE_KEY_VERSION,
+        prompt_version,
+        model,
+        finding.fingerprint,
+        finding.evidence_digest,
+        finding.severity,
+        finding.confidence,
+        finding.title,
+        finding.description,
+    ]
+    if finding.context_digest is not None:
+        parts.append(finding.context_digest)
+    payload = json.dumps(parts, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
@@ -306,7 +309,16 @@ def _sanitize_evidence_data(value: Any, *, key: str | None = None) -> Any:
     return value
 
 
-def _web_context_payload(ctx: WebContext) -> dict[str, Any]:
+def web_context_digest(ctx: WebContext) -> str:
+    """Stable SHA-256 hex summarizing a URL's normalized website context for cache keys."""
+    normalized = _web_context_payload(ctx, max_other_findings=MAX_WEB_CONTEXT_DIGEST_FINDINGS)
+    encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _web_context_payload(
+    ctx: WebContext, *, max_other_findings: int = MAX_OTHER_FINDINGS
+) -> dict[str, Any]:
     headers: dict[str, str] = {}
     for raw_k, raw_v in ctx.headers.items():
         if raw_k.strip().lower() in REDACTED_HEADER_NAMES:
@@ -346,7 +358,7 @@ def _web_context_payload(ctx: WebContext) -> dict[str, Any]:
             "severity": other.severity,
             **({"location": cap(other.location, 256)} if other.location else {}),
         }
-        for other in ctx.other_findings[:MAX_OTHER_FINDINGS]
+        for other in ctx.other_findings[:max_other_findings]
     ]
     return payload
 

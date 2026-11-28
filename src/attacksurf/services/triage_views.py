@@ -21,6 +21,7 @@ from attacksurf.services.triage import (
     TRIAGE_STAGES,
     stored_triage,
     triage_is_stale,
+    url_context_digests,
 )
 
 TRIAGE_ROW_LIMIT = 100
@@ -164,6 +165,7 @@ def _judged_rows(session: Session, org_id: UUID, scan_id: UUID) -> list[TriageRo
         .join(Asset, (Asset.id == Finding.asset_id) & (Asset.org_id == Finding.org_id))
         .where(FindingObservation.scan_id == scan_id, Finding.ai_triage.is_not(None))
     ).all()
+    digests = url_context_digests(session, org_id, [finding.asset_id for finding, _ in results])
     rows = [
         TriageRow(
             finding_id=finding.id,
@@ -172,7 +174,7 @@ def _judged_rows(session: Session, org_id: UUID, scan_id: UUID) -> list[TriageRo
             location=finding.location,
             severity=finding.severity,
             triage=triage,
-            stale=triage_is_stale(finding, triage),
+            stale=triage_is_stale(finding, triage, context_digest=digests.get(finding.asset_id)),
         )
         for finding, asset_value in results
         if (triage := stored_triage(finding)) is not None

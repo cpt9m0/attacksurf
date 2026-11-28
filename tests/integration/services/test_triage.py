@@ -15,6 +15,7 @@ from attacksurf.domain.findings import Confidence, EvidenceKind, FindingStatus, 
 from attacksurf.domain.llm import KeySource, LLMConfig, ProviderKind
 from attacksurf.infra.db.models import Asset, Evidence, Finding, FindingObservation, Scan
 from attacksurf.services.assets import record_asset
+from attacksurf.services.finding_views import get_finding_detail
 from attacksurf.services.triage import (
     assets_to_triage,
     build_asset_batch,
@@ -22,7 +23,9 @@ from attacksurf.services.triage import (
     store_triage,
     stored_triage,
     triage_is_stale,
+    url_context_digests,
 )
+from attacksurf.services.triage_views import get_scan_triage
 from tests.integration.factories import T0, make_finding, make_scan
 
 MODEL = "muse-spark-1.3"
@@ -76,11 +79,12 @@ def _judgment(ref: str = "F1") -> FindingTriage:
 
 
 def _judge(session: Session, finding: Finding, model: str = MODEL) -> None:
+    digest = url_context_digests(session, finding.org_id, [finding.asset_id]).get(finding.asset_id)
     finding.ai_triage = StoredTriage.from_judgment(
         _judgment(),
         prompt_version=TRIAGE_PROMPT_VERSION,
         config=_config(model),
-        cache_key=finding_cache_key(finding, model),
+        cache_key=finding_cache_key(finding, model, context_digest=digest),
         triaged_at=NOW,
     ).model_dump(mode="json")
     session.flush()
@@ -545,3 +549,116 @@ def test_triage_v1_judgment_stays_not_stale_while_v2_reschedules(db_session: Ses
     assert stored is not None
     assert not triage_is_stale(finding, stored)
     assert _rules(db_session, scan, scan.root_asset_id) == [finding.rule_id]
+
+
+def test_url_triage_cache_invalidates_when_sibling_finding_is_added_or_fixed(
+    db_session: Session,
+) -> None:
+    scan = make_scan(db_session)
+    url = record_asset(
+        db_session,
+        scan.org_id,
+        AssetType.URL,
+        "https://admin.acme.example/",
+        source=AssetSource.DISCOVERED,
+        parent_id=scan.root_asset_id,
+    )
+    url.details = {
+        "web": {"status_code": 200, "title": "Admin Console", "headers": {"server": "Apache"}},
+        "technologies": [{"name": "Apache HTTP Server", "version": "2.4.49"}],
+    }
+    db_session.flush()
+    vuln = _observed(
+        db_session,
+        scan,
+        url.id,
+        rule_id="web.components.known_vulnerable",
+        title="Web component matches known vulnerabilities",
+        severity=Severity.CRITICAL,
+        location="apache http server",
+    )
+
+    first = build_asset_batch(
+        db_session, scan.org_id, scan.id, url.id, model=MODEL, include_info=False
+    )
+    assert first is not None
+    store_triage(
+        db_session, scan.org_id, first, {"F1": _judgment()}, config=_config(), triaged_at=NOW
+    )
+    db_session.flush()
+
+    assert _assets(db_session, scan) == []
+    assert get_finding_detail(db_session, scan.org_id, vuln.id).ai_triage_stale is False
+    assert get_scan_triage(db_session, scan.org_id, scan.id).rows[0].stale is False
+
+    # Adding a sibling admin-panel finding must invalidate the URL component's cache and stale view.
+    admin_panel = _observed(
+        db_session,
+        scan,
+        url.id,
+        rule_id="web.exposure.admin_panel",
+        title="Publicly reachable administrative or login interface",
+        severity=Severity.INFO,
+        location="/admin",
+    )
+    digests = url_context_digests(db_session, scan.org_id, [url.id])
+    stored = stored_triage(vuln)
+    assert stored is not None
+    assert triage_is_stale(vuln, stored, context_digest=digests[url.id]) is True
+    assert get_finding_detail(db_session, scan.org_id, vuln.id).ai_triage_stale is True
+    assert get_scan_triage(db_session, scan.org_id, scan.id).rows[0].stale is True
+
+    second = build_asset_batch(
+        db_session, scan.org_id, scan.id, url.id, model=MODEL, include_info=False
+    )
+    assert second is not None
+    assert second.batch.web_context is not None
+    assert [other.rule_id for other in second.batch.web_context.other_findings] == [
+        "web.exposure.admin_panel"
+    ]
+    store_triage(
+        db_session, scan.org_id, second, {"F1": _judgment()}, config=_config(), triaged_at=NOW
+    )
+    db_session.flush()
+    assert _assets(db_session, scan) == []
+
+    # Resolving the sibling admin-panel finding must likewise invalidate the cached judgment.
+    admin_panel.status = FindingStatus.FIXED
+    admin_panel.fixed_at = NOW
+    db_session.flush()
+    digests_after_fix = url_context_digests(db_session, scan.org_id, [url.id])
+    stored_after = stored_triage(vuln)
+    assert stored_after is not None
+    assert triage_is_stale(vuln, stored_after, context_digest=digests_after_fix[url.id]) is True
+
+    third = build_asset_batch(
+        db_session, scan.org_id, scan.id, url.id, model=MODEL, include_info=False
+    )
+    assert third is not None
+    assert third.batch.web_context is not None
+    assert third.batch.web_context.other_findings == ()
+
+    # Historical triage/v1 judgments on URLs are never marked stale by context_digest alone.
+    v1_key = triage_cache_key(
+        "triage/v1",
+        MODEL,
+        TriageCacheInput(
+            fingerprint=vuln.fingerprint,
+            evidence_digest=vuln.evidence_digest,
+            severity=vuln.severity,
+            confidence=vuln.confidence,
+            title=vuln.title,
+            description=vuln.description,
+        ),
+    )
+    vuln.ai_triage = StoredTriage.from_judgment(
+        _judgment(),
+        prompt_version="triage/v1",
+        config=_config(),
+        cache_key=v1_key,
+        triaged_at=NOW,
+    ).model_dump(mode="json")
+    db_session.flush()
+    stored_v1 = stored_triage(vuln)
+    assert stored_v1 is not None
+    assert triage_is_stale(vuln, stored_v1, context_digest=digests_after_fix[url.id]) is False

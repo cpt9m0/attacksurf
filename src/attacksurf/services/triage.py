@@ -23,6 +23,7 @@ from attacksurf.ai.schemas import MAX_FINDINGS_PER_BATCH, FindingTriage, StoredT
 from attacksurf.ai.triage import (
     EVIDENCE_ITEMS_PER_FINDING,
     MAX_OTHER_FINDINGS,
+    MAX_WEB_CONTEXT_DIGEST_FINDINGS,
     MAX_WEB_CONTEXT_HEADERS,
     MAX_WEB_CONTEXT_TECHNOLOGIES,
     REDACTED_HEADER_NAMES,
@@ -39,6 +40,7 @@ from attacksurf.ai.triage import (
     match_results,
     triage_batch,
     triage_cache_key,
+    web_context_digest,
 )
 from attacksurf.config import Settings
 from attacksurf.domain.assets import AssetType
@@ -273,11 +275,29 @@ def build_asset_batch(
         return None
     evidence = _latest_evidence(session, org_id, [finding.id for finding in findings])
     refs = [f"F{index}" for index in range(1, len(findings) + 1)]
-    web_context = (
-        _web_context(session, org_id, asset, batch_finding_ids={finding.id for finding in findings})
-        if asset.type is AssetType.URL
-        else None
-    )
+    if asset.type is AssetType.URL:
+        active_findings = session.scalars(
+            scoped(Finding, org_id).where(
+                Finding.asset_id == asset.id,
+                Finding.status.in_(ACTIVE_STATUSES),
+            )
+        ).all()
+        web_context = _web_context_from_rows(
+            asset,
+            active_findings,
+            exclude_ids={finding.id for finding in findings},
+        )
+        context_digest: str | None = web_context_digest(
+            _web_context_from_rows(
+                asset,
+                active_findings,
+                exclude_ids=set(),
+                max_other_findings=MAX_WEB_CONTEXT_DIGEST_FINDINGS,
+            )
+        )
+    else:
+        web_context = None
+        context_digest = None
     batch = TriageBatch(
         asset_value=asset.value,
         asset_type=asset.type,
@@ -301,7 +321,7 @@ def build_asset_batch(
         batch=batch,
         finding_ids={ref: finding.id for ref, finding in zip(refs, findings, strict=True)},
         cache_keys={
-            ref: finding_cache_key(finding, model)
+            ref: finding_cache_key(finding, model, context_digest=context_digest)
             for ref, finding in zip(refs, findings, strict=True)
         },
     )
@@ -420,39 +440,55 @@ def _untriaged(
         query = query.where(Finding.severity != Severity.INFO)
     if asset_id is not None:
         query = query.where(Finding.asset_id == asset_id)
-    findings = [finding for finding in session.scalars(query) if not _is_current(finding, model)]
+    candidates = session.scalars(query).all()
+    digests = url_context_digests(session, org_id, [finding.asset_id for finding in candidates])
+    findings = [
+        finding
+        for finding in candidates
+        if not _is_current(finding, model, context_digest=digests.get(finding.asset_id))
+    ]
     return sorted(
         findings,
         key=lambda finding: (finding.asset_id, -SEVERITY_RANK[finding.severity], finding.id),
     )
 
 
-def _is_current(finding: Finding, model: str) -> bool:
+def _is_current(finding: Finding, model: str, *, context_digest: str | None = None) -> bool:
     stored = stored_triage(finding)
-    return stored is not None and stored.cache_key == finding_cache_key(finding, model)
+    return stored is not None and stored.cache_key == finding_cache_key(
+        finding, model, context_digest=context_digest
+    )
 
 
-def finding_cache_key(finding: Finding, model: str) -> str:
+def finding_cache_key(finding: Finding, model: str, *, context_digest: str | None = None) -> str:
     """The cache key a judgment of `finding` by `model` with the current prompt answers.
 
-    Read from the finding's own columns, so checking the cache needs no evidence query.
+    Read from the finding's own columns (plus optional normalized URL context digest).
     """
-    return triage_cache_key(TRIAGE_PROMPT_VERSION, model, _cache_input(finding))
+    return triage_cache_key(
+        TRIAGE_PROMPT_VERSION, model, _cache_input(finding, context_digest=context_digest)
+    )
 
 
-def triage_is_stale(finding: Finding, stored: StoredTriage) -> bool:
-    """Whether `finding` changed since `stored` judged it (severity, confidence, text, evidence).
+def triage_is_stale(
+    finding: Finding, stored: StoredTriage, *, context_digest: str | None = None
+) -> bool:
+    """Whether `finding` (or its URL website context) changed since `stored` judged it.
 
     The key is rebuilt with the judgment's own prompt version and model: a newer prompt or
-    model schedules a new judgment but doesn't make this one wrong about the finding. A stale
-    judgment is shown marked as outdated until a new run replaces it, since that run may be
-    skipped or fail.
+    model schedules a new judgment but doesn't make this one wrong about the finding. Historical
+    `triage/v1` judgments did not incorporate `web_context`, so `context_digest` is ignored for
+    `triage/v1`. A stale judgment is shown marked as outdated until a new run replaces it, since
+    that run may be skipped or fail.
     """
-    current = triage_cache_key(stored.prompt_version, stored.model, _cache_input(finding))
+    effective_digest = None if stored.prompt_version == "triage/v1" else context_digest
+    current = triage_cache_key(
+        stored.prompt_version, stored.model, _cache_input(finding, context_digest=effective_digest)
+    )
     return stored.cache_key != current
 
 
-def _cache_input(finding: Finding) -> TriageCacheInput:
+def _cache_input(finding: Finding, *, context_digest: str | None = None) -> TriageCacheInput:
     return TriageCacheInput(
         fingerprint=finding.fingerprint,
         evidence_digest=finding.evidence_digest,
@@ -460,6 +496,7 @@ def _cache_input(finding: Finding) -> TriageCacheInput:
         confidence=finding.confidence,
         title=finding.title,
         description=finding.description,
+        context_digest=context_digest,
     )
 
 
@@ -518,12 +555,50 @@ def _extract_technologies(raw_techs: object) -> tuple[WebTechnology, ...]:
     return tuple(techs)
 
 
-def _web_context(
-    session: Session,
-    org_id: UUID,
+def url_context_digests(
+    session: Session, org_id: UUID, asset_ids: Sequence[UUID]
+) -> dict[UUID, str]:
+    """Return normalized ``web_context_digest`` per active URL asset in ``asset_ids``.
+
+    Returns empty immediately when none of the referenced assets are ``AssetType.URL`` so
+    domain/subdomain lookups pay zero extra sibling queries.
+    """
+    unique_ids = tuple(dict.fromkeys(asset_ids))
+    if not unique_ids:
+        return {}
+    url_assets = session.scalars(
+        scoped(Asset, org_id).where(Asset.id.in_(unique_ids), Asset.type == AssetType.URL)
+    ).all()
+    if not url_assets:
+        return {}
+    active = session.scalars(
+        scoped(Finding, org_id).where(
+            Finding.asset_id.in_([asset.id for asset in url_assets]),
+            Finding.status.in_(ACTIVE_STATUSES),
+        )
+    ).all()
+    by_asset: defaultdict[UUID, list[Finding]] = defaultdict(list)
+    for finding in active:
+        by_asset[finding.asset_id].append(finding)
+    return {
+        asset.id: web_context_digest(
+            _web_context_from_rows(
+                asset,
+                by_asset[asset.id],
+                exclude_ids=set(),
+                max_other_findings=MAX_WEB_CONTEXT_DIGEST_FINDINGS,
+            )
+        )
+        for asset in url_assets
+    }
+
+
+def _web_context_from_rows(
     asset: Asset,
+    active_findings: Sequence[Finding],
     *,
-    batch_finding_ids: set[UUID],
+    exclude_ids: set[UUID],
+    max_other_findings: int = MAX_OTHER_FINDINGS,
 ) -> WebContext:
     host = (urlsplit(asset.value).hostname or "").rstrip(".").lower()
     details = asset.details if isinstance(asset.details, Mapping) else {}
@@ -541,16 +616,10 @@ def _web_context(
     headers = _select_web_headers(web.get("headers"))
     technologies = _extract_technologies(details.get("technologies"))
 
-    siblings = session.scalars(
-        scoped(Finding, org_id).where(
-            Finding.asset_id == asset.id,
-            Finding.status.in_(ACTIVE_STATUSES),
-        )
-    ).all()
     other = sorted(
-        (finding for finding in siblings if finding.id not in batch_finding_ids),
-        key=lambda f: (-SEVERITY_RANK[f.severity], f.rule_id, f.location, f.id),
-    )[:MAX_OTHER_FINDINGS]
+        (finding for finding in active_findings if finding.id not in exclude_ids),
+        key=lambda f: (-SEVERITY_RANK[f.severity], f.rule_id, f.location, f.title, f.id),
+    )[:max_other_findings]
     return WebContext(
         host=host,
         host_hints=extract_host_hints(host),
