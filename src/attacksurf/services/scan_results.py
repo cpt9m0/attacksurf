@@ -369,8 +369,9 @@ def _apply_observations(
 def _observe(row: Asset, observation: AssetObservation, seen: datetime, scan_id: UUID) -> None:
     """Merge details and apply a lifecycle claim without moving state backwards.
 
-    A scanner may deactivate only a discovered asset: roots are user-owned and stay active even
-    when their DNS no longer resolves. Details are only replaced by an observation at least as
+    A scanner may deactivate only a discovered asset (`source == AssetSource.DISCOVERED`):
+    user-added domains and user-added URLs stay active even when probes fail or DNS no longer
+    resolves. Details are only replaced by an observation at least as
     new as the stored one, so a delayed older result cannot erase newer records; lifecycle has
     its own monotonic checks below. The scan that deactivated the asset is recorded, so an
     overlapping scan's diff never claims it (ADR 0027).
@@ -392,7 +393,7 @@ def _observe(row: Asset, observation: AssetObservation, seen: datetime, scan_id:
             row.deactivated_at = None
             row.deactivated_by_scan_id = None
         return
-    if row.parent_id is not None and seen >= row.last_seen:
+    if row.source == AssetSource.DISCOVERED and row.parent_id is not None and seen >= row.last_seen:
         # Advance even when already inactive: a later negative observation must outrank a
         # delayed positive one that would otherwise pass the reactivation check.
         if row.deactivated_at is None or seen > row.deactivated_at:

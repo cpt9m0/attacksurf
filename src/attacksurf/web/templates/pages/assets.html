@@ -10,12 +10,16 @@
   <h1>Assets</h1>
 </div>
 
-  {%- set initial_tab = "repo" if archive_error else ("binary" if binary_error else "domain") %}
+  {%- set initial_tab = "url" if url_error else ("repo" if archive_error else ("binary" if binary_error else "domain")) %}
   <section class="card" aria-label="Add or upload an asset" x-data="assetIntake" data-initial-tab="{{ initial_tab }}">
     <div class="intake-tabs" role="tablist" aria-label="Asset intake method">
       <button type="button" class="intake-tab" role="tab" id="tab-add-domain" aria-controls="panel-add-domain"
         aria-selected="true" :aria-selected="domainSelected" @click="selectDomain">
         Add a domain
+      </button>
+      <button type="button" class="intake-tab" role="tab" id="tab-add-url" aria-controls="panel-add-url"
+        aria-selected="false" :aria-selected="urlSelected" @click="selectUrl">
+        Add a URL
       </button>
       <button type="button" class="intake-tab" role="tab" id="tab-upload-repo" aria-controls="panel-upload-repo"
         aria-selected="false" :aria-selected="repoSelected" @click="selectRepo">
@@ -30,6 +34,11 @@
       :hidden="domainHidden">
       <h2 class="visually-hidden" id="add-domain-title">Add a domain</h2>
       {% include "pages/_add_domain_form.html" %}
+    </div>
+    <div class="card-body intake-panel" id="panel-add-url" role="tabpanel" aria-labelledby="tab-add-url"
+      :hidden="urlHidden">
+      <h2 class="visually-hidden" id="add-url-title">Add a URL</h2>
+      {% include "pages/_add_url_form.html" %}
     </div>
     <div class="card-body intake-panel" id="panel-upload-repo" role="tabpanel" aria-labelledby="tab-upload-repo"
       :hidden="repoHidden">
@@ -58,6 +67,7 @@
     </div>
     {{ select_field("type", "Type", type_options, flt.type or "") }}
     {{ select_field("root", "Root domain", root_options, flt.root_id or "") }}
+    {{ select_field("tech", "Technology", tech_options, flt.tech or "") }}
     {{ form_field("tag", "Tag", value=flt.tag or "", required=false, autocomplete="off") }}
     {{ select_field("status", "Status", status_options, flt.status) }}
     <button type="submit" class="btn btn-secondary">Apply</button>

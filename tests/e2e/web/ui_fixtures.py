@@ -50,6 +50,7 @@ SUBDOMAIN_ID = UUID("01934e10-0000-7000-8000-000000000003")
 IP_ID = UUID("01934e10-0000-7000-8000-000000000004")
 REPO_ID = UUID("01934e10-0000-7000-8000-000000000005")
 BINARY_ID = UUID("01934e10-0000-7000-8000-000000000006")
+URL_ID = UUID("01934e10-0000-7000-8000-000000000007")
 
 SCAN_RUNNING_ID = UUID("01934e20-0000-7000-8000-000000000001")
 SCAN_DONE_ID = UUID("01934e20-0000-7000-8000-000000000002")
@@ -271,9 +272,32 @@ def patch_populated_ui(*, export_warning: bool = False) -> Iterator[None]:  # no
         max_severity=None,
         verification=OwnershipState.NONE,
     )
+    url_asset = asset_views.AssetRow(
+        id=URL_ID,
+        type=AssetType.URL,
+        value="https://checkout-edge-us-east-1.acme-payments.example.com/",
+        source=AssetSource.DISCOVERED,
+        root_id=ROOT_ID,
+        root_value=root_asset.value,
+        tags=("web",),
+        first_seen=three_days_ago,
+        last_seen=two_hours_ago,
+        is_active=True,
+        open_findings=2,
+        max_severity=Severity.HIGH,
+        verification=OwnershipState.VERIFIED,
+    )
     assets_by_id = {
         a.id: a
-        for a in (root_asset, root_2_asset, subdomain_asset, ip_asset, repo_asset, binary_asset)
+        for a in (
+            root_asset,
+            root_2_asset,
+            subdomain_asset,
+            ip_asset,
+            repo_asset,
+            binary_asset,
+            url_asset,
+        )
     }
 
     finding_rows = (
@@ -552,6 +576,72 @@ def patch_populated_ui(*, export_warning: bool = False) -> Iterator[None]:  # no
         _session: object, _org_id: UUID, asset_id: UUID
     ) -> asset_views.AssetDetail:
         asset = assets_by_id.get(asset_id, root_asset)
+        if asset.id == URL_ID:
+            return asset_views.AssetDetail(
+                asset=url_asset,
+                outgoing=(),
+                incoming=(
+                    asset_views.RelationRow(
+                        kind=RelationKind.SERVES,
+                        peer_id=SUBDOMAIN_ID,
+                        peer_type=AssetType.SUBDOMAIN,
+                        peer_value=subdomain_asset.value,
+                        first_seen=three_days_ago,
+                        last_seen=two_hours_ago,
+                    ),
+                ),
+                discovered=0,
+                web=asset_views.WebDetails(
+                    status_code=200,
+                    title="Acme Checkout Portal",
+                    final_url="https://checkout-edge-us-east-1.acme-payments.example.com/",
+                    content_type="text/html; charset=utf-8",
+                    redirect_chain=(
+                        asset_views.RedirectHop(
+                            url="http://checkout-edge-us-east-1.acme-payments.example.com/",
+                            status=301,
+                        ),
+                    ),
+                    redirect_stopped_out_of_scope=False,
+                ),
+                technologies=(
+                    asset_views.TechnologyView(
+                        name="Nginx",
+                        version="1.26.2",
+                        categories=("Web servers",),
+                        confidence=100,
+                    ),
+                    asset_views.TechnologyView(
+                        name="WordPress",
+                        version="6.5.2",
+                        categories=("CMS", "Blogs"),
+                        confidence=100,
+                    ),
+                ),
+                tls=asset_views.TlsDetails(
+                    protocol="TLSv1.3",
+                    cipher="TLS_AES_256_GCM_SHA384",
+                    issuer="CN=R10,O=Let's Encrypt,C=US",
+                    subject="CN=checkout-edge-us-east-1.acme-payments.example.com",
+                    not_before="2026-10-01T00:00:00+00:00",
+                    not_after="2027-01-01T00:00:00+00:00",
+                    trusted_chain=True,
+                    hostname_matches=True,
+                    error_code=None,
+                    key_type="EC",
+                    key_size=256,
+                    legacy_protocols_accepted=(),
+                ),
+                security_headers=(
+                    asset_views.HeaderCheckRow("hsts", "HSTS", True),
+                    asset_views.HeaderCheckRow("csp", "Content-Security-Policy", False),
+                    asset_views.HeaderCheckRow(
+                        "clickjacking_protected", "Clickjacking protection", True
+                    ),
+                    asset_views.HeaderCheckRow("nosniff", "X-Content-Type-Options", True),
+                    asset_views.HeaderCheckRow("redirects_to_https", "HTTPS redirect", True),
+                ),
+            )
         if asset.id == SUBDOMAIN_ID:
             return asset_views.AssetDetail(
                 asset=subdomain_asset,
@@ -1134,6 +1224,11 @@ def patch_populated_ui(*, export_warning: bool = False) -> Iterator[None]:  # no
                     asset_views.RootOption(id=ROOT_ID, value=root_asset.value, is_active=True),
                     asset_views.RootOption(id=ROOT_2_ID, value=root_2_asset.value, is_active=False),
                 ),
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                asset_views, "list_technologies", lambda *_a, **_kw: ("Nginx", "WordPress")
             )
         )
         stack.enter_context(

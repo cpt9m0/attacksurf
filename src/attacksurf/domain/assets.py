@@ -69,6 +69,10 @@ class DomainAlreadyAdded(AssetError):
     """The org already has this domain as an active root."""
 
 
+class UrlAlreadyAdded(AssetError):
+    """The org already has this URL as an active user-added asset."""
+
+
 def normalize_asset_value(asset_type: AssetType, raw: str) -> str:
     """Canonical form used for storage and the `(org_id, type, value)` uniqueness."""
     match asset_type:

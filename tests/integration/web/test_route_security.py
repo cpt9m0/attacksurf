@@ -79,6 +79,7 @@ ROUTE_MATRIX: tuple[RouteSpec, ...] = (
     RouteSpec("ui.ai_test_status", "GET", "member", "collection"),
     # UI POSTs (member-accessible)
     RouteSpec("ui.add_domain", "POST", "member"),
+    RouteSpec("ui.add_url", "POST", "member"),
     RouteSpec("ui.upload_repo", "POST", "member"),
     RouteSpec("ui.upload_binary", "POST", "member"),
     RouteSpec("ui.create_scan", "POST", "member", "scan_create"),
@@ -215,6 +216,7 @@ def _url_for_spec(spec: RouteSpec, ids: SeededOrg) -> str:
         "ui.dashboard": "/",
         "ui.assets": "/assets",
         "ui.add_domain": "/assets",
+        "ui.add_url": "/assets/url",
         "ui.upload_repo": "/assets/upload",
         "ui.upload_binary": "/assets/upload-binary",
         "ui.asset_detail": f"/assets/{ids.root_id}",
@@ -279,6 +281,7 @@ def _payload_for_post(spec: RouteSpec, ids: SeededOrg, *, csrf: str | None) -> d
         "auth.login": {"email": "nobody@example.com", "password": "wrong"},
         "auth.signup": {"email": "new-user@example.com", "password": "correct horse battery"},
         "ui.add_domain": {"value": "extra.example.com"},
+        "ui.add_url": {"url": "https://extra.example.com/"},
         "ui.create_scan": {"root_asset_id": str(ids.root_id), "profile": "dns_passive"},
         "ui.change_finding_status": {"status": "false_positive", "comment": "audited"},
         "ui.bulk_change_finding_status": {

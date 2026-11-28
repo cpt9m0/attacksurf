@@ -9,22 +9,26 @@ from attacksurf.domain.assets import MAX_HOSTNAME_LENGTH, AssetType
 from attacksurf.services.asset_views import AssetFilter, AssetStatus
 
 MAX_TAG_LENGTH = 50  # the `assets.tags` element size
+MAX_TECH_LENGTH = 64
 
 
 def parse_asset_filter(args: MultiDict[str, str]) -> tuple[AssetFilter, int]:
-    """`(filter, page)` from `type`, `root`, `tag`, `q`, `status`, `page`; 400 on bad values.
-
-    Empty values mean "no filter", so a submitted filter form with blank fields works.
-    """
+    """`(filter, page)` from `type`, `root`, `tag`, `tech`, `q`, `status`, `page`."""
     tag = args.get("tag", "").strip() or None
+    tech = args.get("tech", "").strip() or None
     q = args.get("q", "").strip() or None
-    if (tag and len(tag) > MAX_TAG_LENGTH) or (q and len(q) > MAX_HOSTNAME_LENGTH):
+    if (
+        (tag and len(tag) > MAX_TAG_LENGTH)
+        or (tech and len(tech) > MAX_TECH_LENGTH)
+        or (q and len(q) > MAX_HOSTNAME_LENGTH)
+    ):
         abort(400)
     try:
         flt = AssetFilter(
             type=AssetType(raw) if (raw := args.get("type")) else None,
             root_id=UUID(raw) if (raw := args.get("root")) else None,
             tag=tag,
+            tech=tech,
             q=q,
             status=AssetStatus(args.get("status") or AssetStatus.ACTIVE),
         )

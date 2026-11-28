@@ -21,6 +21,7 @@ from tests.e2e.web.ui_fixtures import (
     FINDING_1_ID,
     ROOT_ID,
     SCAN_DONE_ID,
+    URL_ID,
     patch_populated_ui,
 )
 
@@ -162,6 +163,7 @@ POPULATED_PATHS = (
     "/assets",
     f"/assets/{ROOT_ID}",
     f"/assets/{ROOT_ID}?tab=findings",
+    f"/assets/{URL_ID}",
     "/scans",
     f"/scans/{SCAN_DONE_ID}",
     "/findings",
@@ -242,3 +244,25 @@ def test_finding_detail_copy_button_copies_evidence_body(shell: Shell) -> None:
     expect(copy_btn).to_have_attribute("aria-pressed", "true")
     expect(copy_btn).to_have_text("Copied")
     assert page.evaluate("() => window.__copiedText") == expected
+
+
+def test_url_asset_detail_and_add_url_tab_render_website_panels(shell: Shell) -> None:
+    with patch_populated_ui():
+        assets_page = shell("/assets", "light", width=WIDE_WIDTH)
+        url_tab = assets_page.locator("#tab-add-url")
+        url_tab.click()
+        expect(url_tab).to_have_attribute("aria-selected", "true")
+        expect(assets_page.locator("#panel-add-url")).to_be_visible()
+
+        detail_page = shell(f"/assets/{URL_ID}", "light", width=WIDE_WIDTH)
+        body_text = detail_page.locator("main").inner_text()
+        assert "Acme Checkout Portal" in body_text
+        assert "200" in body_text
+        assert "Nginx" in body_text
+        assert "1.26.2" in body_text
+        assert "WordPress" in body_text
+        assert "TLSv1.3" in body_text
+        assert "Let's Encrypt" in body_text
+        assert "Content-Security-Policy" in body_text
+        assert detail_page.locator(".header-tile .pill-good").count() == 4
+        assert detail_page.locator(".header-tile .pill-bad").count() == 1

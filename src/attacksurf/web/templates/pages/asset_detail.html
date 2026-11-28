@@ -1,5 +1,5 @@
 {% extends "layouts/fragment.html" if is_htmx else "layouts/base.html" %}
-{% from "components/badges.html" import severity_badge, status_pill %}
+{% from "components/badges.html" import check_pill, severity_badge, status_pill %}
 {% from "components/confirm.html" import confirm_dialog %}
 {% from "components/form.html" import csrf_field, select_field %}
 {% from "components/table.html" import data_table %}
@@ -116,6 +116,138 @@ hx-sync makes a second click abort the first request instead of racing it. #}
   {#- Only roots hold a proof; on a subdomain this shows the root's proof, read-only. -#}
   {%- if asset.type in ("domain", "subdomain") %}
   {{ ownership_card(view_id, proof_root_value, ownership, can_manage_ownership, checking, stalled_since) }}
+  {%- endif %}
+  {%- if asset.type == "url" and asset.verification != "verified" %}
+  <section class="card" aria-labelledby="url-verification-title">
+    <h2 class="card-title" id="url-verification-title">Active web checks paused</h2>
+    <div class="card-body">
+      <p class="muted">
+        This URL is saved as unverified, so active checks (<code>web.probe</code>, TLS, CORS, and
+        exposures) are skipped until a covering root domain is verified.
+        {%- if asset.root_id %}
+        <a href="{{ url_for('ui.asset_detail', asset_id=asset.root_id) }}">Verify {{ asset.root_value }}</a>.
+        {%- else %}
+        <a href="{{ url_for('ui.assets') }}">Add and verify its root domain</a>.
+        {%- endif %}
+      </p>
+    </div>
+  </section>
+  {%- endif %}
+  {%- if detail.web %}
+  <section class="card" aria-labelledby="url-web-title">
+    <h2 class="card-title" id="url-web-title">Web endpoint</h2>
+    <dl class="meta card-body">
+      <div>
+        <dt>HTTP status</dt>
+        <dd>
+          {%- if detail.web.status_code is not none %}
+          {%- set code_tone = "good" if 200 <= detail.web.status_code < 300 else ("active" if 300 <= detail.web.status_code < 400 else "bad") %}
+          <span class="pill pill-{{ code_tone }}">{{ detail.web.status_code }}</span>
+          {%- else %}—{% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Title</dt>
+        <dd>{{ detail.web.title or "—" }}</dd>
+      </div>
+      <div>
+        <dt>Content type</dt>
+        <dd class="mono">{{ detail.web.content_type or "—" }}</dd>
+      </div>
+      <div>
+        <dt>Final URL</dt>
+        <dd class="mono">{{ detail.web.final_url or asset.value }}</dd>
+      </div>
+    </dl>
+    {%- if detail.web.redirect_chain or detail.web.redirect_stopped_out_of_scope %}
+    <div class="card-body redirect-section">
+      <p class="redirect-label">Redirect chain</p>
+      {%- if detail.web.redirect_chain %}
+      <p class="redirect-chain mono" aria-label="HTTP redirect chain">
+        {%- for hop in detail.web.redirect_chain %}{{ hop.url }} ({{ hop.status }}) <span aria-hidden="true">→</span> {% endfor -%}
+        {{ detail.web.final_url or asset.value }}
+      </p>
+      {%- endif %}
+      {%- if detail.web.redirect_stopped_out_of_scope %}
+      <p class="muted">Redirect stopped before leaving verified scope.</p>
+      {%- endif %}
+    </div>
+    {%- endif %}
+  </section>
+  {%- endif %}
+  {%- if detail.technologies %}
+  <section class="card" aria-labelledby="url-tech-title">
+    <h2 class="card-title" id="url-tech-title">Technologies</h2>
+    <div class="card-body">
+      <ul class="tech-list">
+        {%- for tech in detail.technologies %}
+        <li class="tech-chip">
+          <a href="{{ url_for('ui.assets', tech=tech.name) }}">{{ tech.name }}</a>
+          {%- if tech.version %} <code class="mono">{{ tech.version }}</code>{% endif %}
+          {%- if tech.categories %} <span class="muted">· {{ tech.categories | join(", ") }}</span>{% endif %}
+        </li>
+        {%- endfor %}
+      </ul>
+    </div>
+  </section>
+  {%- endif %}
+  {%- if detail.tls %}
+  <section class="card" aria-labelledby="url-tls-title">
+    <h2 class="card-title" id="url-tls-title">TLS certificate &amp; protocol</h2>
+    <dl class="meta card-body">
+      <div>
+        <dt>Protocol</dt>
+        <dd class="mono">{{ detail.tls.protocol or "—" }}</dd>
+      </div>
+      <div>
+        <dt>Cipher</dt>
+        <dd class="mono">{{ detail.tls.cipher or "—" }}</dd>
+      </div>
+      <div>
+        <dt>Issuer</dt>
+        <dd class="mono">{{ detail.tls.issuer or "—" }}</dd>
+      </div>
+      <div>
+        <dt>Expires</dt>
+        <dd class="mono">{{ detail.tls.not_after or "—" }}</dd>
+      </div>
+      <div>
+        <dt>Chain trust</dt>
+        <dd>{{ check_pill(detail.tls.trusted_chain) }}</dd>
+      </div>
+      <div>
+        <dt>Hostname match</dt>
+        <dd>{{ check_pill(detail.tls.hostname_matches) }}</dd>
+      </div>
+      {%- if detail.tls.key_type %}
+      <div>
+        <dt>Public key</dt>
+        <dd class="mono">{{ detail.tls.key_type }}{% if detail.tls.key_size %} {{ detail.tls.key_size }}{% endif %}</dd>
+      </div>
+      {%- endif %}
+      {%- if detail.tls.legacy_protocols_accepted %}
+      <div>
+        <dt>Legacy protocols accepted</dt>
+        <dd class="mono">{{ detail.tls.legacy_protocols_accepted | join(", ") }}</dd>
+      </div>
+      {%- endif %}
+    </dl>
+  </section>
+  {%- endif %}
+  {%- if detail.security_headers %}
+  <section class="card" aria-labelledby="url-headers-title">
+    <h2 class="card-title" id="url-headers-title">Security headers</h2>
+    <div class="card-body">
+      <div class="header-grid">
+        {%- for item in detail.security_headers %}
+        <div class="header-tile">
+          <span class="header-tile-label">{{ item.label }}</span>
+          {{ check_pill(item.passed) }}
+        </div>
+        {%- endfor %}
+      </div>
+    </div>
+  </section>
   {%- endif %}
   {%- if show_schedule %}
   <section class="card" aria-labelledby="schedule-title">

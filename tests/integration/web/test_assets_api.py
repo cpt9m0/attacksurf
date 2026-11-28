@@ -296,3 +296,62 @@ def test_asset_detail_exposes_dns_and_ip_metadata(alice: FlaskClient, db_session
         "org": "CLOUDFLARENET",
         "country": None,
     }
+
+
+def test_api_add_url_filter_by_tech_and_tenant_isolation(
+    alice: FlaskClient, bob: FlaskClient, db_session: Session
+) -> None:
+    bad_type = _post(alice, "/api/v1/assets", {"value": "https://app.example.com/", "type": "ip"})
+    assert bad_type.status_code == 422
+
+    created = _post(
+        alice,
+        "/api/v1/assets",
+        {"value": "https://app.example.com/portal", "type": "url"},
+    )
+    assert created.status_code == 201
+    url_json = created.get_json()
+    assert url_json["type"] == "url"
+    assert url_json["verification"] == "none"
+    assert created.headers["Location"] == f"/api/v1/assets/{url_json['id']}"
+
+    dup = _post(
+        alice,
+        "/api/v1/assets",
+        {"value": "https://app.example.com/portal", "type": "url"},
+    )
+    assert dup.status_code == 409
+
+    asset = db_session.get(Asset, url_json["id"])
+    assert asset is not None
+    asset.details = {
+        "web": {
+            "status_code": 200,
+            "title": "Portal",
+            "final_url": "https://app.example.com/portal",
+        },
+        "technologies": [
+            {"name": "Nginx", "version": "1.26.2", "categories": ["Web servers"], "confidence": 100}
+        ],
+        "tls": {"protocol": "TLSv1.3", "issuer": "CN=R10", "trusted_chain": True},
+        "security_headers": {"hsts": True, "csp": False},
+    }
+    db_session.commit()
+
+    filtered = alice.get("/api/v1/assets?tech=Nginx").get_json()
+    assert filtered["total"] == 1
+    assert [item["id"] for item in filtered["items"]] == [url_json["id"]]
+
+    detail = alice.get(f"/api/v1/assets/{url_json['id']}").get_json()
+    assert detail["web"]["status_code"] == 200
+    assert detail["technologies"][0]["name"] == "Nginx"
+    assert detail["tls"]["protocol"] == "TLSv1.3"
+    assert any(row["key"] == "hsts" and row["passed"] is True for row in detail["security_headers"])
+
+    # Tenant isolation: Bob cannot read Alice's URL or filter her tech.
+    assert bob.get(f"/api/v1/assets/{url_json['id']}").status_code == 404
+    assert bob.get("/api/v1/assets?tech=Nginx").get_json()["total"] == 0
+
+    # Non-string "type" values return 422 rather than raising TypeError in set lookup.
+    assert _post(alice, "/api/v1/assets", {"value": "example.com", "type": []}).status_code == 422
+    assert _post(alice, "/api/v1/assets", {"value": "example.com", "type": {}}).status_code == 422

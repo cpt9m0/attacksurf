@@ -6,6 +6,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Website URL assets UI & API (`#80`): `add_url_asset` service (public-host + allowed-web-port
+  validation, automatic verified covering root attachment, unverified fallback), `POST /assets/url`
+  HTMX intake tab and `POST /api/v1/assets` `"type": "url"` support, `?tech=` technology filter
+  across UI/API, and URL overview panels on `/assets/<id>` (HTTP status, title, redirect chain,
+  detected technologies + versions, TLS certificate/protocol summary, and security-header pass/fail
+  grid) following `DESIGN.md`.
 - WordPress exposure and passive version-matching check (`web.wordpress`,
   `scanners/web/wordpress.py`) wired into `web_active.checks`, `app.py`, `workers/app.py`, and
   `web.probe` passive `?ver=` asset extraction (`scanners/web/fingerprint.py`): gates strictly on

@@ -7,6 +7,7 @@
 from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from sqlalchemy import case, func, null, update
@@ -20,14 +21,17 @@ from attacksurf.domain.assets import (
     DomainAlreadyAdded,
     InvalidAssetValue,
     RelationKind,
+    UrlAlreadyAdded,
     normalize_asset_value,
     normalize_hostname,
 )
 from attacksurf.domain.ids import uuid7
+from attacksurf.domain.scanners import ALLOWED_WEB_PORTS
 from attacksurf.domain.scans import ScanScheduleDefault
 from attacksurf.domain.scope import ScopeError, check_public_hostname
+from attacksurf.domain.verification import OwnershipState, ownership_state
 from attacksurf.infra import public_suffix
-from attacksurf.infra.db.models import Asset, AssetRelation
+from attacksurf.infra.db.models import Asset, AssetRelation, Verification
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services.audit import audit
 from attacksurf.services.scan_schedules import seed_schedule
@@ -57,6 +61,7 @@ def add_root_domain(
         raise DomainAlreadyAdded(f"{name} is already in your assets.")
     restored = existing is not None and not existing.is_active
     asset = record_asset(session, org_id, AssetType.DOMAIN, name, source=AssetSource.USER)
+    _attach_orphan_urls(session, org_id, asset)
     seed_schedule(
         session,
         org_id=org_id,
@@ -75,6 +80,117 @@ def add_root_domain(
     )
     session.commit()
     return asset
+
+
+def add_url_asset(
+    session: Session,
+    org_id: UUID,
+    raw: str,
+    *,
+    actor_id: UUID | None,
+) -> Asset:
+    """Register a URL asset for web inspection, attaching a covering root domain when present."""
+    normalized = normalize_asset_value(AssetType.URL, raw)
+    parts = urlsplit(normalized)
+    scheme = parts.scheme.lower()
+    port = parts.port if parts.port is not None else (443 if scheme == "https" else 80)
+    if port not in ALLOWED_WEB_PORTS:
+        allowed = ", ".join(str(p) for p in sorted(ALLOWED_WEB_PORTS))
+        raise InvalidAssetValue(f"Only standard web ports ({allowed}) are supported.")
+    host = _scannable_hostname(parts.hostname or "")
+
+    existing = session.scalars(
+        scoped(Asset, org_id).where(Asset.type == AssetType.URL, Asset.value == normalized)
+    ).one_or_none()
+    if existing is not None and existing.is_active and existing.source == AssetSource.USER:
+        raise UrlAlreadyAdded(f"{normalized} is already in your assets.")
+    restored = existing is not None and not existing.is_active
+
+    matched_root, root_verified = _covering_root_domain(session, org_id, host)
+    asset = record_asset(
+        session,
+        org_id,
+        AssetType.URL,
+        normalized,
+        source=AssetSource.USER,
+        parent_id=matched_root.id if matched_root is not None else None,
+    )
+    audit(
+        session,
+        org_id,
+        "asset.url_restored" if restored else "asset.url_added",
+        actor_id=actor_id,
+        target_type="asset",
+        target_id=str(asset.id),
+        details={
+            "value": normalized,
+            "root_id": str(matched_root.id) if matched_root is not None else None,
+            "verified": root_verified,
+        },
+    )
+    session.commit()
+    return asset
+
+
+def _attach_orphan_urls(session: Session, org_id: UUID, root: Asset) -> int:
+    """Attach active orphan user-added URLs whose hostname falls under ``root``."""
+    orphans = session.scalars(
+        scoped(Asset, org_id).where(
+            Asset.type == AssetType.URL,
+            Asset.source == AssetSource.USER,
+            Asset.parent_id.is_(None),
+            Asset.is_active.is_(True),
+        )
+    ).all()
+    attached = 0
+    for row in orphans:
+        host = (urlsplit(row.value).hostname or "").rstrip(".").lower()
+        if host == root.value or host.endswith(f".{root.value}"):
+            row.parent_id = root.id
+            attached += 1
+    return attached
+
+
+def _covering_root_domain(session: Session, org_id: UUID, host: str) -> tuple[Asset | None, bool]:
+    roots = session.scalars(
+        scoped(Asset, org_id).where(
+            Asset.type == AssetType.DOMAIN,
+            Asset.parent_id.is_(None),
+            Asset.is_active.is_(True),
+        )
+    ).all()
+    candidates = [root for root in roots if host == root.value or host.endswith(f".{root.value}")]
+    if not candidates:
+        return None, False
+    verifications = {
+        v.asset_id: v
+        for v in session.scalars(
+            scoped(Verification, org_id).where(
+                Verification.asset_id.in_([root.id for root in candidates])
+            )
+        ).all()
+    }
+    now = datetime.now(UTC)
+    ranked = sorted(
+        candidates,
+        key=lambda root: (
+            ownership_state(
+                verifications[root.id].status if root.id in verifications else None,
+                verifications[root.id].expires_at if root.id in verifications else None,
+                now,
+            )
+            is OwnershipState.VERIFIED,
+            len(root.value),
+        ),
+        reverse=True,
+    )
+    best = ranked[0]
+    best_v = verifications.get(best.id)
+    verified = (
+        best_v is not None
+        and ownership_state(best_v.status, best_v.expires_at, now) is OwnershipState.VERIFIED
+    )
+    return best, verified
 
 
 def archive_root_domain(
@@ -218,7 +334,11 @@ def record_assets(
     scan_id: UUID | None = None,
 ) -> list[Asset]:
     """Batch version of `record_asset` sharing one parent lock check and chunked upserts."""
-    if parent_id is not None and source == AssetSource.USER:
+    if (
+        parent_id is not None
+        and source == AssetSource.USER
+        and not all(asset_type is AssetType.URL for asset_type, _ in assets)
+    ):
         raise InvalidAssetValue(
             "User-added assets are roots; only discovered assets have a parent."
         )
@@ -278,8 +398,11 @@ def _asset_upsert_stmt(values: list[dict[str, Any]]) -> Any:
             "is_active": reactivate,
             "deactivated_at": case((reactivate, null()), else_=Asset.deactivated_at),
             "source": case((Asset.source == AssetSource.USER, Asset.source), else_=new.source),
-            # Never re-parented after insert, so the parent graph stays acyclic.
-            "parent_id": case((new.source == AssetSource.USER, null()), else_=Asset.parent_id),
+            # User-added domains detach (`parent_id=None`), while user-added URLs keep their
+            # covering root; discovered assets keep their existing parent.
+            "parent_id": case(
+                (new.source == AssetSource.USER, new.parent_id), else_=Asset.parent_id
+            ),
             "updated_at": func.now(),
         },
     ).returning(Asset)

@@ -1396,3 +1396,66 @@ table.data td {
         margin: 0;
         font-size: var(--text-md);
       }
+
+      /* Website URL detail panels (#80, DESIGN.md §5) */
+      .redirect-section {
+        border-top: var(--border-width) solid var(--color-border);
+      }
+
+      .redirect-label {
+        margin: 0 0 var(--space-1);
+        font-size: var(--text-xs);
+        font-weight: var(--font-weight-semibold);
+        color: var(--color-text-muted);
+      }
+
+      .redirect-chain {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .tech-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-2);
+      }
+
+      .tech-chip {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--space-1);
+        max-width: 100%;
+        padding: var(--space-1) var(--space-3);
+        border: var(--border-width) solid var(--color-border);
+        border-radius: var(--radius-md);
+        background: var(--color-surface-2);
+        font-size: var(--text-sm);
+        overflow-wrap: anywhere;
+      }
+
+      .header-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(var(--meta-column-min-width), 1fr));
+        gap: var(--space-3);
+      }
+
+      .header-tile {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-2);
+        padding: var(--space-2) var(--space-3);
+        border: var(--border-width) solid var(--color-border);
+        border-radius: var(--radius-md);
+        background: var(--color-surface-2);
+      }
+
+      .header-tile-label {
+        font-size: var(--text-sm);
+        font-weight: var(--font-weight-semibold);
+        overflow-wrap: anywhere;
+      }

@@ -63,19 +63,27 @@ document.addEventListener("alpine:init", function () {
     };
   });
 
-  // pages/assets.html: tabbed intake card ("Add a domain" | "Upload a codebase" | "Upload a binary").
-  // Without JS all three panels remain visible in the DOM.
+  // pages/assets.html: tabbed intake card ("Add a domain" | "Add a URL" | "Upload a codebase" | "Upload a binary").
+  // Without JS all panels remain visible in the DOM.
   window.Alpine.data("assetIntake", function () {
     return {
       tab: "domain",
       init: function () {
         var initial = this.$el.dataset.initialTab;
-        if (initial === "repo" || initial === "binary" || initial === "domain") {
+        if (
+          initial === "url" ||
+          initial === "repo" ||
+          initial === "binary" ||
+          initial === "domain"
+        ) {
           this.tab = initial;
         }
       },
       get domainSelected() {
         return this.tab === "domain" ? "true" : "false";
+      },
+      get urlSelected() {
+        return this.tab === "url" ? "true" : "false";
       },
       get repoSelected() {
         return this.tab === "repo" ? "true" : "false";
@@ -86,6 +94,9 @@ document.addEventListener("alpine:init", function () {
       get domainHidden() {
         return this.tab !== "domain";
       },
+      get urlHidden() {
+        return this.tab !== "url";
+      },
       get repoHidden() {
         return this.tab !== "repo";
       },
@@ -94,6 +105,9 @@ document.addEventListener("alpine:init", function () {
       },
       selectDomain: function () {
         this.tab = "domain";
+      },
+      selectUrl: function () {
+        this.tab = "url";
       },
       selectRepo: function () {
         this.tab = "repo";

@@ -47,6 +47,7 @@ from attacksurf.domain.scans import (
     ScheduleFrequency,
 )
 from attacksurf.domain.scope import ScopeError
+from attacksurf.domain.verification import OwnershipState
 from attacksurf.infra.dns import DnsPythonResolver
 from attacksurf.scanners.profiles import PROFILES
 from attacksurf.scanners.registry import registry
@@ -192,6 +193,36 @@ def add_domain() -> BaseResponse:
             )
         return _assets_page(AssetFilter(), 1, status=422, add_value=value, add_error=str(exc))
     flash(f"Added {asset.value}. Run a scan to discover what's under it.", "success")
+    return _navigate(url_for("ui.asset_detail", asset_id=asset.id))
+
+
+@bp.post("/assets/url")
+def add_url() -> BaseResponse:
+    """Register a web URL under a verified root (or as unverified until one is verified)."""
+    value = request.form.get("url", "")
+    session = get_session()
+    try:
+        asset = assets_service.add_url_asset(
+            session,
+            _org_id(),
+            value,
+            actor_id=current_user.session_user.user_id,
+        )
+    except AssetError as exc:
+        if is_htmx_request():
+            return render_page(
+                "pages/_add_url_form.html", status=422, url_value=value, url_error=str(exc)
+            )
+        return _assets_page(AssetFilter(), 1, status=422, url_value=value, url_error=str(exc))
+    row = asset_views.get_asset(session, _org_id(), asset.id)
+    if row.verification is OwnershipState.VERIFIED and row.root_value:
+        flash(f"Added {asset.value} under verified domain {row.root_value}.", "success")
+    else:
+        flash(
+            f"Added {asset.value} as unverified. Active web checks are skipped until a covering "
+            "root domain is verified.",
+            "info",
+        )
     return _navigate(url_for("ui.asset_detail", asset_id=asset.id))
 
 
@@ -871,18 +902,24 @@ def _scans_page(flt: ScanFilter, page: int, status: int = 200) -> Response:
 
 def _assets_page(flt: AssetFilter, page: int, status: int = 200, **form: str) -> Response:
     session = get_session()
-    roots = asset_views.list_root_domains(session, _org_id())
+    org_id = _org_id()
+    roots = asset_views.list_root_domains(session, org_id)
+    techs = list(asset_views.list_technologies(session, org_id))
+    if flt.tech and flt.tech.casefold() not in {t.casefold() for t in techs}:
+        techs.append(flt.tech)
+        techs.sort(key=str.casefold)
     filter_args = {
         "type": flt.type,
         "root": flt.root_id,
         "tag": flt.tag,
+        "tech": flt.tech,
         "q": flt.q,
         "status": None if flt.status is AssetStatus.ACTIVE else flt.status,
     }
     return render_page(
         "pages/assets.html",
         status=status,
-        result=asset_views.list_assets(session, _org_id(), flt, page),
+        result=asset_views.list_assets(session, org_id, flt, page),
         flt=flt,
         filtered=flt != AssetFilter(),
         # Non-default filters only, so pagination links stay short and shareable.
@@ -890,9 +927,12 @@ def _assets_page(flt: AssetFilter, page: int, status: int = 200, **form: str) ->
         type_options=[("", "All types")] + [(t.value, _TYPE_LABELS[t]) for t in _TYPE_LABELS],
         root_options=[("", "All roots")]
         + [(r.id, r.value if r.is_active else f"{r.value} (archived)") for r in roots],
+        tech_options=[("", "All technologies")] + [(name, name) for name in techs],
         status_options=[(s.value, s.value.capitalize()) for s in AssetStatus],
         add_value=form.get("add_value", ""),
         add_error=form.get("add_error"),
+        url_value=form.get("url_value", ""),
+        url_error=form.get("url_error"),
         archive_error=form.get("archive_error"),
         binary_error=form.get("binary_error"),
         **uploads.upload_context(),
