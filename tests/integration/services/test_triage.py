@@ -9,7 +9,7 @@ from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
 from attacksurf.ai.schemas import FindingTriage, StoredTriage
-from attacksurf.ai.triage import TRIAGE_PROMPT_VERSION
+from attacksurf.ai.triage import TRIAGE_PROMPT_VERSION, TriageCacheInput, triage_cache_key
 from attacksurf.domain.assets import AssetSource, AssetType
 from attacksurf.domain.findings import Confidence, EvidenceKind, FindingStatus, Severity
 from attacksurf.domain.llm import KeySource, LLMConfig, ProviderKind
@@ -417,3 +417,131 @@ def test_store_triage_never_writes_another_orgs_finding(db_session: Session) -> 
     refreshed = db_session.get(Finding, finding.id)
     assert refreshed is not None
     assert refreshed.ai_triage is None
+
+
+def test_url_batch_includes_web_context_headers_tech_and_other_findings(
+    db_session: Session,
+) -> None:
+    scan = make_scan(db_session)
+    url = record_asset(
+        db_session,
+        scan.org_id,
+        AssetType.URL,
+        "https://admin.acme.example/",
+        source=AssetSource.DISCOVERED,
+        parent_id=scan.root_asset_id,
+    )
+    url.details = {
+        "web": {
+            "status_code": 200,
+            "title": "Acme Admin",
+            "content_type": "text/html; charset=utf-8",
+            "headers": {
+                "server": "Apache/2.4.49",
+                "set-cookie": "session=<redacted>",
+                "authorization": "Bearer tok",
+            },
+        },
+        "technologies": [
+            {"name": "Apache HTTP Server", "version": "2.4.49", "categories": ["Web servers"]}
+        ],
+    }
+    db_session.flush()
+    vuln = _observed(
+        db_session,
+        scan,
+        url.id,
+        rule_id="web.components.known_vulnerable",
+        title="Web component matches known vulnerabilities",
+        severity=Severity.CRITICAL,
+        location="apache http server",
+    )
+    admin_panel = _observed(
+        db_session,
+        scan,
+        url.id,
+        rule_id="web.exposure.admin_panel",
+        title="Publicly reachable administrative or login interface",
+        severity=Severity.INFO,
+        location="/admin",
+    )
+    already_triaged = make_finding(
+        db_session,
+        scan.org_id,
+        url.id,
+        rule_id="web.headers.csp_missing",
+        title="HTML response lacks Content-Security-Policy header",
+        severity=Severity.LOW,
+        location="csp",
+    )
+    _judge(db_session, already_triaged)
+    fixed = make_finding(
+        db_session,
+        scan.org_id,
+        url.id,
+        rule_id="web.exposure.env_file",
+        title="Fixed env",
+        severity=Severity.CRITICAL,
+        status=FindingStatus.FIXED,
+        location="/.env",
+    )
+    other_org = make_scan(db_session, "other")
+    make_finding(
+        db_session,
+        other_org.org_id,
+        other_org.root_asset_id,
+        rule_id="web.exposure.git_repo",
+        title="Other org finding",
+        severity=Severity.HIGH,
+        location="/.git/HEAD",
+    )
+
+    planned = build_asset_batch(
+        db_session, scan.org_id, scan.id, url.id, model=MODEL, include_info=False
+    )
+
+    assert planned is not None
+    assert planned.finding_ids == {"F1": vuln.id}
+    ctx = planned.batch.web_context
+    assert ctx is not None
+    assert ctx.host == "admin.acme.example"
+    assert ctx.host_hints == ("admin",)
+    assert ctx.status_code == 200
+    assert ctx.title == "Acme Admin"
+    assert ctx.headers == {"server": "Apache/2.4.49"}
+    assert [tech.name for tech in ctx.technologies] == ["Apache HTTP Server"]
+    other_rules = [other.rule_id for other in ctx.other_findings]
+    assert admin_panel.rule_id in other_rules
+    assert already_triaged.rule_id in other_rules
+    assert vuln.rule_id not in other_rules
+    assert fixed.rule_id not in other_rules
+    assert "web.exposure.git_repo" not in other_rules
+
+
+def test_triage_v1_judgment_stays_not_stale_while_v2_reschedules(db_session: Session) -> None:
+    scan = make_scan(db_session)
+    finding = _observed(db_session, scan, scan.root_asset_id)
+    v1_key = triage_cache_key(
+        "triage/v1",
+        MODEL,
+        TriageCacheInput(
+            fingerprint=finding.fingerprint,
+            evidence_digest=finding.evidence_digest,
+            severity=finding.severity,
+            confidence=finding.confidence,
+            title=finding.title,
+            description=finding.description,
+        ),
+    )
+    finding.ai_triage = StoredTriage.from_judgment(
+        _judgment(),
+        prompt_version="triage/v1",
+        config=_config(),
+        cache_key=v1_key,
+        triaged_at=NOW,
+    ).model_dump(mode="json")
+    db_session.flush()
+    stored = stored_triage(finding)
+    assert stored is not None
+    assert not triage_is_stale(finding, stored)
+    assert _rules(db_session, scan, scan.root_asset_id) == [finding.rule_id]

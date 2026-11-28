@@ -1,13 +1,13 @@
 # State
 
-**Current focus:** Issue #80 implemented (`add_url_asset`, "Add a URL" intake tab, URL detail panels for web endpoint/technologies/TLS/security headers, `?tech=` filter, API + E2E tests); preparing PR for epic `#66`.
+**Current focus:** Issue #81 implemented (`triage/v2` prompt, `WebContext` for `url` assets with host hints/tech/headers/sibling findings, tight untrusted-field caps, and website eval fixtures); preparing PR for epic `#66`.
 
 ## What's done recently
 
 - Epic `#66` (`Website module: HTTP attack surface of verified hosts`) progress:
-  - `#69`–`#79` (PRs `#193`–`#203`) merged to `main` (`11dd201`).
-  - `#80` (`services/assets.py`, `services/asset_views.py`, `web/ui.py`, `web/api/v1.py`, templates, `static/js/app.js`, `static/css/app.css`, `DESIGN.md`): added `add_url_asset` attaching to covering root domains (or unverified fallback), URL overview panels (HTTP status/title/redirect chain, technologies + versions, TLS summary, security-header pass/fail grid), `?tech=` filter across UI & API, and Playwright + tenant-isolation tests.
+  - `#69`–`#80` (PRs `#193`–`#208`) merged to `main` (`2bb9a9e`).
+  - `#81` (`ai/prompts/triage/v2.md`, `ai/triage.py`, `services/triage.py`, `tests/eval/`, `docs/security.md`): added `triage/v2` (keeping `triage/v1` pinned for cache keys), `WebContext` + `extract_host_hints`, strict web untrusted-field caps (`title` 200, banners/headers 256, file excerpts 500), sensitive header stripping, and 5 website eval fixtures.
 
 ## Next step
 
-- Merge PR for `#80` after CI, Playwright `web_e2e`, and `@codex review` pass, then plan and implement `#81` (Extend AI triage to website findings) and `#82` (Extend AI exposure summary and digests to website posture).
+- Merge PR for `#81` after CI and `@codex review` pass, then plan and implement `#82` (Extend AI exposure summary and digests to website posture).

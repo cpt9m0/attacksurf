@@ -1,0 +1,42 @@
+{
+  "why": "Acceptance criterion of #81: an exposed .env file containing secret keys on a production host is critical/high priority.",
+  "asset": {"value": "https://app.acme.example/", "type": "url"},
+  "web_context": {
+    "host": "app.acme.example",
+    "host_hints": ["app"],
+    "status_code": 200,
+    "title": "Acme Customer Dashboard",
+    "content_type": "text/html; charset=utf-8",
+    "headers": {"server": "nginx/1.24.0"},
+    "technologies": [
+      {"name": "Nginx", "version": "1.24.0", "categories": ["Web servers"]},
+      {"name": "Laravel", "categories": ["Web frameworks"]}
+    ],
+    "other_findings": []
+  },
+  "findings": [
+    {
+      "ref": "F1",
+      "rule_id": "web.exposure.env_file",
+      "title": "Exposed environment configuration file on web host",
+      "description": "A dotenv configuration file (/.env) was retrieved from https://app.acme.example/ containing environment keys. Exposed .env files commonly leak database passwords, signing secrets, and API tokens.",
+      "severity": "critical",
+      "confidence": "high",
+      "location": "/.env",
+      "evidence": [
+        {
+          "kind": "http_response",
+          "data": {
+            "url": "https://app.acme.example/.env",
+            "status_code": 200,
+            "path": "/.env",
+            "keys": ["APP_KEY", "DB_PASSWORD", "STRIPE_SECRET_KEY", "AWS_SECRET_ACCESS_KEY"]
+          }
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "F1": {"priority": ["P1", "P2"], "false_positive": ["low"], "severity_at_least": "high"}
+  }
+}

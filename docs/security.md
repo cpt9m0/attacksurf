@@ -249,11 +249,18 @@ When an admin clicks "Test connection" on `/settings`, a minimal structured heal
 (`{"ok": true}`) is sent with no tenant data. Never sent: credentials, API keys, raw uploads.
 Each AI feature documents its payload here as it is added:
 
-- **Triage** (#25, ADR 0029, prompt `triage/v1`), one call per asset batch of at most 20
-  findings: the asset's name and type; per finding a batch-local reference (`F1`, `F2`, ...), the
-  rule ID, title, description, scanner severity and confidence, location, and up to 5 evidence
-  items, each string capped at 2,000 characters. All of it goes inside one escaped `<scan_data>`
-  block. Never sent: database IDs, org or user data, other assets' findings.
+- **Triage** (#25, #81, ADR 0029, prompt `triage/v2`; `triage/v1` kept for stored cache keys),
+  one call per asset batch of at most 20 findings: the asset's name and type; for `url` assets
+  its optional `web_context` (host name, derived host-role hints, status code, title capped at
+  200 characters, content-type capped at 128 characters, up to 15 non-sensitive headers capped at
+  256 characters with `authorization`/`proxy-authorization`/`cookie`/`set-cookie` stripped, up to
+  25 detected technologies, and up to 25 sibling active `other_findings` rule/title/severity/location
+  summaries on the same URL); per finding a batch-local reference (`F1`, `F2`, ...), the rule ID,
+  title, description, scanner severity and confidence, location, and up to 5 evidence items with
+  sensitive headers stripped, titles capped at 200 characters, banners/headers capped at 256
+  characters, file excerpts capped at 500 characters, and other strings capped at 2,000
+  characters. All of it goes inside one escaped `<scan_data>` block. Never sent: database IDs,
+  org or user data, other assets' or other organizations' data, or raw `.env` secret values.
 - **Exposure summary** (#26, ADR 0030, prompt `summary/v1`), one call per completed scan after
   triage: the root domain, aggregate scan change stats from `Scan.stats` (new, fixed, regressed,
   and total finding counts by severity; new and disappeared asset counts and up to 25 names), up

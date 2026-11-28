@@ -12,7 +12,16 @@ from pathlib import Path
 from typing import Any
 
 from attacksurf.ai.schemas import FalsePositiveLikelihood, TriagePriority, TriageReply
-from attacksurf.ai.triage import TriageBatch, TriageEvidence, TriageFinding, match_results
+from attacksurf.ai.triage import (
+    RelatedFinding,
+    TriageBatch,
+    TriageEvidence,
+    TriageFinding,
+    WebContext,
+    WebTechnology,
+    extract_host_hints,
+    match_results,
+)
 from attacksurf.domain.assets import AssetType
 from attacksurf.domain.findings import SEVERITY_RANK, Confidence, EvidenceKind, Severity
 
@@ -71,12 +80,51 @@ def check(case: EvalCase, reply: TriageReply) -> list[str]:
     return problems
 
 
+def _web_context(item: Mapping[str, Any] | None) -> WebContext | None:
+    if item is None:
+        return None
+    host = str(item.get("host", ""))
+    host_hints = (
+        tuple(str(h) for h in item["host_hints"])
+        if "host_hints" in item
+        else extract_host_hints(host)
+    )
+    technologies = tuple(
+        WebTechnology(
+            name=str(tech["name"]),
+            version=str(tech["version"]) if tech.get("version") is not None else None,
+            categories=tuple(str(c) for c in tech.get("categories", ())),
+        )
+        for tech in item.get("technologies", ())
+    )
+    other_findings = tuple(
+        RelatedFinding(
+            rule_id=str(other["rule_id"]),
+            title=str(other["title"]),
+            severity=Severity(other["severity"]),
+            location=str(other.get("location", "")),
+        )
+        for other in item.get("other_findings", ())
+    )
+    return WebContext(
+        host=host,
+        host_hints=host_hints,
+        status_code=item.get("status_code"),
+        title=str(item.get("title", "")),
+        content_type=str(item.get("content_type", "")),
+        headers={str(k): str(v) for k, v in item.get("headers", {}).items()},
+        technologies=technologies,
+        other_findings=other_findings,
+    )
+
+
 def _case(path: Path) -> EvalCase:
     data = json.loads(path.read_text(encoding="utf-8"))
     batch = TriageBatch(
         asset_value=data["asset"]["value"],
         asset_type=AssetType(data["asset"]["type"]),
         findings=tuple(_finding(item) for item in data["findings"]),
+        web_context=_web_context(data.get("web_context")),
     )
     return EvalCase(
         name=path.stem,

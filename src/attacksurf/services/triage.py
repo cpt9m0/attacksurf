@@ -10,6 +10,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import structlog
@@ -21,17 +22,26 @@ from attacksurf.ai.factory import build_provider
 from attacksurf.ai.schemas import MAX_FINDINGS_PER_BATCH, FindingTriage, StoredTriage
 from attacksurf.ai.triage import (
     EVIDENCE_ITEMS_PER_FINDING,
+    MAX_OTHER_FINDINGS,
+    MAX_WEB_CONTEXT_HEADERS,
+    MAX_WEB_CONTEXT_TECHNOLOGIES,
+    REDACTED_HEADER_NAMES,
     TRIAGE_PROMPT_VERSION,
     TRIAGE_PURPOSE,
+    RelatedFinding,
     TriageBatch,
     TriageCacheInput,
     TriageEvidence,
     TriageFinding,
+    WebContext,
+    WebTechnology,
+    extract_host_hints,
     match_results,
     triage_batch,
     triage_cache_key,
 )
 from attacksurf.config import Settings
+from attacksurf.domain.assets import AssetType
 from attacksurf.domain.findings import ACTIVE_STATUSES, SEVERITY_RANK, Severity
 from attacksurf.domain.jobs import AIQueue, JobNotFound, JobTask, TaskQueue
 from attacksurf.domain.llm import LLMConfig, LLMError, LLMUnavailable
@@ -263,6 +273,11 @@ def build_asset_batch(
         return None
     evidence = _latest_evidence(session, org_id, [finding.id for finding in findings])
     refs = [f"F{index}" for index in range(1, len(findings) + 1)]
+    web_context = (
+        _web_context(session, org_id, asset, batch_finding_ids={finding.id for finding in findings})
+        if asset.type is AssetType.URL
+        else None
+    )
     batch = TriageBatch(
         asset_value=asset.value,
         asset_type=asset.type,
@@ -279,6 +294,7 @@ def build_asset_batch(
             )
             for ref, finding in zip(refs, findings, strict=True)
         ),
+        web_context=web_context,
     )
     return AssetTriage(
         asset_id=asset_id,
@@ -444,6 +460,114 @@ def _cache_input(finding: Finding) -> TriageCacheInput:
         confidence=finding.confidence,
         title=finding.title,
         description=finding.description,
+    )
+
+
+_PRIORITY_WEB_HEADERS = (
+    "server",
+    "x-powered-by",
+    "x-generator",
+    "strict-transport-security",
+    "content-security-policy",
+    "x-frame-options",
+    "x-content-type-options",
+    "referrer-policy",
+    "cache-control",
+    "content-type",
+    "location",
+)
+
+
+def _select_web_headers(raw_headers: object) -> dict[str, str]:
+    if not isinstance(raw_headers, Mapping):
+        return {}
+    by_lower: dict[str, tuple[str, str]] = {}
+    for k, v in raw_headers.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            continue
+        lowered = k.strip().lower()
+        if not lowered or lowered in REDACTED_HEADER_NAMES:
+            continue
+        by_lower.setdefault(lowered, (k, v))
+    ordered_keys = [key for key in _PRIORITY_WEB_HEADERS if key in by_lower]
+    ordered_keys.extend(sorted(key for key in by_lower if key not in _PRIORITY_WEB_HEADERS))
+    return {by_lower[key][0]: by_lower[key][1] for key in ordered_keys[:MAX_WEB_CONTEXT_HEADERS]}
+
+
+def _extract_technologies(raw_techs: object) -> tuple[WebTechnology, ...]:
+    if not isinstance(raw_techs, list):
+        return ()
+    techs: list[WebTechnology] = []
+    for item in raw_techs:
+        if not isinstance(item, Mapping):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        raw_version = item.get("version")
+        version = raw_version if isinstance(raw_version, str) and raw_version.strip() else None
+        raw_categories = item.get("categories")
+        categories = (
+            tuple(cat for cat in raw_categories if isinstance(cat, str) and cat.strip())
+            if isinstance(raw_categories, list)
+            else ()
+        )
+        techs.append(WebTechnology(name=name, version=version, categories=categories))
+        if len(techs) >= MAX_WEB_CONTEXT_TECHNOLOGIES:
+            break
+    return tuple(techs)
+
+
+def _web_context(
+    session: Session,
+    org_id: UUID,
+    asset: Asset,
+    *,
+    batch_finding_ids: set[UUID],
+) -> WebContext:
+    host = (urlsplit(asset.value).hostname or "").rstrip(".").lower()
+    details = asset.details if isinstance(asset.details, Mapping) else {}
+    raw_web = details.get("web")
+    web = raw_web if isinstance(raw_web, Mapping) else {}
+
+    raw_status = web.get("status_code")
+    status_code = (
+        raw_status if isinstance(raw_status, int) and not isinstance(raw_status, bool) else None
+    )
+    raw_title = web.get("title")
+    title = raw_title if isinstance(raw_title, str) else ""
+    raw_content_type = web.get("content_type")
+    content_type = raw_content_type if isinstance(raw_content_type, str) else ""
+    headers = _select_web_headers(web.get("headers"))
+    technologies = _extract_technologies(details.get("technologies"))
+
+    siblings = session.scalars(
+        scoped(Finding, org_id).where(
+            Finding.asset_id == asset.id,
+            Finding.status.in_(ACTIVE_STATUSES),
+        )
+    ).all()
+    other = sorted(
+        (finding for finding in siblings if finding.id not in batch_finding_ids),
+        key=lambda f: (-SEVERITY_RANK[f.severity], f.rule_id, f.location, f.id),
+    )[:MAX_OTHER_FINDINGS]
+    return WebContext(
+        host=host,
+        host_hints=extract_host_hints(host),
+        status_code=status_code,
+        title=title,
+        content_type=content_type,
+        headers=headers,
+        technologies=technologies,
+        other_findings=tuple(
+            RelatedFinding(
+                rule_id=f.rule_id,
+                title=f.title,
+                severity=f.severity,
+                location=f.location,
+            )
+            for f in other
+        ),
     )
 
 

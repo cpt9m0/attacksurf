@@ -12,10 +12,17 @@ from attacksurf.ai.triage import (
     EVIDENCE_ITEMS_PER_FINDING,
     TRIAGE_MAX_TOKENS,
     TRIAGE_PROMPT_VERSION,
+    WEB_EXCERPT_MAX_LENGTH,
+    WEB_HEADER_VALUE_MAX_LENGTH,
+    WEB_TITLE_MAX_LENGTH,
+    RelatedFinding,
     TriageBatch,
     TriageEvidence,
     TriageFinding,
+    WebContext,
+    WebTechnology,
     build_triage_messages,
+    extract_host_hints,
     match_results,
     triage_batch,
 )
@@ -83,7 +90,8 @@ def _reply(*judgments: dict[str, Any]) -> TriageReply:
 def test_messages_use_the_released_triage_prompt() -> None:
     messages = build_triage_messages(_batch())
 
-    assert TRIAGE_PROMPT_VERSION == "triage/v1"
+    assert TRIAGE_PROMPT_VERSION == "triage/v2"
+    assert load_prompt("triage/v1").version == "triage/v1"
     assert messages[0] == Message("system", load_prompt(TRIAGE_PROMPT_VERSION).system)
     assert [message.role for message in messages] == ["system", "user"]
 
@@ -229,3 +237,128 @@ def test_findings_left_out_of_a_reply_stay_untriaged() -> None:
 
 def test_an_empty_reply_matches_nothing() -> None:
     assert match_results(_batch(), _reply()) == {}
+
+
+# --- Website context and untrusted-field delimiting (#81) ----------------------------------
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("admin.acme.example", ("admin",)),
+        ("staging.acme.example", ("staging",)),
+        ("admin-api02.acme.example", ("admin", "api")),
+        ("staging2.dev-portal.acme.example", ("staging", "dev", "portal")),
+        ("docs.acme.example", ("docs",)),
+        ("acme.example", ()),
+    ],
+)
+def test_extract_host_hints(host: str, expected: tuple[str, ...]) -> None:
+    assert extract_host_hints(host) == expected
+
+
+def test_triage_v2_system_prompt_covers_web_guidance() -> None:
+    system = " ".join(build_triage_messages(_batch())[0].content.lower().split())
+
+    assert "host_hints" in system
+    assert "other_findings" in system
+    assert "backport" in system
+    assert "static" in system
+    assert "cisa kev" in system or "kev" in system
+
+
+def test_web_context_is_serialized_with_redacted_headers_and_sibling_findings() -> None:
+    ctx = WebContext(
+        host="admin.acme.example",
+        host_hints=("admin",),
+        status_code=200,
+        title="Admin Panel",
+        content_type="text/html; charset=utf-8",
+        headers={
+            "server": "Apache/2.4.49",
+            "cookie": "secret=123",
+            "Set-Cookie": "sid=abc",
+            "Authorization": "Bearer secret",
+        },
+        technologies=(WebTechnology("Apache HTTP Server", "2.4.49", ("Web servers",)),),
+        other_findings=(
+            RelatedFinding(
+                rule_id="web.exposure.admin_panel",
+                title="Publicly reachable administrative or login interface",
+                severity=Severity.INFO,
+                location="/admin",
+            ),
+        ),
+    )
+    batch = TriageBatch(
+        asset_value="https://admin.acme.example/",
+        asset_type=AssetType.URL,
+        findings=(_finding(),),
+        web_context=ctx,
+    )
+
+    payload = _payload(build_triage_messages(batch))
+    web_ctx = payload["web_context"]
+
+    assert web_ctx["host"] == "admin.acme.example"
+    assert web_ctx["host_hints"] == ["admin"]
+    assert web_ctx["headers"] == {"server": "Apache/2.4.49"}
+    assert web_ctx["technologies"] == [
+        {"name": "Apache HTTP Server", "version": "2.4.49", "categories": ["Web servers"]}
+    ]
+    assert web_ctx["other_findings"] == [
+        {
+            "rule_id": "web.exposure.admin_panel",
+            "title": "Publicly reachable administrative or login interface",
+            "severity": "info",
+            "location": "/admin",
+        }
+    ]
+
+
+def test_web_untrusted_fields_are_capped_and_injections_stay_delimited() -> None:
+    batch = TriageBatch(
+        asset_value="https://portal.acme.example/",
+        asset_type=AssetType.URL,
+        findings=(
+            _finding(
+                evidence=(
+                    TriageEvidence(
+                        EvidenceKind.HTTP_RESPONSE,
+                        {
+                            "title": "T" * 400 + INJECTION,
+                            "banner": "B" * 400,
+                            "file_excerpt": "E" * 900,
+                            "headers": {
+                                "x-powered-by": "PHP/" + "9" * 400,
+                                "authorization": "Bearer supersecret",
+                            },
+                        },
+                    ),
+                ),
+            ),
+        ),
+        web_context=WebContext(
+            host="portal.acme.example",
+            host_hints=("portal",),
+            title="Page " + INJECTION + ("Z" * 400),
+            headers={"server": "nginx/" + ("1." * 200), "set-cookie": "bad=1"},
+        ),
+    )
+
+    messages = build_triage_messages(batch)
+    payload = _payload(messages)
+    data = payload["findings"][0]["evidence"][0]["data"]
+
+    assert messages[1].content.count("<scan_data>") == 1
+    assert messages[1].content.count("</scan_data>") == 1
+    assert "Ignore previous instructions" not in messages[0].content
+    assert len(payload["web_context"]["title"]) == WEB_TITLE_MAX_LENGTH
+    assert payload["web_context"]["title"].endswith(TRUNCATION_MARKER)
+    assert len(payload["web_context"]["headers"]["server"]) == WEB_HEADER_VALUE_MAX_LENGTH
+    assert "set-cookie" not in payload["web_context"]["headers"]
+    assert len(data["title"]) == WEB_TITLE_MAX_LENGTH
+    assert len(data["banner"]) == WEB_HEADER_VALUE_MAX_LENGTH
+    assert len(data["file_excerpt"]) == WEB_EXCERPT_MAX_LENGTH
+    assert len(data["headers"]["x-powered-by"]) == WEB_HEADER_VALUE_MAX_LENGTH
+    assert "authorization" not in data["headers"]

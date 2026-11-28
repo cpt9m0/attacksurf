@@ -1,0 +1,41 @@
+{
+  "why": "Acceptance criterion of #81: missing security headers on a static documentation site have lower impact.",
+  "asset": {"value": "https://docs.acme.example/", "type": "url"},
+  "web_context": {
+    "host": "docs.acme.example",
+    "host_hints": ["docs"],
+    "status_code": 200,
+    "title": "Acme Documentation",
+    "content_type": "text/html; charset=utf-8",
+    "headers": {"server": "cloudflare"},
+    "technologies": [
+      {"name": "Hugo", "version": "0.124.0", "categories": ["Static site generator"]},
+      {"name": "Cloudflare", "categories": ["CDN"]}
+    ],
+    "other_findings": []
+  },
+  "findings": [
+    {
+      "ref": "F1",
+      "rule_id": "web.headers.csp_missing",
+      "title": "HTML response lacks Content-Security-Policy header",
+      "description": "An HTML endpoint did not return a Content-Security-Policy header, removing a major defense-in-depth control against cross-site scripting and unauthorized resource loads.",
+      "severity": "low",
+      "confidence": "high",
+      "location": "",
+      "evidence": [
+        {
+          "kind": "http_response",
+          "data": {
+            "url": "https://docs.acme.example/",
+            "status_code": 200,
+            "missing_header": "content-security-policy"
+          }
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "F1": {"priority": ["P3", "P4"], "false_positive": ["low", "medium"], "severity_at_most": "low"}
+  }
+}

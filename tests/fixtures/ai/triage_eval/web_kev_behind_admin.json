@@ -1,0 +1,60 @@
+{
+  "why": "Acceptance criterion of #81: a CISA KEV vulnerable component alongside an exposed admin panel on an admin host warrants high priority while noting banner-version backport caveats.",
+  "asset": {"value": "https://admin.acme.example/", "type": "url"},
+  "web_context": {
+    "host": "admin.acme.example",
+    "host_hints": ["admin"],
+    "status_code": 200,
+    "title": "Admin Console Login",
+    "content_type": "text/html; charset=utf-8",
+    "headers": {"server": "Apache/2.4.49"},
+    "technologies": [
+      {"name": "Apache HTTP Server", "version": "2.4.49", "categories": ["Web servers"]}
+    ],
+    "other_findings": [
+      {
+        "rule_id": "web.exposure.admin_panel",
+        "title": "Publicly reachable administrative or login interface",
+        "severity": "info",
+        "location": "/admin"
+      }
+    ]
+  },
+  "findings": [
+    {
+      "ref": "F1",
+      "rule_id": "web.components.known_vulnerable",
+      "title": "Web component matches known vulnerabilities",
+      "description": "A fingerprinted web technology and version match known CVEs in the local NVD, CISA KEV, and FIRST EPSS vulnerability catalog. Confidence is medium because Linux distributions often backport security patches while keeping older version banners.",
+      "severity": "critical",
+      "confidence": "medium",
+      "location": "apache http server",
+      "evidence": [
+        {
+          "kind": "raw",
+          "data": {
+            "product": "Apache HTTP Server",
+            "version": "2.4.49",
+            "cpe_targets": ["apache:http_server"],
+            "max_cvss": 9.8,
+            "kev_count": 1,
+            "total_cves": 2,
+            "cves_truncated": false,
+            "cves": [
+              {
+                "cve_id": "CVE-2021-41773",
+                "in_kev": true,
+                "max_cvss": 7.5,
+                "epss_score": 0.97,
+                "description": "Path traversal and file disclosure in Apache HTTP Server 2.4.49."
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "F1": {"priority": ["P1", "P2"], "false_positive": ["low", "medium"], "severity_at_least": "high"}
+  }
+}

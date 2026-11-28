@@ -127,7 +127,7 @@ def test_the_finding_page_shows_the_ai_judgment(
 
     assert "AI-generated" in body
     assert "muse-spark-1.3" in body
-    assert "triage/v1" in body
+    assert TRIAGE_PROMPT_VERSION in body
     assert "P1" in body
     assert "Remove the record." in body
     assert "Anyone can claim the target." in body

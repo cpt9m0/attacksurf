@@ -16,6 +16,7 @@ from attacksurf.domain.llm import Message
 RELEASED: dict[str, str] = {
     "summary/v1": "636760311417d544bb97a438a0b812b9621991ecd60fee7072b8f440ad19ef03",
     "triage/v1": "b4c7de8853fcb56f8597cb0d66d9e45c23a492f2936d0c494ae516988a9b493d",
+    "triage/v2": "e3a2ffe217566a06a196f910deb6a9beb38fbd3a197f1e817c397892dac3f8a4",
 }
 
 VALID = "<!-- system -->\nYou judge findings.\n\n<!-- user -->\nJudge these:\n$scan_data\n"
