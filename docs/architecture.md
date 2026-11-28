@@ -473,12 +473,14 @@ flowchart LR
 - AI consumes **normalized findings only**; scan-derived text is treated as untrusted data.
 - AI output is advisory: adjusted severity is shown next to the scanner's severity and never
   auto-closes findings.
-- Triage (#25, ADR 0029): its reply models live in `ai/schemas.py`
+- Triage (#25, #81, ADR 0029): its reply models live in `ai/schemas.py`
   (`TriageReply` of `FindingTriage`, P1 to P4; stored in `Finding.ai_triage` as `StoredTriage`)
   and its calls in `ai/triage.py`: `TriageBatch` (one asset's findings under batch-local refs
-  `F1` to `F99`, never database IDs), `triage_batch(provider, batch)` (one call with prompt
-  `triage/v1`; `build_triage_messages` puts the batch in one `scan_data_block`),
-  `match_results` (drops refs outside the batch and refs judged twice) and `triage_cache_key`.
+  `F1` to `F99`, never database IDs, plus optional `WebContext` for `url` assets with host hints,
+  response metadata, tech stack, and sibling active findings), `triage_batch(provider, batch)`
+  (one call with prompt `triage/v2`, keeping `triage/v1` pinned for cache keys;
+  `build_triage_messages` puts the batch in one `scan_data_block`), `match_results` (drops refs
+  outside the batch and refs judged twice) and `triage_cache_key`.
   Reply models' docstrings and field descriptions are sent to the model with the schema, so they
   are written for it. `services/triage.py` picks what a scan sends: `assets_to_triage` and
   `build_asset_batch` (active findings this scan observed, from `finding_observations`; `info`

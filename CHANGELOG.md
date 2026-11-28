@@ -6,6 +6,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning: [S
 ## [Unreleased]
 
 ### Added
+- Website AI triage (`#81`): added versioned prompt `triage/v2` (preserving `triage/v1` for
+  stored cache keys and staleness checks) with `WebContext` support for `url` assets—host-role
+  hints (`admin.`, `staging.`, etc.), capped response metadata/technologies, and active sibling
+  findings for combined-exposure reasoning (KEV + exposed admin panel, banner backport caveat,
+  static-site headers)—plus strict untrusted-field length caps, sensitive header stripping, and
+  website triage eval fixtures (`web_env_exposed_prod`, `web_x_powered_by`, `web_injected_title`,
+  `web_kev_behind_admin`, `web_static_headers`).
 - Website URL assets UI & API (`#80`): `add_url_asset` service (public-host + allowed-web-port
   validation, automatic verified covering root attachment, unverified fallback), `POST /assets/url`
   HTMX intake tab and `POST /api/v1/assets` `"type": "url"` support, `?tech=` technology filter

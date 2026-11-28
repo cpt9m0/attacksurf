@@ -7,7 +7,7 @@ import pytest
 
 from attacksurf.ai.schemas import TriageReply
 from attacksurf.ai.triage import build_triage_messages, triage_batch
-from attacksurf.domain.findings import SEVERITY_RANK
+from attacksurf.domain.findings import SEVERITY_RANK, Severity
 from tests.eval.triage_cases import EvalCase, check, load_cases
 from tests.fakes import FakeLLMProvider
 
@@ -46,6 +46,11 @@ def test_every_case_loads_with_expectations_for_its_own_refs() -> None:
         "dkim_selector_guess",
         "injected_txt",
         "spf_permissive",
+        "web_env_exposed_prod",
+        "web_injected_title",
+        "web_kev_behind_admin",
+        "web_static_headers",
+        "web_x_powered_by",
     ]
     for case in CASES:
         refs = {finding.ref for finding in case.batch.findings}
@@ -63,9 +68,21 @@ def test_every_expected_severity_range_is_possible() -> None:
 def test_the_acceptance_cases_expect_what_the_issue_asks() -> None:
     takeover = _case("dangling_cname").expectations["F1"]
     benign = _case("dkim_selector_guess").expectations["F1"]
+    env_prod = _case("web_env_exposed_prod").expectations["F1"]
+    banner = _case("web_x_powered_by").expectations["F1"]
+    kev_admin = _case("web_kev_behind_admin").expectations["F1"]
+    static_hdr = _case("web_static_headers").expectations["F1"]
 
     assert takeover.priorities == {"P1", "P2"}  # "gets high priority"
     assert benign.false_positive == {"high"}  # "flagged likely FP"
+    assert env_prod.priorities == {"P1", "P2"}
+    assert env_prod.severity_at_least is Severity.HIGH
+    assert banner.priorities == {"P3", "P4"}
+    assert banner.severity_at_most is Severity.LOW
+    assert kev_admin.priorities == {"P1", "P2"}
+    assert kev_admin.severity_at_least is Severity.HIGH
+    assert static_hdr.priorities == {"P3", "P4"}
+    assert static_hdr.severity_at_most is Severity.LOW
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.name)
@@ -113,3 +130,11 @@ def test_the_injection_case_stays_inside_the_scan_data_block() -> None:
     assert user.count("<scan_data>") == 1
     assert user.count("</scan_data>") == 1
     assert "Ignore all previous instructions" in user  # still there, as data
+
+
+def test_the_web_injection_case_stays_inside_the_scan_data_block() -> None:
+    user = build_triage_messages(_case("web_injected_title").batch)[1].content
+
+    assert user.count("<scan_data>") == 1
+    assert user.count("</scan_data>") == 1
+    assert "Ignore all previous instructions" in user

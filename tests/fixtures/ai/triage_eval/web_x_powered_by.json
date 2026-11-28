@@ -1,0 +1,41 @@
+{
+  "why": "Acceptance criterion of #81: standalone X-Powered-By version banner disclosure is informational hardening advice and stays low priority.",
+  "asset": {"value": "https://www.acme.example/", "type": "url"},
+  "web_context": {
+    "host": "www.acme.example",
+    "host_hints": ["www"],
+    "status_code": 200,
+    "title": "Acme Home",
+    "content_type": "text/html; charset=utf-8",
+    "headers": {"server": "Apache", "x-powered-by": "PHP/8.2.15"},
+    "technologies": [
+      {"name": "Apache HTTP Server", "categories": ["Web servers"]},
+      {"name": "PHP", "version": "8.2.15", "categories": ["Programming languages"]}
+    ],
+    "other_findings": []
+  },
+  "findings": [
+    {
+      "ref": "F1",
+      "rule_id": "web.disclosure.version_banner",
+      "title": "HTTP response header discloses software version",
+      "description": "An HTTP response includes a Server or X-Powered-By header containing a specific software version. While not directly exploitable on its own, version banners reveal the exact technology stack and make targeted vulnerability lookup trivial.",
+      "severity": "info",
+      "confidence": "high",
+      "location": "",
+      "evidence": [
+        {
+          "kind": "http_response",
+          "data": {
+            "url": "https://www.acme.example/",
+            "status_code": 200,
+            "headers": {"x-powered-by": "PHP/8.2.15"}
+          }
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "F1": {"priority": ["P3", "P4"], "false_positive": ["low", "medium"], "severity_at_most": "low"}
+  }
+}

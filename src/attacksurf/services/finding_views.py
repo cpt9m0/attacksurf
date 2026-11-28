@@ -41,7 +41,7 @@ from attacksurf.infra.db.models import (
 from attacksurf.infra.db.tenancy import scoped
 from attacksurf.services import asset_views
 from attacksurf.services.asset_views import RootOption
-from attacksurf.services.triage import stored_triage, triage_is_stale
+from attacksurf.services.triage import stored_triage, triage_is_stale, url_context_digests
 
 PAGE_SIZE = 25
 EXPORT_LIMIT = 5_000
@@ -295,13 +295,17 @@ def get_finding_detail(session: Session, org_id: UUID, finding_id: UUID) -> Find
         .limit(MAX_EVENTS)
     ).all()
     triage = stored_triage(finding)
+    digests = url_context_digests(session, org_id, [finding.asset_id]) if triage is not None else {}
     return FindingDetail(
         finding=_finding_row(row),
         description=finding.description,
         remediation=finding.remediation,
         references=tuple(finding.references),
         ai_triage=triage,
-        ai_triage_stale=triage is not None and triage_is_stale(finding, triage),
+        ai_triage_stale=(
+            triage is not None
+            and triage_is_stale(finding, triage, context_digest=digests.get(finding.asset_id))
+        ),
         evidence=tuple(_evidence_row(item) for item in evidence),
         evidence_total=evidence_total,
         events=tuple(

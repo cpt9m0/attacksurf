@@ -42,7 +42,7 @@ from attacksurf.infra.db.tenancy import get_scoped, scoped
 from attacksurf.services import jobs, notifications, org_settings, scan_views
 from attacksurf.services.llm_usage import record_llm_usage
 from attacksurf.services.scans import root_is_active
-from attacksurf.services.triage import stored_triage, triage_is_stale
+from attacksurf.services.triage import stored_triage, triage_is_stale, url_context_digests
 
 log = structlog.get_logger(__name__)
 
@@ -243,11 +243,14 @@ def _select_findings(session: Session, org_id: UUID, scan_id: UUID) -> tuple[Sum
         .where(FindingObservation.scan_id == scan_id, Finding.status.in_(ACTIVE_STATUSES))
     ).all()
 
+    digests = url_context_digests(session, org_id, [finding.asset_id for finding, _ in rows])
     candidates: list[tuple[Finding, str, SummaryFindingTriage | None]] = []
     for finding, asset_value in rows:
         triage = stored_triage(finding)
         current_triage: SummaryFindingTriage | None = None
-        if triage is not None and not triage_is_stale(finding, triage):
+        if triage is not None and not triage_is_stale(
+            finding, triage, context_digest=digests.get(finding.asset_id)
+        ):
             current_triage = SummaryFindingTriage(
                 priority=triage.priority,
                 adjusted_severity=triage.adjusted_severity,
