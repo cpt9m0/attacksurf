@@ -11,7 +11,7 @@ in this catalog (`src/attacksurf/domain/rules/`).
 | Profile | Availability | Discovery plugins | Check plugins | Discovery cap |
 |---|---|---|---|---|
 | `dns_passive` | UI, API, CLI | `dns.discovery.ct` | `dns.resolve`, `dns.email`, `dns.takeover`, `dns.takeover.http`, `dns.dnssec`, `dns.ns`, `dns.mx`, `dns.caa`, `dns.whois`, `dns.axfr` | `1000` assets / root |
-| `web_active` | UI, API, CLI | `web.probe` | `web.components`, `web.tls`, `web.headers`, `web.cors`, `web.exposures` | `1000` assets / root |
+| `web_active` | UI, API, CLI | `web.probe` | `web.components`, `web.tls`, `web.headers`, `web.cors`, `web.exposures`, `web.wordpress` | `1000` assets / root |
 | `dns_scheduled` | Scheduled rescans only (internal) | — | `dns.resolve`, `dns.email`, `dns.dnssec` | `1000` assets / root |
 
 > [!NOTE]
@@ -47,10 +47,11 @@ job status when active scans are disabled or the target is unverified.
 | `web.headers` | `url` | No | 10 s | None (`Asset.details["web"]` captured by `web.probe`) | Checks HSTS presence/max-age (`≥ 180` days), HTML CSP presence & unsafe script directives without nonces/hashes, clickjacking (`X-Frame-Options` / `frame-ancestors`), `X-Content-Type-Options: nosniff`, redacted session cookie hardening flags, and unredirected HTTP port 80 responses. |
 | `web.cors` | `url` | **Yes** (`TARGET`) | 15 s | `TARGET` HTTP (16 KiB GET, `follow_redirects=False`, allowed web ports), 4 DNS lookups | Issues one `GET` with `Origin: https://cors-probe.invalid` and flags reflected foreign `Access-Control-Allow-Origin` paired with `Access-Control-Allow-Credentials: true`. |
 | `web.exposures` | `url` | **Yes** (`TARGET`) | 120 s | `TARGET` HTTP (`GET`/`HEAD` on fixed `http_paths` allowlist + 1 soft-404 baseline, `follow_redirects=False`, allowed web ports), 40 DNS lookups | Calibrates a random soft-404 baseline and probes a fixed set of 33 sensitive/admin/API/security.txt paths with strict content validators (`HEAD`-only on backups & `/actuator/heapdump`, key names only on `.env*`, credential redaction on `.git/config`). |
+| `web.wordpress` | `url` | **Yes** (`TARGET`) | 60 s | `TARGET` HTTP (`GET` on fixed 6-path WP allowlist + 1 soft-404 baseline, `follow_redirects=False`, allowed web ports), 16 DNS lookups | Runs only when `web.probe` detects WordPress: matches core (`/feed/` / generator) and passive `?ver=` plugins/themes against local NVD intel, and checks XML-RPC, REST user enumeration (count only), `/wp-content/debug.log` (structural metadata only), and `/wp-content/uploads/` indexing. |
 
 ---
 
-## Detection Rules (50)
+## Detection Rules (54)
 
 ### DNS Records (`dns.resolve`)
 
@@ -151,6 +152,15 @@ job status when active scans are disabled or the target is unverified.
 | `web.exposure.api_docs` | `info` | Public API documentation endpoint exposed | [OWASP API9:2023](https://owasp.org/API-Security/editions/2023/en/0xa9-improper-inventory-management/) |
 | `web.exposure.admin_panel` | `info` | Publicly reachable administrative or login interface | [OWASP WSTG-CONF-05](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/05-Enumerate_Infrastructure_and_Application_Admin_Interfaces) |
 | `web.security.security_txt_missing` | `info` | Host lacks a valid security.txt vulnerability disclosure policy | [RFC 9116](https://www.rfc-editor.org/rfc/rfc9116) |
+
+### WordPress Exposures (`web.wordpress`)
+
+| Rule ID | Default severity | Title | References |
+|---|---|---|---|
+| `web.wordpress.xmlrpc_enabled` | `medium` | WordPress XML-RPC endpoint is enabled and publicly reachable | [WordPress Hardening](https://developer.wordpress.org/advanced-administration/security/hardening/), [OWASP WSTG-CONF-05](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/05-Enumerate_Infrastructure_and_Application_Admin_Interfaces) |
+| `web.wordpress.user_listing` | `low` | WordPress REST API publicly lists user accounts | [WordPress REST FAQ](https://developer.wordpress.org/rest-api/frequently-asked-questions/), [CWE-200](https://cwe.mitre.org/data/definitions/200.html) |
+| `web.wordpress.debug_log` | `high` | WordPress debug log file is publicly accessible | [Debugging in WordPress](https://developer.wordpress.org/advanced-administration/debug/debug-wordpress/), [CWE-532](https://cwe.mitre.org/data/definitions/532.html) |
+| `web.exposure.directory_listing` | `medium` | Web directory listing is enabled | [CWE-548](https://cwe.mitre.org/data/definitions/548.html), [OWASP WSTG-CONF-04](https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information) |
 
 ---
 

@@ -20,6 +20,7 @@ from attacksurf.scanners.web import exposures as _web_exposures  # noqa: F401
 from attacksurf.scanners.web import headers as _web_headers  # noqa: F401
 from attacksurf.scanners.web import probe as _web_probe  # noqa: F401
 from attacksurf.scanners.web import tls as _web_tls  # noqa: F401
+from attacksurf.scanners.web import wordpress as _web_wordpress  # noqa: F401
 
 
 def test_dns_passive_profile_is_valid_and_selects_the_ct_discovery_scanner() -> None:
@@ -58,6 +59,7 @@ def test_web_active_profile_is_valid_and_selects_active_web_probe() -> None:
         "web.headers",
         "web.cors",
         "web.exposures",
+        "web.wordpress",
     )
     assert profile.max_discovered_assets == MAX_DISCOVERED_ASSETS
     scanner = registry.get(profile.discover[0])
@@ -84,6 +86,13 @@ def test_web_active_profile_is_valid_and_selects_active_web_probe() -> None:
     assert exp_scanner.grant.http_methods == frozenset({"GET", "HEAD"})
     assert exp_scanner.grant.soft_404_probe is True
     assert exp_scanner.grant.follow_redirects is False
+    wp_scanner = registry.get("web.wordpress")
+    assert wp_scanner.queue == "active"
+    assert wp_scanner.requires_verification is True
+    assert wp_scanner.grant.http is HttpPermission.TARGET
+    assert wp_scanner.grant.http_methods == frozenset({"GET"})
+    assert wp_scanner.grant.soft_404_probe is True
+    assert wp_scanner.grant.follow_redirects is False
 
 
 def test_scheduled_profile_is_dns_only_and_not_public() -> None:

@@ -30,7 +30,14 @@ PROFILES = {
     "web_active": ScanProfile(
         name="web_active",
         discover=("web.probe",),
-        checks=("web.components", "web.tls", "web.headers", "web.cors", "web.exposures"),
+        checks=(
+            "web.components",
+            "web.tls",
+            "web.headers",
+            "web.cors",
+            "web.exposures",
+            "web.wordpress",
+        ),
         max_discovered_assets=MAX_DISCOVERED_ASSETS,
     ),
 }

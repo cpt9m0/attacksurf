@@ -140,8 +140,13 @@ redacted `<redacted>` cookie attributes only, while `web.cors` (#77) issues a si
 through `ScopeGuard`; backups and `/actuator/heapdump` use `HEAD` only, `.git/config` records
 allowlisted section/core-key metadata only (no raw values, headers, or URLs),
 `/actuator/env` records source/profile names only, and `.env*` evidence stores key names
-only (never values across DB, evidence, or logs). Planned #79 checks will reuse `http_paths`
-checks will reuse `http_paths` for WordPress exposures. CT discovery's
+only (never values across DB, evidence, or logs). `web.wordpress` (#79) runs only when `#73`
+detects WordPress, reuses ADR 0033's strict `GET`-only 6-path allowlist (`ScopeGuard`, zero
+plugin path guessing or XML-RPC/login auth attempts), extracts plugin/theme `?ver=` tokens
+only from page assets already rendered in HTML, matches against the local NVD catalog (#74,
+avoiding non-commercial WPScan API terms), stores only `user_count` for REST user listing
+(never usernames/slugs/emails), and records only structural counts/levels for
+`/wp-content/debug.log` (never log contents). CT discovery's
 random-label wildcard probes use the same guarded DNS adapter and DNS budget; a wildcard marker
 (`Asset.details["wildcard"] = true`) is data for later resolution, never a finding or a claim
 that a name exists. `dns.resolve` records A/AAAA/CNAME/MX/NS/TXT/CAA/SOA in capped

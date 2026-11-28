@@ -434,6 +434,78 @@ SECURITY_TXT_MISSING = Rule(
     references=("https://www.rfc-editor.org/rfc/rfc9116",),
 )
 
+WORDPRESS_XMLRPC_ENABLED = Rule(
+    id="web.wordpress.xmlrpc_enabled",
+    title="WordPress XML-RPC endpoint is enabled and publicly reachable",
+    description=(
+        "The WordPress XML-RPC interface on $url responds to requests, exposing multicall "
+        "authentication attempts and pingback abuse."
+    ),
+    default_severity=Severity.MEDIUM,
+    remediation=(
+        "Disable or block external HTTP access to `/xmlrpc.php` on $url in your web server or "
+        "security plugin unless required by a trusted integration."
+    ),
+    references=(
+        "https://developer.wordpress.org/advanced-administration/security/hardening/",
+        "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/05-Enumerate_Infrastructure_and_Application_Admin_Interfaces",
+    ),
+)
+
+WORDPRESS_USER_LISTING = Rule(
+    id="web.wordpress.user_listing",
+    title="WordPress REST API publicly lists user accounts",
+    description=(
+        "The public REST endpoint `/wp-json/wp/v2/users` on $url returned $user_count user "
+        "record(s) without authentication, enabling targeted login enumeration."
+    ),
+    default_severity=Severity.LOW,
+    remediation=(
+        "Restrict unauthenticated access to `/wp-json/wp/v2/users` on $url or filter user "
+        "endpoints via WordPress REST API permissions."
+    ),
+    references=(
+        "https://developer.wordpress.org/rest-api/frequently-asked-questions/",
+        "https://cwe.mitre.org/data/definitions/200.html",
+    ),
+)
+
+WORDPRESS_DEBUG_LOG = Rule(
+    id="web.wordpress.debug_log",
+    title="WordPress debug log file is publicly accessible",
+    description=(
+        "A WordPress PHP debug log (`/wp-content/debug.log`) is downloadable from $url, risking "
+        "exposure of filesystem paths, stack traces, and runtime error details."
+    ),
+    default_severity=Severity.HIGH,
+    remediation=(
+        "Remove `/wp-content/debug.log` from $url, block access to `.log` files in your web "
+        "server config, and disable `WP_DEBUG_LOG` or write logs outside the web root."
+    ),
+    references=(
+        "https://developer.wordpress.org/advanced-administration/debug/debug-wordpress/",
+        "https://cwe.mitre.org/data/definitions/532.html",
+    ),
+)
+
+EXPOSURE_DIRECTORY_LISTING = Rule(
+    id="web.exposure.directory_listing",
+    title="Web directory listing is enabled",
+    description=(
+        "Directory indexing is enabled for $path on $url, allowing unauthenticated visitors to "
+        "browse uploaded files and directory contents."
+    ),
+    default_severity=Severity.MEDIUM,
+    remediation=(
+        "Disable directory auto-indexing (`Options -Indexes` in Apache or `autoindex off;` in "
+        "Nginx) for $path on $url."
+    ),
+    references=(
+        "https://cwe.mitre.org/data/definitions/548.html",
+        "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information",
+    ),
+)
+
 WEB_RULES: tuple[Rule, ...] = (
     VERSION_BANNER,
     KNOWN_VULNERABLE_COMPONENT,
@@ -460,4 +532,8 @@ WEB_RULES: tuple[Rule, ...] = (
     EXPOSURE_API_DOCS,
     EXPOSURE_ADMIN_PANEL,
     SECURITY_TXT_MISSING,
+    WORDPRESS_XMLRPC_ENABLED,
+    WORDPRESS_USER_LISTING,
+    WORDPRESS_DEBUG_LOG,
+    EXPOSURE_DIRECTORY_LISTING,
 )
